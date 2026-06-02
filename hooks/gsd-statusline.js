@@ -241,14 +241,25 @@ function renderProgressBar(percent) {
  * @param {string} projectCode     Project code (e.g. `GSD`); falsy → bare phaseN.
  * @returns {string}
  */
+/**
+ * Render the bracket milestone label `[{code}.{MM}]` (e.g. `[GSD.02]`). The
+ * milestone integer is parsed from the STATE.md `milestone:` marker (`v2.0` → 2,
+ * `02`/`2` → 2) and zero-padded; missing/unparseable → `00` (surfaces the wiring
+ * gap). Per the canonical convention the milestone label IS this bracket — there
+ * is NO `vX.Y` version literal on any surface, statuslines included.
+ */
+function milestoneBracket(milestone, projectCode) {
+  const mMatch = String(milestone == null ? '' : milestone).match(/(\d+)/);
+  const mm = mMatch ? mMatch[1].padStart(2, '0') : '00';
+  return `[${projectCode}.${mm}]`;
+}
+
 function renderPhaseDisplay(milestone, phaseN, projectCode) {
   const phase = String(phaseN == null ? '' : phaseN);
   if (!projectCode) return phase;
-  // Parse the leading integer out of the milestone marker (`v2.0` → 2, `02` → 2),
-  // then pad to 2 digits. Missing/unparseable → `00` (surfaces the wiring gap).
-  const mMatch = String(milestone == null ? '' : milestone).match(/(\d+)/);
-  const mm = mMatch ? mMatch[1].padStart(2, '0') : '00';
-  return `[${projectCode}.${mm}] ${phase}`;
+  // Bracket-native phase identity: the bracket rides on the phase too, so a
+  // cross-project handoff/execute can't confuse phase `05` across projects.
+  return `${milestoneBracket(milestone, projectCode)} ${phase}`;
 }
 
 /**
@@ -283,12 +294,15 @@ function formatGsdState(s, opts = {}) {
       ? renderPhaseDisplay(s.milestone, phaseN, projectCode)
       : `Phase ${phaseN}`;
 
-  // Milestone segment: version + name + (opt-in) progress bar.
-  // Under bracket convention the milestone version is no longer the phase
-  // IDENTITY (the bracket token carries it). It MAY still appear as the
-  // milestone NAME label, so the segment is preserved as-is.
+  // Milestone segment: label + name + (opt-in) progress bar.
+  // Under the bracket convention the milestone label IS the bracket
+  // `[{code}.{MM}]` — the canonical convention forbids a `vX.Y` version literal
+  // on any surface, statuslines included. Legacy/non-bracket repos keep their
+  // `vX.Y` marker byte-for-byte.
   if (s.milestone || s.milestoneName) {
-    const ver = s.milestone || '';
+    const ver = (bracket && projectCode)
+      ? milestoneBracket(s.milestone, projectCode)
+      : (s.milestone || '');
     const name = (s.milestoneName && s.milestoneName !== 'milestone') ? s.milestoneName : '';
     const bar = renderProgressBar(s.percent);
     const pieces = [ver, name, bar].filter(Boolean);

@@ -300,3 +300,43 @@ describe('formatGsdState #2833 scene priority', () => {
     assert.ok(!out.includes('1/5'));
   });
 });
+
+// ─── formatGsdState: bracket convention (milestone label IS the bracket) ─────
+// Regression coverage for the convention requirement that the statusline uses
+// the bracket form `[{PROJECT}.{MM}]` as the milestone label with NO `vX.Y`
+// literal. Previously the milestone segment hardcoded the `vX.Y` marker even
+// under bracket convention; this block guards against that reverting.
+
+describe('formatGsdState — bracket convention', () => {
+  const opts = { convention: 'bracket', projectCode: 'GSD' };
+
+  test('completed milestone renders bracket label, NOT a vX.Y literal', () => {
+    const out = formatGsdState(
+      { milestone: 'v1.0', status: 'completed', percent: '92' },
+      { convention: 'bracket', projectCode: 'HQ' },
+    );
+    assert.equal(out, '[HQ.01] [█████████░] 92% · completed');
+    assert.ok(!/v\d/.test(out), 'no vX.Y version literal on a bracket statusline');
+  });
+
+  test('active phase: bracket on BOTH the milestone label and the phase token', () => {
+    const out = formatGsdState(
+      { milestone: 'v2.0', status: 'executing', activePhase: '4.5', percent: '59' },
+      opts,
+    );
+    // Milestone segment is `[GSD.02]` (not v2.0); the phase carries the bracket
+    // too (cross-project disambiguation) and drops the "Phase" word.
+    assert.equal(out, '[GSD.02] [█████░░░░░] 59% · [GSD.02] 4.5 executing');
+    assert.ok(!out.includes('v2.0') && !out.includes('Phase '), 'no vX.Y, no "Phase" word');
+  });
+
+  test('milestone complete scene under bracket drops the vX.Y literal', () => {
+    const out = formatGsdState({ milestone: 'v2.0', percent: '100' }, opts);
+    assert.equal(out, '[GSD.02] [██████████] 100% · milestone complete');
+  });
+
+  test('legacy repo (no convention) is unchanged — keeps the vX.Y marker', () => {
+    const out = formatGsdState({ milestone: 'v2.0', status: 'executing', activePhase: '4.5', percent: '59' });
+    assert.equal(out, 'v2.0 [█████░░░░░] 59% · Phase 4.5 executing');
+  });
+});
