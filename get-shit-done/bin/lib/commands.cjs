@@ -7,16 +7,31 @@ const { execGit, platformWriteSync, platformReadSync, platformEnsureDir } = requ
 const { loadConfig, isGitIgnored, normalizePhaseName, comparePhaseNum, getArchivedPhaseDirs, generateSlugInternal, getMilestoneInfo, getMilestonePhaseFilter, resolveModelInternal, resolveEffortInternal, resolveFastModeInternal, resolveEffortForTier, stripShippedMilestones, extractCurrentMilestone, toPosixPath, output, error, findPhaseInternal, extractOneLinerFromBody, getRoadmapPhaseInternal, extractPhaseToken, getPhaseDisplayLabel } = require('./core.cjs');
 
 /**
+ * Read phase_id_convention from config.json RAW. loadConfig strips keys not in
+ * its schema defaults (phase_id_convention among them), so the typed config
+ * object never carries it. Mirrors state.cjs / roadmap-command-router.cjs.
+ */
+function readPhaseIdConvention(cwd) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(planningDir(cwd), 'config.json'), 'utf8')).phase_id_convention;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Build the `projectCodeWithMilestone` join (e.g. `'GSD.02'`) used by
  * getPhaseDisplayLabel, from config.project_code + the milestone version
- * (`v2.0` → `02`). Returns `''` when project_code is absent, so
- * getPhaseDisplayLabel degrades to the bare token. Additive: display_id is a
- * new field nothing reads back, so this is safe to compute unconditionally —
- * legacy repos (no project_code) simply get a bare display_id == number.
+ * (`v2.0` → `02`). Gated on the BRACKET convention — NOT project_code presence:
+ * a project may carry a project_code under a legacy/null convention (e.g. the
+ * decimal `CK-MM.NN` dirs), and those must keep a bare display_id == number so
+ * "convention: null projects are unaffected" holds. Returns `''` (→ bare token)
+ * when convention != 'bracket' or project_code is absent. Mirrors the gate in
+ * state.cjs phaseDisplayFor.
  */
-function buildProjectCodeWithMilestone(config, milestoneVersion) {
+function buildProjectCodeWithMilestone(config, milestoneVersion, convention) {
   const projectCode = (config && config.project_code) || '';
-  if (!projectCode) return '';
+  if (!projectCode || convention !== 'bracket') return '';
   const mMatch = String(milestoneVersion == null ? '' : milestoneVersion).match(/(\d+)/);
   const mm = mMatch ? mMatch[1].padStart(2, '0') : '00';
   return `${projectCode}.${mm}`;
@@ -821,7 +836,7 @@ function cmdProgressRender(cwd, format, raw) {
   const roadmapPath = planningPaths(cwd).roadmap;
   const milestone = getMilestoneInfo(cwd);
   // projectCodeWithMilestone (e.g. 'GSD.02') for the bracket display_id field.
-  const pcm = buildProjectCodeWithMilestone(loadConfig(cwd), milestone.version);
+  const pcm = buildProjectCodeWithMilestone(loadConfig(cwd), milestone.version, readPhaseIdConvention(cwd));
 
   const phases = [];
   let totalPlans = 0;
@@ -1112,7 +1127,7 @@ function cmdStats(cwd, format, raw) {
   const milestone = getMilestoneInfo(cwd);
   const isDirInMilestone = getMilestonePhaseFilter(cwd);
   // projectCodeWithMilestone (e.g. 'GSD.02') for the bracket display_id field.
-  const pcm = buildProjectCodeWithMilestone(loadConfig(cwd), milestone.version);
+  const pcm = buildProjectCodeWithMilestone(loadConfig(cwd), milestone.version, readPhaseIdConvention(cwd));
 
   // Phase & plan stats (reuse progress pattern)
   const phasesByNumber = new Map();

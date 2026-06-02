@@ -153,6 +153,29 @@ describe('progress JSON — display_id (bracket) + bare number', () => {
     assert.ok(phase, 'phase 03 present');
     assert.strictEqual(phase.display_id, '03', 'display_id is bare token without project_code');
   });
+
+  test('display_id stays bare on a project_code repo with NO bracket convention', () => {
+    // The CareKit case: project_code is present but phase_id_convention is NOT
+    // 'bracket' (legacy/decimal repo). The gate is on CONVENTION, not project_code
+    // presence — so display_id must stay bare (== number). Regression guard: the
+    // progress/stats path used to stamp `[CK.MM]` on every phase (taking the
+    // milestone from STATE), mislabeling legacy phases and violating the
+    // "convention: null projects are unaffected" contract.
+    writeConfig(tmpDir, { project_code: 'CK' });
+    writeState(tmpDir, 'v3.0', 'M3');
+    writeRoadmap(tmpDir, ['# Roadmap', '', '### Phase 3: Thing', '**Goal:** x', '']);
+    const pdir = path.join(tmpDir, '.planning', 'phases', '03-thing');
+    fs.mkdirSync(pdir, { recursive: true });
+    fs.writeFileSync(path.join(pdir, '03-01-PLAN.md'), '# plan\n');
+
+    for (const cmd of ['stats', 'progress json']) {
+      const result = runGsdTools(cmd, tmpDir);
+      assert.ok(result.success, `${cmd} failed: ${result.error}`);
+      const phase = JSON.parse(result.output).phases.find(p => p.number === '03');
+      assert.ok(phase, `phase 03 present (${cmd})`);
+      assert.strictEqual(phase.display_id, '03', `display_id bare when convention != bracket (${cmd})`);
+    }
+  });
 });
 
 // ─── phase.cjs add/insert emit (bracket repo) ────────────────────────────────
