@@ -1,3 +1,10 @@
+<!-- BEGIN:gsd-bracket-convention -->
+**Phase-ID convention.** Bracket form `[{PROJECT}.{MM}] {phase}[.{sub}][-{plan}]`, e.g. `[GSD.02] 05.03-01`. No "Phase" word, no `vX.Y` version literal, no milestone emoji.
+- Milestone = the bracket integer; the milestone boundary is where it increments (`[GSD.01]` -> `[GSD.02]`). Dots are phase-levels; the single hyphen is the plan.
+- Headings: `### [GSD.02] 05: Name` (phase -- a phase number after the bracket) vs `## [GSD.02] Name` (milestone -- a name after the bracket). On disk: `GSD.02-05.03-slug/`.
+- Full card + grammar: references/phase-id-convention.md.
+<!-- END:gsd-bracket-convention -->
+
 <purpose>
 Edit any field of an existing phase in ROADMAP.md in place. The phase number and position are always preserved. Guarded against in-progress and completed phases unless --force is passed. Validates depends_on references before writing. Shows a diff and requests confirmation before writing.
 </purpose>
@@ -235,7 +242,7 @@ Wait for confirmation. If the user says `n`, exit without writing.
 <step name="write_updated_phase">
 Write the updated phase back in place in ROADMAP.md.
 
-Read the full ROADMAP.md content, locate the phase section by its header (`## Phase {N}:` or `### Phase {N}:`), and replace exactly the old section text with the new section text. All content before and after the section (including other phases, milestone headers, and the summary checklist) must be left unchanged.
+Read the full ROADMAP.md content, locate the phase section by its bracket header (`### [{PROJECT}.{MM}] {N}: Name`; legacy un-migrated repos may still use `### Phase {N}:`), and replace exactly the old section text with the new section text. All content before and after the section (including other phases, milestone headers, and the summary checklist) must be left unchanged.
 
 After writing ROADMAP.md, update STATE.md Roadmap Evolution:
 

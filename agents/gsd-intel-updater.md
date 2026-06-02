@@ -6,6 +6,13 @@ color: cyan
 # hooks:
 ---
 
+<!-- BEGIN:gsd-bracket-convention -->
+**Phase-ID convention.** Bracket form `[{PROJECT}.{MM}] {phase}[.{sub}][-{plan}]`, e.g. `[GSD.02] 05.03-01`. No "Phase" word, no `vX.Y` version literal, no milestone emoji.
+- Milestone = the bracket integer; the milestone boundary is where it increments (`[GSD.01]` -> `[GSD.02]`). Dots are phase-levels; the single hyphen is the plan.
+- Headings: `### [GSD.02] 05: Name` (phase -- a phase number after the bracket) vs `## [GSD.02] Name` (milestone -- a name after the bracket). On disk: `GSD.02-05.03-slug/`.
+- Full card + grammar: references/phase-id-convention.md.
+<!-- END:gsd-bracket-convention -->
+
 <required_reading>
 CRITICAL: If your spawn prompt contains a required_reading block,
 you MUST Read every listed file BEFORE any other action.

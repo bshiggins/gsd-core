@@ -6,79 +6,105 @@ const { ROADMAP_SUBCOMMANDS } = require('./command-aliases.cjs');
 const { routeCjsCommandFamily } = require('./cjs-command-router-adapter.cjs');
 const roadmapUpgrade = require('./roadmap-upgrade.cjs');
 const { planningDir } = require('./planning-workspace.cjs');
-const { loadConfig } = require('./core.cjs');
+const { isSentinelPhaseId } = require('./core.cjs');
+
+const BRACKET_MIGRATION_CMD = 'gsd-tools roadmap upgrade --convention bracket';
 
 /**
- * Check each phase entry in a milestone-prefixed ROADMAP.md for W021 violations.
+ * Bracket-native ROADMAP validation (WAVE 2b — supersedes the M-NN `checkW021`).
  *
- * W021: a phase whose ID integer prefix does not match its enclosing milestone's
- * major version number.
+ * Two parts, both emitting under W021 (the phase-id-convention warning slot,
+ * now bracket-semantic):
  *
- * Sentinel milestones (0 = pre-milestone, 999 = backlog) are exempt.
+ *   (A) BRACKET-FORM-PRESENCE — the INVERSE of the old M-NN check. A phase
+ *       heading that carries a literal "Phase " word OR an M-NN `N-NN` token
+ *       (instead of a clean `### [PROJECT.MM] N:` bracket heading) is a
+ *       violation. Sentinel phases (0.x / 999.x) are exempt.
+ *
+ *   (B) BRACKET-INTEGER COHERENCE — capture each phase heading's enclosing
+ *       milestone integer. ADDENDUM-3 makes the milestone SECTION heading itself
+ *       integer-bearing (`## [PROJECT.MM] Name`), so the authority is the
+ *       enclosing section's MM (mirrors getMilestoneInfo's read). A phase whose
+ *       own bracket MM differs from its enclosing section's MM is incoherent.
+ *       (Comparing each phase to its enclosing section — rather than to a single
+ *       STATE.md `milestone:` — avoids flagging every phase in a non-active /
+ *       future milestone section when the ROADMAP spans multiple milestones.)
  *
  * @param {string} content - ROADMAP.md content
  * @returns {Array<{code:'W021', message:string}>}
  */
-function checkW021(content) {
+function checkBracketConsistency(content) {
   const warnings = [];
 
-  // Sentinel milestone integers exempt from W021
-  const SENTINELS = new Set([0, 999]);
-  const MIGRATION_CMD = 'gsd-tools roadmap upgrade --convention milestone-prefixed';
+  // Milestone SECTION heading (ADDENDUM-3): `## [PROJECT.MM] Name` — bracket
+  // followed by a NAME (no `NN:` phase-number colon). Capture MM. A digit-leading
+  // name (`## [GSD.02] 2024 Plan`) is still a section (no `NN:` colon). The
+  // negative lookahead rejects ANY phase-number-then-colon form, including M-NN
+  // hyphen tokens (`2-01:`), so an M-NN phase heading is NOT consumed as a
+  // section (which would let it slip past the form-presence check below).
+  const SECTION_RE = /^#{1,3}\s+\[[A-Z][A-Z0-9]*\.(\d+)\]\s+(?!\d+[A-Z]?(?:[.-]\d+)*\s*:)/i;
+  // Phase heading (canonical bracket): `### [PROJECT.MM] N[.sub]: Name`.
+  const BRACKET_PHASE_RE = /^#{2,4}\s*\[[A-Z][A-Z0-9]*\.(\d+)\]\s+(\d+[A-Z]?(?:\.\d+)*)\s*:/i;
+  // A phase heading carrying a literal "Phase " word (legacy / M-NN) — the
+  // form-presence violation target on a bracket repo.
+  const LITERAL_PHASE_RE = /^#{2,4}\s*(?:\[[^\]]*\]\s*)?Phase\s+(\d+[A-Z]?(?:[.-]\d+)*)\s*:/i;
+  // A bracket heading whose phase token is M-NN hyphenated (`[GSD.02] 2-01:`).
+  const BRACKET_MNN_RE = /^#{2,4}\s*\[[A-Z][A-Z0-9]*\.\d+\]\s+(\d+-\d+(?:-\d+)*)\s*:/i;
 
-  // Milestone section heading: ## [GSD] v2.0 — Label  OR  ## v2.0: Label  OR  ## Roadmap v2.0
-  //   OR  ## ✅ v2.0  OR  ## 🚧 v2.0  (emoji-prefixed variants used by roadmap templates)
-  // Capture the major integer.
-  const MILESTONE_RE = /^#{1,3}\s+(?:\[[^\]]+\]\s+|Roadmap\s+|[✅🚧]\s*)?v(\d+)\.\d+(?:\s|:|\s*—)/iu;
-
-  // Migrated phase heading: ### Phase M-NN: Name  (M-NN or unpadded M-N form)
-  const PHASE_RE = /^#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+(\d+)-(\d+)(?:-\d+)*\s*:/i;
-  // Unprefixed legacy phase heading: ### Phase N: Name  (no hyphen sub-index)
-  const UNPREFIXED_PHASE_RE = /^#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+(\d+[A-Za-z]?(?:\.\d+)*)\s*:/i;
-
-  let currentMilestoneMajor = null;
+  let currentSectionMilestone = null;
   const lines = content.split('\n');
 
   for (const line of lines) {
-    const milestoneMatch = line.match(MILESTONE_RE);
-    if (milestoneMatch) {
-      currentMilestoneMajor = parseInt(milestoneMatch[1], 10);
+    const sectionMatch = line.match(SECTION_RE);
+    if (sectionMatch) {
+      currentSectionMilestone = parseInt(sectionMatch[1], 10);
       continue;
     }
 
-    const phaseMatch = line.match(PHASE_RE);
-    if (phaseMatch) {
-      const phaseMajor = parseInt(phaseMatch[1], 10);
-      if (SENTINELS.has(phaseMajor)) continue; // exempt
-
-      if (currentMilestoneMajor !== null && phaseMajor !== currentMilestoneMajor) {
-        const phaseId = `${phaseMatch[1]}-${phaseMatch[2]}`;
+    // (A) Literal "Phase " word → form-presence violation (unless sentinel).
+    const literalMatch = line.match(LITERAL_PHASE_RE);
+    if (literalMatch) {
+      if (!isSentinelPhaseId(literalMatch[1])) {
         warnings.push({
           code: 'W021',
           message:
-            `Phase ID prefix mismatch: phase "${phaseId}" is listed under v${currentMilestoneMajor}.x ` +
-            `but its prefix (${phaseMajor}) does not match. ` +
-            `Run \`${MIGRATION_CMD}\` to fix.`,
+            `Phase heading "${literalMatch[1]}" uses the legacy "Phase" word; ` +
+            `bracket convention requires \`### [PROJECT.MM] ${literalMatch[1].split(/[.-]/)[0]}: Name\`. ` +
+            `Run \`${BRACKET_MIGRATION_CMD}\` to migrate.`,
         });
       }
       continue;
     }
 
-    // When the convention is active, an unprefixed heading (### Phase 1:) is itself a W021
-    // violation — it is missing the required M-NN prefix entirely.
-    const unprefixedMatch = line.match(UNPREFIXED_PHASE_RE);
-    if (unprefixedMatch && currentMilestoneMajor !== null) {
-      const rawId = unprefixedMatch[1];
-      // Skip if it matched PHASE_RE already (it didn't reach here in that case)
-      // Also skip if it looks like a bare integer whose prefix matches the section
-      // — those pass; only non-matching or non-prefixed forms fire W021.
-      const numericMajor = parseInt(rawId, 10);
-      if (!SENTINELS.has(numericMajor)) {
+    // (A) M-NN hyphen token inside a bracket → form-presence violation.
+    const mnnMatch = line.match(BRACKET_MNN_RE);
+    if (mnnMatch) {
+      if (!isSentinelPhaseId(mnnMatch[1])) {
         warnings.push({
           code: 'W021',
           message:
-            `Phase ID "${rawId}" is not in M-NN form (milestone-prefixed convention is active). ` +
-            `Run \`${MIGRATION_CMD}\` to migrate.`,
+            `Phase heading carries an M-NN token "${mnnMatch[1]}"; bracket phase tokens are ` +
+            `all-dot (milestone rides in the bracket prefix). ` +
+            `Run \`${BRACKET_MIGRATION_CMD}\` to migrate.`,
+        });
+      }
+      continue;
+    }
+
+    // (B) Clean bracket phase heading → integer-coherence check.
+    const phaseMatch = line.match(BRACKET_PHASE_RE);
+    if (phaseMatch) {
+      const phaseMilestone = parseInt(phaseMatch[1], 10);
+      const phaseToken = phaseMatch[2];
+      if (isSentinelPhaseId(phaseToken)) continue; // exempt
+      if (currentSectionMilestone !== null && phaseMilestone !== currentSectionMilestone) {
+        warnings.push({
+          code: 'W021',
+          message:
+            `Bracket milestone mismatch: phase "[…${phaseMatch[1]}] ${phaseToken}" is listed under ` +
+            `milestone section [..${String(currentSectionMilestone).padStart(2, '0')}] ` +
+            `but its bracket integer (${phaseMatch[1]}) does not match. ` +
+            `Run \`${BRACKET_MIGRATION_CMD}\` to fix.`,
         });
       }
     }
@@ -112,13 +138,24 @@ function routeRoadmapCommand({ roadmap, args, cwd, raw, error }) {
           // ROADMAP.md missing — return empty warnings
         }
 
-        // W021 only fires when phase_id_convention is explicitly 'milestone-prefixed'.
-        // Authoritative source: .planning/config.json (set by the upgrade command).
-        // Fallback: ROADMAP.md frontmatter (for projects that set the field there directly).
+        // Bracket-native validation runs DEFAULT-ON for bracket repos (the
+        // new-project default per Q1). The retired opt-in `milestone-prefixed`
+        // gate is gone. Authority: .planning/config.json (set by the migrator);
+        // fallback to ROADMAP.md frontmatter.
+        //
+        // Legacy READ-TOLERANCE: un-migrated repos (convention null / absent)
+        // are NOT flagged here — the bracket form is the violation target only
+        // on a bracket repo. This keeps not-yet-migrated projects quiet during
+        // the migration window (the migrator is the on-disk converter).
+        // Read phase_id_convention from config.json RAW (loadConfig drops keys
+        // not in the schema defaults, including phase_id_convention — the
+        // migrator writes it directly to config.json, so verify.cjs and this
+        // router both read it raw to keep config.json authoritative).
         let convention;
         try {
-          const cfg = loadConfig(cwd);
-          convention = cfg.phase_id_convention;
+          const configPath = path.join(planningDir(cwd), 'config.json');
+          const cfgRaw = fs.readFileSync(configPath, 'utf8');
+          convention = JSON.parse(cfgRaw).phase_id_convention;
         } catch {
           convention = undefined;
         }
@@ -135,8 +172,8 @@ function routeRoadmapCommand({ roadmap, args, cwd, raw, error }) {
             }
           }
         }
-        const warnings = (convention === 'milestone-prefixed')
-          ? checkW021(roadmapContent)
+        const warnings = (convention === 'bracket')
+          ? checkBracketConsistency(roadmapContent)
           : [];
 
         const result = { warnings };
@@ -145,9 +182,12 @@ function routeRoadmapCommand({ roadmap, args, cwd, raw, error }) {
       },
       'upgrade': () => {
         const dryRun = !args.includes('--apply');
-        const convention = args.find((a, i) => args[i-1] === '--convention') || 'milestone-prefixed';
-        if (convention !== 'milestone-prefixed') {
-          process.stderr.write('Only --convention milestone-prefixed is supported\n');
+        // Bracket is the default and only supported target convention. The
+        // migrator (roadmap-upgrade.cjs) accepts legacy + M-NN as SOURCE and
+        // emits bracket.
+        const convention = args.find((a, i) => args[i-1] === '--convention') || 'bracket';
+        if (convention !== 'bracket') {
+          process.stderr.write('Only --convention bracket is supported\n');
           process.exit(1);
         }
         const plan = roadmapUpgrade.computeMigrationPlan(cwd);

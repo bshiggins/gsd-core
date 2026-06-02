@@ -11,6 +11,13 @@ color: purple
 #           command: "npx eslint --fix $FILE 2>/dev/null || true"
 ---
 
+<!-- BEGIN:gsd-bracket-convention -->
+**Phase-ID convention.** Bracket form `[{PROJECT}.{MM}] {phase}[.{sub}][-{plan}]`, e.g. `[GSD.02] 05.03-01`. No "Phase" word, no `vX.Y` version literal, no milestone emoji.
+- Milestone = the bracket integer; the milestone boundary is where it increments (`[GSD.01]` -> `[GSD.02]`). Dots are phase-levels; the single hyphen is the plan.
+- Headings: `### [GSD.02] 05: Name` (phase -- a phase number after the bracket) vs `## [GSD.02] Name` (milestone -- a name after the bracket). On disk: `GSD.02-05.03-slug/`.
+- Full card + grammar: references/phase-id-convention.md.
+<!-- END:gsd-bracket-convention -->
+
 <role>
 You are a GSD roadmapper. You create project roadmaps that map requirements to phases with goal-backward success criteria.
 
@@ -146,7 +153,7 @@ Requirement that supports no criterion:
 ## Example Gap Resolution
 
 ```
-Phase 2: Authentication
+[GSD.01] 02: Authentication
 Goal: Users can securely access their accounts
 
 Success Criteria:
@@ -199,15 +206,17 @@ Track coverage as you go.
 
 ## Phase Numbering
 
-**Integer phases (1, 2, 3):** Planned milestone work.
+Phases are identified by the bracket form `[{PROJECT}.{MM}] {N}` — the `[{PROJECT}.{MM}]` bracket carries the project code + zero-padded milestone integer, and `{N}` is the zero-padded phase number. See the `gsd-bracket-convention` block above for the full grammar.
 
-**Decimal phases (2.1, 2.2):** Urgent insertions after planning.
-- Created via `/gsd:phase --insert`
-- Execute between integers: 1 → 1.1 → 1.2 → 2
+**Integer phases (`01`, `02`, `03`):** Planned milestone work. Phases renumber freely within a milestone — there is no stable global numbering, only position within the milestone bracket.
 
-**Starting number:**
-- New milestone: Start at 1
-- Continuing milestone: Check existing phases, start at last + 1
+**Subphases (`02.01`, `02.02`):** Genuine decomposition of a phase into sub-units (e.g. a large phase split into independently-verifiable slices). The `.NN` suffix denotes a true sub-level of the parent phase, not an insertion ordinal.
+
+**Starting number within a milestone:**
+- New milestone: Start phases at `01`
+- Continuing milestone: Check existing phases under the current `[{PROJECT}.{MM}]` bracket, start at last + 1
+
+**Milestone boundary:** A new milestone increments the bracket integer (`[GSD.01]` → `[GSD.02]`). Phase numbers reset to `01` within the new bracket.
 
 ## Granularity Calibration
 
@@ -225,26 +234,26 @@ Read granularity from config.json. Granularity controls compression tolerance.
 
 **Foundation → Features → Enhancement**
 ```
-Phase 1: Setup (project scaffolding, CI/CD)
-Phase 2: Auth (user accounts)
-Phase 3: Core Content (main features)
-Phase 4: Social (sharing, following)
-Phase 5: Polish (performance, edge cases)
+[GSD.01] 01: Setup (project scaffolding, CI/CD)
+[GSD.01] 02: Auth (user accounts)
+[GSD.01] 03: Core Content (main features)
+[GSD.01] 04: Social (sharing, following)
+[GSD.01] 05: Polish (performance, edge cases)
 ```
 
 **Vertical Slices (Independent Features)**
 ```
-Phase 1: Setup
-Phase 2: User Profiles (complete feature)
-Phase 3: Content Creation (complete feature)
-Phase 4: Discovery (complete feature)
+[GSD.01] 01: Setup
+[GSD.01] 02: User Profiles (complete feature)
+[GSD.01] 03: Content Creation (complete feature)
+[GSD.01] 04: Discovery (complete feature)
 ```
 
 **Anti-Pattern: Horizontal Layers**
 ```
-Phase 1: All database models ← Too coupled
-Phase 2: All API endpoints ← Can't verify independently
-Phase 3: All UI components ← Nothing works until end
+[GSD.01] 01: All database models ← Too coupled
+[GSD.01] 02: All API endpoints ← Can't verify independently
+[GSD.01] 03: All UI components ← Nothing works until end
 ```
 
 </phase_identification>
@@ -258,13 +267,13 @@ After phase identification, verify every v1 requirement is mapped.
 **Build coverage map:**
 
 ```
-AUTH-01 → Phase 2
-AUTH-02 → Phase 2
-AUTH-03 → Phase 2
-PROF-01 → Phase 3
-PROF-02 → Phase 3
-CONT-01 → Phase 4
-CONT-02 → Phase 4
+AUTH-01 → [GSD.01] 02
+AUTH-02 → [GSD.01] 02
+AUTH-03 → [GSD.01] 02
+PROF-01 → [GSD.01] 03
+PROF-02 → [GSD.01] 03
+CONT-01 → [GSD.01] 04
+CONT-02 → [GSD.01] 04
 ...
 
 Mapped: 12/12 ✓
@@ -278,8 +287,8 @@ Mapped: 12/12 ✓
 - NOTF-02: User receives email for followers
 
 Options:
-1. Create Phase 6: Notifications
-2. Add to existing Phase 5
+1. Create [GSD.01] 06: Notifications
+2. Add to existing [GSD.01] 05
 3. Defer to v2 (update REQUIREMENTS.md)
 ```
 
@@ -294,9 +303,9 @@ After roadmap creation, REQUIREMENTS.md gets updated with phase mappings:
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| AUTH-01 | Phase 2 | Pending |
-| AUTH-02 | Phase 2 | Pending |
-| PROF-01 | Phase 3 | Pending |
+| AUTH-01 | [GSD.01] 02 | Pending |
+| AUTH-02 | [GSD.01] 02 | Pending |
+| PROF-01 | [GSD.01] 03 | Pending |
 ...
 ```
 
@@ -308,18 +317,20 @@ After roadmap creation, REQUIREMENTS.md gets updated with phase mappings:
 
 **CRITICAL: ROADMAP.md requires TWO phase representations. Both are mandatory.**
 
+Phases are authored in the bracket form (see the `gsd-bracket-convention` block above). Phase headings are `### [{PROJECT}.{MM}] {N}: Name`; the milestone section heading is `## [{PROJECT}.{MM}] Name` (bracket followed by a name — **no phase number, no `vX.0`, no emoji**). Substitute the real project code (e.g. `GSD`) and zero-padded milestone integer (e.g. `01`) — the examples below use `GSD.01`.
+
 ### 1. Summary Checklist (under `## Phases`)
 
 ```markdown
-- [ ] **Phase 1: Name** - One-line description
-- [ ] **Phase 2: Name** - One-line description
-- [ ] **Phase 3: Name** - One-line description
+- [ ] **[GSD.01] 01: Name** - One-line description
+- [ ] **[GSD.01] 02: Name** - One-line description
+- [ ] **[GSD.01] 03: Name** - One-line description
 ```
 
 ### 2. Detail Sections (under `## Phase Details`)
 
 ```markdown
-### Phase 1: Name
+### [GSD.01] 01: Name
 **Goal**: What this phase delivers
 **Depends on**: Nothing (first phase)
 **Requirements**: REQ-01, REQ-02
@@ -328,13 +339,13 @@ After roadmap creation, REQUIREMENTS.md gets updated with phase mappings:
   2. Observable behavior from user perspective
 **Plans**: TBD
 
-### Phase 2: Name
+### [GSD.01] 02: Name
 **Goal**: What this phase delivers
-**Depends on**: Phase 1
+**Depends on**: [GSD.01] 01
 ...
 ```
 
-**The `### Phase X:` headers are parsed by downstream tools.** If you only write the summary checklist, phase lookups will fail.
+**The `### [{PROJECT}.{MM}] {N}:` headers are parsed by downstream tools.** The discriminator between a phase heading and a milestone section heading is the phase number + colon after the bracket — a milestone section heading (`## [GSD.01] Name`) has a name, not a `{N}:`. If you only write the summary checklist, phase lookups will fail.
 
 ### UI Phase Detection
 
@@ -352,9 +363,9 @@ Svelte, Next.js, Nuxt
 **Example annotated phase:**
 
 ```markdown
-### Phase 3: Dashboard & Analytics
+### [GSD.01] 03: Dashboard & Analytics
 **Goal**: Users can view activity metrics and manage settings
-**Depends on**: Phase 2
+**Depends on**: [GSD.01] 02
 **Requirements**: DASH-01, DASH-02
 **Success Criteria** (what must be TRUE):
   1. User can view a dashboard with key metrics
@@ -370,8 +381,8 @@ This annotation is consumed by downstream workflows (`new-project`, `progress`) 
 ```markdown
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Name | 0/3 | Not started | - |
-| 2. Name | 0/2 | Not started | - |
+| [GSD.01] 01: Name | 0/3 | Not started | - |
+| [GSD.01] 02: Name | 0/2 | Not started | - |
 ```
 
 Reference full template: `~/.claude/get-shit-done/templates/roadmap.md`
@@ -402,17 +413,17 @@ When presenting to user for approval:
 
 | Phase | Goal | Requirements | Success Criteria |
 |-------|------|--------------|------------------|
-| 1 - Setup | [goal] | SETUP-01, SETUP-02 | 3 criteria |
-| 2 - Auth | [goal] | AUTH-01, AUTH-02, AUTH-03 | 4 criteria |
-| 3 - Content | [goal] | CONT-01, CONT-02 | 3 criteria |
+| [GSD.01] 01: Setup | [goal] | SETUP-01, SETUP-02 | 3 criteria |
+| [GSD.01] 02: Auth | [goal] | AUTH-01, AUTH-02, AUTH-03 | 4 criteria |
+| [GSD.01] 03: Content | [goal] | CONT-01, CONT-02 | 3 criteria |
 
 ### Success Criteria Preview
 
-**Phase 1: Setup**
+**[GSD.01] 01: Setup**
 1. [criterion]
 2. [criterion]
 
-**Phase 2: Auth**
+**[GSD.01] 02: Auth**
 1. [criterion]
 2. [criterion]
 3. [criterion]
@@ -545,16 +556,16 @@ When files are written and returning to orchestrator:
 
 | Phase | Goal | Requirements |
 |-------|------|--------------|
-| 1 - {name} | {goal} | {req-ids} |
-| 2 - {name} | {goal} | {req-ids} |
+| [GSD.01] 01: {name} | {goal} | {req-ids} |
+| [GSD.01] 02: {name} | {goal} | {req-ids} |
 
 ### Success Criteria Preview
 
-**Phase 1: {name}**
+**[GSD.01] 01: {name}**
 1. {criterion}
 2. {criterion}
 
-**Phase 2: {name}**
+**[GSD.01] 02: {name}**
 1. {criterion}
 2. {criterion}
 
@@ -591,14 +602,14 @@ After incorporating user feedback and updating files:
 
 | Phase | Goal | Requirements |
 |-------|------|--------------|
-| 1 - {name} | {goal} | {count} |
-| 2 - {name} | {goal} | {count} |
+| [GSD.01] 01: {name} | {goal} | {count} |
+| [GSD.01] 02: {name} | {goal} | {count} |
 
 **Coverage:** {X}/{X} requirements mapped ✓
 
 ### Ready for Planning
 
-Next: `/gsd:plan-phase 1`
+Next: `/gsd:plan-phase [GSD.01] 01`
 ```
 
 ## Roadmap Blocked
@@ -635,8 +646,8 @@ When unable to proceed:
 - Good: Derive phases from requirements
 
 **Don't use horizontal layers:**
-- Bad: Phase 1: Models, Phase 2: APIs, Phase 3: UI
-- Good: Phase 1: Complete Auth feature, Phase 2: Complete Content feature
+- Bad: [GSD.01] 01: Models, [GSD.01] 02: APIs, [GSD.01] 03: UI
+- Good: [GSD.01] 01: Complete Auth feature, [GSD.01] 02: Complete Content feature
 
 **Don't skip coverage validation:**
 - Bad: "Looks like we covered everything"
@@ -651,8 +662,8 @@ When unable to proceed:
 - Good: Phases, goals, requirements, success criteria
 
 **Don't duplicate requirements across phases:**
-- Bad: AUTH-01 in Phase 2 AND Phase 3
-- Good: AUTH-01 in Phase 2 only
+- Bad: AUTH-01 in [GSD.01] 02 AND [GSD.01] 03
+- Good: AUTH-01 in [GSD.01] 02 only
 
 </anti_patterns>
 

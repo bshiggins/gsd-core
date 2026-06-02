@@ -2,6 +2,11 @@
 
 Standard format for presenting next steps after completing a command or workflow.
 
+> Phase references in the displays below use the bracket form `[{PROJECT}.{MM}]` (see
+> `phase-id-convention.md`). The `{phase}-{plan}` plan id (e.g. `02-03` = phase 02, plan 03)
+> is bracket-preserved — it keeps its hyphen and is **prefixed** with the bracket, never
+> rewritten. No "Phase" word, no `vX.Y` literal, no milestone emoji.
+
 ## Core Structure
 
 ```
@@ -46,7 +51,7 @@ Standard format for presenting next steps after completing a command or workflow
 
 ## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
-**02-03: Refresh Token Rotation** — Add /api/auth/refresh with sliding expiry
+**[${PROJECT_CODE}.${MM}] 02-03: Refresh Token Rotation** — Add /api/auth/refresh with sliding expiry
 
 `/clear` then:
 
@@ -70,8 +75,8 @@ Add note that this is the last plan and what comes after:
 
 ## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
-**02-03: Refresh Token Rotation** — Add /api/auth/refresh with sliding expiry
-<sub>Final plan in Phase 2</sub>
+**[${PROJECT_CODE}.${MM}] 02-03: Refresh Token Rotation** — Add /api/auth/refresh with sliding expiry
+<sub>Final plan in [${PROJECT_CODE}.${MM}] 02</sub>
 
 `/clear` then:
 
@@ -80,8 +85,8 @@ Add note that this is the last plan and what comes after:
 ---
 
 **After this completes:**
-- Phase 2 → Phase 3 transition
-- Next: **Phase 3: Core Features** — User dashboard and settings
+- [${PROJECT_CODE}.${MM}] 02 → [${PROJECT_CODE}.${MM}] 03 transition
+- Next: **[${PROJECT_CODE}.${MM}] 03: Core Features** — User dashboard and settings
 
 ---
 ```
@@ -93,7 +98,7 @@ Add note that this is the last plan and what comes after:
 
 ## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
-**Phase 2: Authentication** — JWT login flow with refresh tokens
+**[${PROJECT_CODE}.${MM}] 02: Authentication** — JWT login flow with refresh tokens
 
 `/clear` then:
 
@@ -116,13 +121,13 @@ Show completion status before next action:
 ```
 ---
 
-## ✓ Phase 2 Complete
+## ✓ [${PROJECT_CODE}.${MM}] 02 Complete
 
 3/3 plans executed
 
 ## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
-**Phase 3: Core Features** — User dashboard, settings, and data export
+**[${PROJECT_CODE}.${MM}] 03: Core Features** — User dashboard, settings, and data export
 
 `/clear` then:
 
@@ -133,7 +138,7 @@ Show completion status before next action:
 **Also available:**
 - `/gsd:discuss-phase 3` — gather context first
 - `/gsd:plan-phase --research-phase 3` — investigate unknowns
-- Review what Phase 2 built
+- Review what [${PROJECT_CODE}.${MM}] 02 built
 
 ---
 ```
@@ -147,7 +152,7 @@ When there's no clear primary action:
 
 ## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
-**Phase 3: Core Features** — User dashboard, settings, and data export
+**[${PROJECT_CODE}.${MM}] 03: Core Features** — User dashboard, settings, and data export
 
 `/clear` then one of:
 
@@ -165,13 +170,13 @@ When there's no clear primary action:
 ```
 ---
 
-## 🎉 Milestone v1.0 Complete
+## 🎉 [${PROJECT_CODE}.${MM}] Complete
 
 All 4 phases shipped
 
 ## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
-**Start v1.1** — questioning → research → requirements → roadmap
+**Start [${PROJECT_CODE}.${NEXT_MM}]** — questioning → research → requirements → roadmap
 
 `/clear` then:
 
@@ -185,11 +190,11 @@ All 4 phases shipped
 ### For phases (from ROADMAP.md):
 
 ```markdown
-### Phase 2: Authentication
+### [GSD.02] 02: Authentication
 **Goal**: JWT login flow with refresh tokens
 ```
 
-Extract: `**Phase 2: Authentication** — JWT login flow with refresh tokens`
+Extract: `**[GSD.02] 02: Authentication** — JWT login flow with refresh tokens`
 
 ### For plans (from ROADMAP.md):
 
@@ -208,7 +213,7 @@ Purpose: Extend session lifetime without compromising security.
 </objective>
 ```
 
-Extract: `**02-03: Refresh Token Rotation** — Add /api/auth/refresh with sliding expiry`
+Extract: `**[GSD.02] 02-03: Refresh Token Rotation** — Add /api/auth/refresh with sliding expiry`
 
 ## Anti-Patterns
 

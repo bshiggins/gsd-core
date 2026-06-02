@@ -669,22 +669,77 @@ function escapeRegex(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// ─── Bracket-native phase-ID model (READING B) ───────────────────────────────
+//
+// A phase identity has THREE numeric dimensions and TWO separators:
+//
+//   [GSD.02] 05.03-01
+//    │   │   │  │   └── plan      (one hyphen — only ever the plan)
+//    │   │   │  └────── subphase  (dot, optional)
+//    │   │   └───────── phase     (zero-padded integer)
+//    │   └───────────── milestone (dot-joined INTO the bracket / dir prefix)
+//    └───────────────── project   (uppercase alpha code)
+//
+// The milestone is lifted OUT of the phase token into `[project.milestone]`.
+// The phase token therefore carries only phase-levels (dots) and one plan
+// (one hyphen). READING B (LOCKED R1): milestone is taken from the
+// `{PROJECT}.{MM}-` dir/bracket PREFIX or an explicit param, NEVER from the
+// phase token's leading integer. The SDK helpers derive milestone from the
+// phase token's top int — that is the decimal-model bug and is NOT mirrored.
+
+/**
+ * Sentinel top-integer ranges that are explicitly outside the milestone
+ * numbering scheme (convention-independent — carries over unchanged):
+ *   - `0.NN`   → research spikes / pre-milestone exploration
+ *   - `999.NN` → backlog (carekit precedent — `Phase 999.1` etc.)
+ *
+ * `getMilestoneFromPhaseId` returns `null` for any phase ID whose top integer
+ * falls in this set; milestone-filtering call sites skip them.
+ */
+const SENTINEL_RANGES = new Set([0, 999]);
+
+/**
+ * Return true when the phase ID's top integer falls in `SENTINEL_RANGES`.
+ * Calls `normalizePhaseName` internally first (so unpadded `999.1` and bracket
+ * `GSD.02-999.1` forms are accepted). Empty / non-matching input returns false.
+ */
+function isSentinelPhaseId(phaseId) {
+  let normalized;
+  try {
+    normalized = normalizePhaseName(String(phaseId));
+  } catch {
+    // A bare ambiguous `02-04` throws in normalizePhaseName; it is not a sentinel.
+    return false;
+  }
+  const match = normalized.match(/^(\d+)/);
+  if (!match) return false;
+  return SENTINEL_RANGES.has(parseInt(match[1], 10));
+}
+
 function normalizePhaseName(phase) {
   const str = String(phase);
-  // Strip optional project_code prefix (e.g., 'CK-01' → '01')
-  const stripped = str.replace(/^[A-Z]{1,6}-(?=\d)/, '');
-  // Milestone-prefixed phase IDs: M-NN or M-N-N (deep decomposition).
-  // Examples: '2-01', '02-01', '2-4-1', '02-04-01'.
-  // Must be tested BEFORE the plain numeric path so '2-01' → '02-01', not '02'.
-  // Pattern: at least two dash-separated all-digit segments (letter/decimal suffix on last).
-  const milestoneMatch = stripped.match(/^(\d+)((?:-\d+)+)([A-Z]?(?:\.\d+)*)$/i);
-  if (milestoneMatch) {
-    const major = milestoneMatch[1].padStart(2, '0');
-    // Each sub-segment gets zero-padded to at least 2 digits.
-    const subSegments = milestoneMatch[2].slice(1).split('-').map(s => s.padStart(2, '0'));
-    const suffix = milestoneMatch[3] || '';
-    return `${major}-${subSegments.join('-')}${suffix}`;
+  // Accept the canonical bracket dir form `{PROJECT}.{MM}-{phase}`
+  // (`GSD.02-04` → `04`, `GSD.02-04.02` → `04.02`). The `.` in the bracket
+  // prefix defeats the legacy `[A-Z]{1,6}-` strip below, so route it through
+  // extractPhaseToken first. The milestone (`02`) lives in the prefix and is
+  // intentionally dropped here — callers recover it via getMilestoneFromPhaseId.
+  const bracketDir = str.match(/^[A-Z]{1,6}\.\d+-/i);
+  // D-IDENT: a bare two-segment numeric id `{MM}-{phase}` (no project prefix)
+  // is AMBIGUOUS — it collides with the `{phase}-{plan}` plan-file notation
+  // (e.g. `02-04` reads as phase 02 / plan 04 just as easily as milestone 02 /
+  // phase 04). Reject explicitly rather than silently truncating to the leading
+  // integer. Anchored both ends so dir-shaped values (`02-04-slug`) and
+  // qualified forms (`GSD.02-04`) are unaffected.
+  if (!bracketDir && /^\d+-\d+(?:\.\d+)*$/.test(str)) {
+    const [first, second] = str.split('-', 2);
+    throw new Error(
+      `Ambiguous phase id '${str}' - use a milestone-qualified id (e.g. 'GSD.${first}-${second}') or the bare active-milestone phase '${second}'`
+    );
   }
+  const stripped = bracketDir
+    ? extractPhaseToken(str)
+    // Strip optional project_code prefix (e.g., 'CK-01' → '01')
+    : str.replace(/^[A-Z]{1,6}-(?=\d)/, '');
   // Standard numeric phases: 1, 01, 12A, 12.1
   const match = stripped.match(/^(\d+)([A-Z])?((?:\.\d+)*)/i);
   if (match) {
@@ -700,30 +755,109 @@ function normalizePhaseName(phase) {
   return str;
 }
 
-function getMilestoneFromPhaseId(phaseId) {
+/**
+ * Derive the milestone version string from a phase ID (READING B).
+ *
+ *   - `getMilestoneFromPhaseId('GSD.02-05.03')` → `'v2.0'` (milestone 2 from
+ *     the prefix, NOT 5 from the phase token).
+ *   - `getMilestoneFromPhaseId('04', 'v2.0')` → `'v2.0'` (bare id carries no
+ *     milestone → return the caller-supplied active milestone verbatim).
+ *   - `getMilestoneFromPhaseId('04')` → `null` (bare id, no active milestone).
+ *
+ * The `{PROJECT}.{MM}-` prefix is parsed from the RAW id BEFORE normalize
+ * strips it. Sentinel guard on the phase TOKEN's top int runs first.
+ *
+ * @param {string} phaseId - Phase ID in any accepted form.
+ * @param {string} [activeMilestone] - Active milestone marker from STATE.md
+ *   (e.g. `'v2.1'`). For a bare id, returned verbatim (the id has no milestone).
+ *   For a prefixed id, returned verbatim only when its major matches the prefix
+ *   integer (lets non-`.0` milestones like `v2.1` flow through).
+ * @returns {string|null} `vN.0` derived form, `activeMilestone`, or `null`.
+ */
+function getMilestoneFromPhaseId(phaseId, activeMilestone) {
   const str = String(phaseId);
-  const stripped = str.replace(/^[A-Z]{1,6}-(?=\d)/i, '');
-  const m = stripped.match(/^0*(\d+)-\d/);
-  if (!m) return null;
-  const major = parseInt(m[1], 10);
-  if (major === 0 || major === 999) return null;
-  return `v${major}.0`;
+  // Sentinel guard on the phase TOKEN first (convention-independent).
+  if (isSentinelPhaseId(str)) return null;
+  // Parse the {PROJECT}.{MM}- prefix from the RAW id before normalize strips it.
+  const prefixMatch = str.match(/^[A-Z]{1,6}\.(\d+)-/i);
+  if (!prefixMatch) {
+    // Bare id (no milestone encoded): the milestone is NOT in the id.
+    // Return the caller-supplied active milestone verbatim, else null.
+    return activeMilestone != null && String(activeMilestone) !== '' ? activeMilestone : null;
+  }
+  const milestoneInt = parseInt(prefixMatch[1], 10);
+  if (activeMilestone) {
+    const amMatch = String(activeMilestone).match(/^v(\d+)(?:\.\d+(?:\.\d+)?)?$/i);
+    if (amMatch && parseInt(amMatch[1], 10) === milestoneInt) {
+      return activeMilestone;
+    }
+  }
+  return `v${milestoneInt}.0`;
 }
 
-function getPhaseDirFromPhaseId(phaseId, phaseName, projectCode) {
-  const str = String(phaseId);
-  const stripped = str.replace(/^[A-Z]{1,6}-(?=\d)/i, '');
-  const m = stripped.match(/^0*(\d+)-(0*(\d+(?:-\d+)*))$/);
-  if (!m) return null;
-  const milestone = String(parseInt(m[1], 10)).padStart(2, '0');
-  const subParts = m[2].split('-').map(p => String(parseInt(p, 10)).padStart(2, '0'));
-  const sub = subParts.join('-');
-  const slug = phaseName
-    ? phaseName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
-    : '';
-  const parts = [milestone, sub, slug].filter(Boolean);
-  const base = parts.join('-');
-  return projectCode ? `${projectCode}-${base}` : base;
+/**
+ * Compute the canonical phase directory name from a phase ID (READING B).
+ *
+ * On-disk form (Option B — no brackets): `{projectCode}.{milestone}-{allDotPhaseToken}-{slug}`.
+ * The phase token stays ALL-DOT (`02.01`, `02.04.03`). The milestone comes from
+ * the explicit `milestone` param (sourced by the caller from STATE.md
+ * `milestone:`), NOT from the phase token's leading integer.
+ *
+ *   - `('04','Foo','GSD','02')` → `'GSD.02-04-foo'` (prefix 02, NOT GSD.04-04)
+ *   - `('2.1','Foo Bar','GSD','02')` → `'GSD.02-02.01-foo-bar'`
+ *   - `('2.1', null, '')` → `'02.01'` (bare all-dot token)
+ *   - `('5','Foo','')` → `'05-foo'` (no project code → no milestone prefix)
+ *   - slug-collapse-to-empty with non-null phaseName → `null`
+ *
+ * @param {string} phaseId - Phase ID in any accepted form.
+ * @param {string|null} [phaseName] - Human-readable name (kebab-cased internally).
+ * @param {string} [projectCode] - Project code prefix (e.g. `'GSD'`).
+ * @param {string} [milestone] - Milestone integer (2-digit padded by the caller).
+ *   Used ONLY when projectCode is set. Defaults to `''`.
+ * @returns {string|null}
+ */
+function getPhaseDirFromPhaseId(phaseId, phaseName = null, projectCode = '', milestone = '') {
+  // Normalize → all-dot phase token (pads leading int, strips project_code prefix).
+  const topPadded = normalizePhaseName(String(phaseId));
+  // Pad each single-digit sub-decimal segment to 2 (`.1` → `.01`). Leave 2+ alone.
+  const allDotPadded = topPadded.replace(/\.(\d+)/g, (_m, digits) => `.${digits.padStart(2, '0')}`);
+
+  if (!phaseName) return allDotPadded;
+  const slug = generatePhaseSlug(phaseName);
+  if (!slug) return null;
+  if (!projectCode) return `${allDotPadded}-${slug}`;
+  // READING B: milestone from the explicit param, NOT from the phase token.
+  const milestoneStr = String(milestone || '').replace(/\D/g, '');
+  const milestonePadded = milestoneStr ? milestoneStr.padStart(2, '0') : '00';
+  return `${projectCode}.${milestonePadded}-${allDotPadded}-${slug}`;
+}
+
+/** Kebab-case a phase name into a slug; returns '' when nothing alphanumeric remains. */
+function generatePhaseSlug(phaseName) {
+  return String(phaseName).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+/**
+ * Render the human-facing phase label for banners and agent descriptions.
+ * Output form: `[{projectCodeWithMilestone}] {allDotToken}` (e.g. `[GSD.02] 02.01`).
+ * The caller passes the already-joined `project.milestone` string (e.g. `'GSD.02'`).
+ * No literal "Phase" word in the output.
+ *
+ *   - `('2.1','GSD.02')` → `'[GSD.02] 02.01'`
+ *   - `('2.4.3','CK.02')` → `'[CK.02] 02.04.03'`
+ *   - `('2.1','')` → `'02.01'`
+ */
+function getPhaseDisplayLabel(phaseId, projectCodeWithMilestone = '') {
+  const canonicalId = getPhaseDirFromPhaseId(phaseId, null, '');
+  return projectCodeWithMilestone ? `[${projectCodeWithMilestone}] ${canonicalId}` : canonicalId;
+}
+
+/** Phase token from a dir name, tolerating an optional `XX-`/`XX.MM-` (bracket) prefix. */
+const PHASE_DIR_TOKEN_RE = /^(?:[A-Z][A-Z0-9]*(?:\.\d+)?-)?(\d+[A-Z]?(?:\.\d+)*)/i;
+
+/** Fresh `/g` regex matching legacy `## Phase N` AND bracket `### [XX.MM] N` headings. */
+function roadmapHeadingPhaseRe() {
+  return /#{2,4}\s*(?:Phase\s+|\[[A-Z][A-Z0-9]*\.\d+\]\s+)(\d+[A-Z]?(?:\.\d+)*)/gi;
 }
 
 /**
@@ -741,31 +875,28 @@ function getPhaseDirFromPhaseId(phaseId, phaseName, projectCode) {
  * See #3537 — wired into every ROADMAP-prose regex builder.
  */
 function phaseMarkdownRegexSource(phaseNum) {
-  const stripped = String(phaseNum).replace(/^[A-Z]{1,6}-(?=\d)/i, '');
+  // Bracket model: a single ALL-DOT phase token (`05`, `05.03`, `12A.1`).
+  // Strip an optional bracket (`GSD.02-`) or legacy code (`CK-`) prefix; the
+  // milestone lives in the prefix and is dropped here. The phase token never
+  // contains a hyphen, so the M-NN hyphen-joiner branch is gone (D-IDENT).
+  const stripped = String(phaseNum)
+    .replace(/^[A-Z]{1,6}\.\d+-/i, '')
+    .replace(/^[A-Z]{1,6}-(?=\d)/i, '');
 
-  // Milestone-prefixed IDs: M-NN or M-N-N (deep). Each numeric segment is padding-tolerant.
-  // Pattern: one or more dash-separated all-digit groups (last may have letter/decimal suffix).
-  const milestoneSegments = stripped.match(/^(\d+)((?:-\d+)*)([A-Z]?(?:\.\d+)*)$/i);
-  if (milestoneSegments && milestoneSegments[2]) {
-    // Has at least one dash-separated segment — treat as milestone-prefixed
-    const majorUnpadded = milestoneSegments[1].replace(/^0+/, '') || '0';
-    const subParts = milestoneSegments[2].slice(1).split('-'); // drop leading '-'
-    const subFragments = subParts.map(s => {
-      const unpadded = s.replace(/^0+/, '') || '0';
-      return `0*${escapeRegex(unpadded)}`;
-    });
-    const suffix = milestoneSegments[3] || '';
-    const suffixFragment = suffix ? escapeRegex(suffix) : '';
-    return `0*${escapeRegex(majorUnpadded)}-${subFragments.join('-')}${suffixFragment}`;
-  }
-
-  // Plain numeric phase: 1, 01, 12A, 12.1
+  // All-dot numeric phase token: 1, 01, 12A, 12.1, 05.03
   const match = stripped.match(/^0*(\d+)([A-Z])?((?:\.\d+)*)$/i);
   if (!match) return escapeRegex(phaseNum);
 
   const integer = match[1].replace(/^0+/, '') || '0';
   const letter = match[2] ? escapeRegex(match[2]) : '';
-  const decimal = match[3] ? escapeRegex(match[3]) : '';
+  // Per-segment `0*` padding tolerance on the dot-segments (so `02.07` prose
+  // matches an unpadded `2.7` heading and vice-versa).
+  const decimal = match[3]
+    ? match[3].slice(1).split('.').map(seg => {
+        const unpadded = seg.replace(/^0+/, '') || '0';
+        return `\\.0*${escapeRegex(unpadded)}`;
+      }).join('')
+    : '';
   return `0*${escapeRegex(integer)}${letter}${decimal}`;
 }
 
@@ -789,35 +920,13 @@ function phaseMarkdownRegexSourceExact(phaseNum) {
 }
 
 function comparePhaseNum(a, b) {
-  // Strip optional project_code prefix before comparing (e.g., 'CK-01-name' → '01-name')
-  const sa = String(a).replace(/^[A-Z]{1,6}-(?=\d)/i, '');
-  const sb = String(b).replace(/^[A-Z]{1,6}-(?=\d)/i, '');
-
-  // Milestone-prefixed IDs: one or more dash-separated all-digit segments.
-  // e.g. '02-10', '2-01', '02-04-01'. Compare segment by segment numerically.
-  // A string matches this form when it starts with digits and has at least one '-digit' group.
-  const milestoneA = sa.match(/^(\d+)((?:-\d+)+)([A-Z]?(?:\.\d+)*)$/i);
-  const milestoneB = sb.match(/^(\d+)((?:-\d+)+)([A-Z]?(?:\.\d+)*)$/i);
-
-  if (milestoneA && milestoneB) {
-    const segsA = [parseInt(milestoneA[1], 10), ...milestoneA[2].slice(1).split('-').map(s => parseInt(s, 10))];
-    const segsB = [parseInt(milestoneB[1], 10), ...milestoneB[2].slice(1).split('-').map(s => parseInt(s, 10))];
-    const maxSegs = Math.max(segsA.length, segsB.length);
-    for (let i = 0; i < maxSegs; i++) {
-      const av = segsA[i] !== undefined ? segsA[i] : 0;
-      const bv = segsB[i] !== undefined ? segsB[i] : 0;
-      if (av !== bv) return av - bv;
-    }
-    // Segments equal — compare any trailing letter/decimal suffix
-    const sufA = milestoneA[3] || '';
-    const sufB = milestoneB[3] || '';
-    if (sufA !== sufB) return sufA < sufB ? -1 : 1;
-    return 0;
-  }
-
-  // If one is milestone-prefixed and the other is not, milestone-prefixed sorts first
-  // (they come from different conventions; preserve caller's intent by string comparison).
-  if (milestoneA || milestoneB) return String(a).localeCompare(String(b));
+  // Bracket model: a single ALL-DOT phase-token space (no hyphen segments —
+  // the milestone lives in the prefix, the one hyphen is only ever the plan).
+  // Strip an optional bracket (`GSD.02-`) or legacy code (`CK-`) prefix; the
+  // remaining token is `\d+[A-Z]?(\.\d+)*`. The M-NN hyphen-segment branch and
+  // the "milestone-prefixed sorts first" fork are deleted (D-IDENT).
+  const sa = String(a).replace(/^[A-Z]{1,6}\.\d+-/i, '').replace(/^[A-Z]{1,6}-(?=\d)/i, '');
+  const sb = String(b).replace(/^[A-Z]{1,6}\.\d+-/i, '').replace(/^[A-Z]{1,6}-(?=\d)/i, '');
 
   const pa = sa.match(/^(\d+)([A-Z])?((?:\.\d+)*)/i);
   const pb = sb.match(/^(\d+)([A-Z])?((?:\.\d+)*)/i);
@@ -866,6 +975,13 @@ function comparePhaseNum(a, b) {
  *   'PROJ-42-name'      → 'PROJ-42'    (custom ID)
  */
 function extractPhaseToken(dirName) {
+  // BRACKET Option-B form FIRST (READING B): `GSD.02-02.01-slug` → `02.01`.
+  // The `.` in the project prefix breaks the legacy `[A-Z]{1,6}-` branch, so
+  // anchor on the `{PROJECT}.{milestoneInt}-` prefix and capture the all-dot
+  // phase token that follows (milestone in the prefix is dropped).
+  const bracketPrefix = dirName.match(/^[A-Z]{1,6}\.\d+-(\d+[A-Z]?(?:\.\d+)*)(?:-|$)/i);
+  if (bracketPrefix) return bracketPrefix[1];
+
   // Optional project-code prefix: 1–6 uppercase letters followed by a digit segment.
   const codePrefixMatch = dirName.match(/^([A-Z]{1,6})-(\d.*)/i);
   let prefix = '';
@@ -905,17 +1021,57 @@ function extractPhaseToken(dirName) {
 }
 
 /**
- * Check if a directory name's phase token matches the normalized phase exactly.
- * Case-insensitive comparison for the token portion.
+ * Parse a phase token into integer segments for numeric-tolerant comparison.
+ * Strips optional project_code prefix, then parses top integer + optional
+ * letter + trailing all-dot segments. Returns null for non-numeric custom IDs.
+ *
+ * Bracket model: the canonical token is all-dot, but `[-.]` are treated as
+ * equivalent segment delimiters for equality so a stray legacy hyphen token
+ * still compares correctly during the migration window.
+ */
+function parsePhaseSegments(token) {
+  const stripped = String(token).replace(/^[A-Z]{1,6}-(?=\d)/i, '');
+  const m = stripped.match(/^(\d+)([A-Z])?((?:[-.]\d+)*)$/i);
+  if (!m) return null;
+  const topInt = parseInt(m[1], 10);
+  const letter = (m[2] || '').toUpperCase();
+  const tailStr = m[3] || '';
+  const segments = tailStr ? tailStr.slice(1).split(/[-.]/).map(s => parseInt(s, 10)) : [];
+  return { topInt, letter, segments };
+}
+
+/**
+ * Numeric-segment-tolerant equality for two phase tokens. Compares
+ * component-wise (equal top int, equal letter, equal segment count, equal
+ * integer per segment) so `02.01` ≡ `2.1` ≡ `02.1`. Falls back to
+ * case-insensitive string comparison for non-numeric custom IDs.
+ */
+function numericTokensEqual(a, b) {
+  const pa = parsePhaseSegments(a);
+  const pb = parsePhaseSegments(b);
+  if (!pa || !pb) return String(a).toUpperCase() === String(b).toUpperCase();
+  if (pa.topInt !== pb.topInt) return false;
+  if (pa.letter !== pb.letter) return false;
+  if (pa.segments.length !== pb.segments.length) return false;
+  for (let i = 0; i < pa.segments.length; i++) {
+    if (pa.segments[i] !== pb.segments[i]) return false;
+  }
+  return true;
+}
+
+/**
+ * Check if a directory name's phase token matches the normalized phase.
+ * Numeric-segment-tolerant (padding-agnostic): `GSD.02-02.01-slug` matches
+ * `2.1`. Falls back to case-insensitive string compare for custom IDs.
  */
 function phaseTokenMatches(dirName, normalized) {
   const token = extractPhaseToken(dirName);
-  if (token.toUpperCase() === normalized.toUpperCase()) return true;
-  // Strip optional project_code prefix from dir and retry
+  if (numericTokensEqual(token, normalized)) return true;
+  // Strip optional project_code prefix from dir and retry (legacy backwards-compat)
   const stripped = dirName.replace(/^[A-Z]{1,6}-(?=\d)/i, '');
   if (stripped !== dirName) {
     const strippedToken = extractPhaseToken(stripped);
-    if (strippedToken.toUpperCase() === normalized.toUpperCase()) return true;
+    if (numericTokensEqual(strippedToken, normalized)) return true;
   }
   return false;
 }
@@ -1082,6 +1238,65 @@ function stripShippedMilestones(content) {
  * @param {string} [cwd] - Working directory for reading STATE.md
  * @returns {string} Content scoped to current milestone
  */
+/**
+ * Bracket-milestone section heading: `## [PROJECT.MM] Name` — bracket followed
+ * by a NAME, with NO `NN:` phase-number after it (ADDENDUM-3 discriminator).
+ * The negative lookahead `(?!\d+[A-Z]?(?:\.\d+)*\s*:)` excludes phase headings
+ * (`### [GSD.02] 05: Name`); the trailing `:` is the load-bearing signal so a
+ * digit-leading milestone NAME (`## [GSD.02] 2024 Plan`) is NOT a phase.
+ * Capture group 1 = milestone integer.
+ */
+function bracketMilestoneHeadingRe() {
+  return /^#{1,3}\s+\[[A-Z][A-Z0-9]*\.(\d+)\]\s+(?!\d+[A-Z]?(?:\.\d+)*\s*:)\S/gim;
+}
+
+/**
+ * Scope ROADMAP content to the active milestone using bracket section
+ * headings. Returns the scoped slice, or `null` when the ROADMAP carries no
+ * bracket milestone headings (caller falls through to the legacy v-string
+ * path). `milestoneRaw` is the STATE.md `milestone:` value (e.g. `v2.0`/`02`/
+ * `2`); the first integer in it is the active milestone.
+ */
+function extractCurrentMilestoneBracket(content, milestoneRaw) {
+  const headingRe = bracketMilestoneHeadingRe();
+  const headings = [];
+  let h;
+  while ((h = headingRe.exec(content)) !== null) {
+    headings.push({ index: h.index, milestoneInt: parseInt(h[1], 10) });
+  }
+  if (headings.length === 0) return null; // not a bracket roadmap — legacy fallback
+
+  // Active milestone integer from STATE.md `milestone:` (tolerate v2.0 / 02 / 2).
+  let activeInt = null;
+  if (milestoneRaw != null) {
+    const mm = String(milestoneRaw).match(/(\d+)/);
+    if (mm) activeInt = parseInt(mm[1], 10);
+  }
+
+  // Select the active milestone heading; if none matches (or no STATE
+  // authority), default to the FIRST bracket milestone section.
+  let selectedIdx = 0;
+  if (activeInt !== null) {
+    const found = headings.findIndex(x => x.milestoneInt === activeInt);
+    if (found !== -1) selectedIdx = found;
+  }
+  const sectionStart = headings[selectedIdx].index;
+  // Boundary: the next bracket milestone heading with a DIFFERENT integer
+  // (a same-integer sibling section is not a boundary).
+  let sectionEnd = content.length;
+  for (let i = selectedIdx + 1; i < headings.length; i++) {
+    if (headings[i].milestoneInt !== headings[selectedIdx].milestoneInt) {
+      sectionEnd = headings[i].index;
+      break;
+    }
+  }
+  // Preserve any preamble before the first milestone heading (title/overview),
+  // stripping shipped <details> blocks from it for parity with the legacy path.
+  const preamble = content.slice(0, headings[0].index)
+    .replace(/<details>[\s\S]*?<\/details>/gi, '');
+  return preamble + content.slice(sectionStart, sectionEnd);
+}
+
 function extractCurrentMilestone(content, cwd) {
   if (!cwd) return stripShippedMilestones(content);
 
@@ -1093,10 +1308,22 @@ function extractCurrentMilestone(content, cwd) {
     if (stateRaw !== null) {
       const milestoneMatch = stateRaw.match(/^milestone:\s*(.+)/m);
       if (milestoneMatch) {
-        version = milestoneMatch[1].trim();
+        version = milestoneMatch[1].trim().replace(/^["']|["']$/g, '');
       }
     }
   } catch {}
+
+  // 1b. BRACKET fast path (ADDENDUM-3). When the ROADMAP carries bracket
+  // milestone section headings `## [PROJECT.MM] Name`, scope by the active
+  // milestone INTEGER (from STATE.md `milestone:`, which may hold `v2.0`/`02`/
+  // `2`). The discriminator is PHASE-NUMBER-AFTER-BRACKET:
+  //   - phase heading    `### [GSD.02] 05: Name`  (bracket then `NN:`) — NOT a boundary
+  //   - milestone heading `## [GSD.02] Foundation` (bracket then a name) — boundary
+  // The trailing `:` after the phase number is load-bearing — it stops a
+  // digit-leading milestone name (`## [GSD.02] 2024 Plan`) from parsing as a
+  // phase. No `vX.0` / emoji on milestone headings (Q4 locked = dropped).
+  const bracketScoped = extractCurrentMilestoneBracket(content, version);
+  if (bracketScoped !== null) return bracketScoped;
 
   // 2. Fallback: derive version from getMilestoneInfo pattern in ROADMAP.md itself
   if (!version) {
@@ -1264,12 +1491,13 @@ function getRoadmapPhaseInternal(cwd, phaseNum) {
     const roadmapRaw = platformReadSync(roadmapPath);
     if (roadmapRaw === null) throw new Error('missing');
     const content = extractCurrentMilestone(roadmapRaw, cwd);
-    // #3537: route through canonical padding-tolerant fragment. The prior
-    // hand-rolled `isNumeric` branch only stripped padding on integer-only
-    // ids and missed decimal padding (`02.7` against `Phase 2.7:` headings).
-    // Also tolerate optional [bracket-token] scope prefix on phase headings.
+    // Bracket model: a phase heading is `### [GSD.02] 05: Name` (no "Phase"
+    // word). The `(?:\[…\]\s*|Phase\s+)` alternation matches the bracket form
+    // AND keeps legacy `### Phase N:` read-tolerance (migration window). The
+    // phase number routes through the padding-tolerant all-dot fragment so
+    // `02.7` resolves a `2.7` heading and vice-versa (#3537).
     const phasePattern = new RegExp(
-      `#{2,4}\\s*(?:\\[[^\\]]+\\]\\s*)?Phase\\s+${phaseMarkdownRegexSource(phaseNum)}:\\s*([^\\n]+)`,
+      `#{2,4}\\s*(?:\\[[^\\]]+\\]\\s*|Phase\\s+)${phaseMarkdownRegexSource(phaseNum)}\\s*:\\s*([^\\n]+)`,
       'i'
     );
     const headerMatch = content.match(phasePattern);
@@ -1278,8 +1506,8 @@ function getRoadmapPhaseInternal(cwd, phaseNum) {
     const phaseName = headerMatch[1].trim();
     const headerIndex = headerMatch.index;
     const restOfContent = content.slice(headerIndex);
-    // Boundary: next phase heading — also matches bracket-prefixed form.
-    const nextHeaderMatch = restOfContent.match(/\n#{2,4}\s+(?:\[[^\]]+\]\s*)?Phase\s+[\w]/i);
+    // Boundary: next phase heading — bracket form OR legacy "Phase" form.
+    const nextHeaderMatch = restOfContent.match(/\n#{2,4}\s+(?:\[[^\]]+\]\s*\d|Phase\s+[\w])/i);
     const sectionEnd = nextHeaderMatch ? headerIndex + nextHeaderMatch.index : content.length;
     const section = content.slice(headerIndex, sectionEnd).trim();
 
@@ -2140,9 +2368,47 @@ function getMilestoneInfo(cwd) {
         const stateRaw = platformReadSync(statePath);
         if (stateRaw !== null) {
           const m = stateRaw.match(/^milestone:\s*(.+)/m);
-          if (m) stateVersion = m[1].trim();
+          if (m) stateVersion = m[1].trim().replace(/^["']|["']$/g, '');
         }
       } catch { /* intentionally empty */ }
+    }
+
+    // 0a. BRACKET fast path (ADDENDUM-3): when the ROADMAP carries bracket
+    // milestone section headings `## [PROJECT.MM] Name`, read the milestone
+    // INTEGER directly from the bracket. No `vX.0` literal or emoji is
+    // load-bearing — the bracket integer is the identity. STATE.md `milestone:`
+    // remains the authority for WHICH milestone is active; the bracket supplies
+    // the human name. Active integer = first int in `milestone:` (v2.0/02/2).
+    {
+      const headingRe = bracketMilestoneHeadingRe();
+      const brackets = [];
+      let bh;
+      while ((bh = headingRe.exec(roadmap)) !== null) {
+        // Re-read the name on the matched line (the discriminator regex only
+        // captured the integer + a non-digit lookahead boundary).
+        const lineEnd = roadmap.indexOf('\n', bh.index);
+        const line = roadmap.slice(bh.index, lineEnd === -1 ? undefined : lineEnd);
+        const nameMatch = line.match(/^#{1,3}\s+\[[A-Z][A-Z0-9]*\.\d+\]\s+(.+?)\s*$/);
+        brackets.push({ milestoneInt: parseInt(bh[1], 10), name: nameMatch ? nameMatch[1].trim() : 'milestone' });
+      }
+      if (brackets.length > 0) {
+        let activeInt = null;
+        if (stateVersion) {
+          const mm = String(stateVersion).match(/(\d+)/);
+          if (mm) activeInt = parseInt(mm[1], 10);
+        }
+        const selected = (activeInt !== null && brackets.find(b => b.milestoneInt === activeInt)) || brackets[0];
+        // R3 lockstep with getMilestoneFromPhaseId: preserve the STATE.md
+        // `milestone:` value verbatim when its major matches the selected
+        // bracket integer (keeps non-`.0` milestones like `v2.1` coherent with
+        // the archive-dir form); otherwise emit the derived `vN.0`.
+        let version = `v${selected.milestoneInt}.0`;
+        if (stateVersion) {
+          const am = String(stateVersion).match(/^v(\d+)(?:\.\d+(?:\.\d+)?)?$/i);
+          if (am && parseInt(am[1], 10) === selected.milestoneInt) version = stateVersion;
+        }
+        return { version, name: selected.name };
+      }
     }
 
     if (stateVersion) {
@@ -2217,6 +2483,52 @@ function getMilestoneInfo(cwd) {
 function getMilestonePhaseFilter(cwd, versionOverride) {
   const milestonePhaseNums = new Set();
   let missingExplicitVersion = false;
+
+  // BRACKET structural path (ADDENDUM-3 / §3): when the ROADMAP carries bracket
+  // milestone section headings, milestone membership is STRUCTURAL — a phase
+  // dir belongs to the active milestone iff its `{PROJECT}.{MM}-` prefix
+  // integer equals the active milestone integer. No phase-number Set, no
+  // hyphen-split, no `roadmapUsesHyphenedIds` switch. The active integer comes
+  // from `versionOverride` (when given) else STATE.md `milestone:`.
+  try {
+    const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
+    const roadmapContent = platformReadSync(roadmapPath);
+    if (roadmapContent !== null && bracketMilestoneHeadingRe().test(roadmapContent)) {
+      let activeInt = null;
+      const src = versionOverride != null ? String(versionOverride) : null;
+      if (src) {
+        const mm = src.match(/(\d+)/);
+        if (mm) activeInt = parseInt(mm[1], 10);
+      }
+      if (activeInt === null && cwd) {
+        try {
+          const stateRaw = platformReadSync(path.join(planningDir(cwd), 'STATE.md'));
+          if (stateRaw !== null) {
+            const sm = stateRaw.match(/^milestone:\s*(.+)/m);
+            if (sm) {
+              const mm = sm[1].match(/(\d+)/);
+              if (mm) activeInt = parseInt(mm[1], 10);
+            }
+          }
+        } catch { /* intentionally empty */ }
+      }
+      const filter = (dirName) => {
+        const m = String(dirName).match(/^[A-Z][A-Z0-9]*\.(\d+)-/i);
+        if (!m) return false;            // not bracket-form → not in this milestone
+        if (activeInt === null) return true; // no authority → pass-all (legacy lenience)
+        return parseInt(m[1], 10) === activeInt;
+      };
+      // Count the active-milestone phase headings (bracket form) for reporting.
+      const scoped = extractCurrentMilestone(roadmapContent, cwd);
+      let count = 0;
+      const phaseHeadingRe = /#{2,4}\s*\[[A-Z][A-Z0-9]*\.\d+\]\s+\d+[A-Z]?(?:\.\d+)*\s*:/gi;
+      while (phaseHeadingRe.exec(scoped) !== null) count++;
+      filter.phaseCount = count;
+      filter.missingExplicitVersion = false;
+      return filter;
+    }
+  } catch { /* intentionally empty — fall through to legacy path */ }
+
   try {
     const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
     const roadmapContent = platformReadSync(roadmapPath);
@@ -2451,6 +2763,11 @@ module.exports = {
   normalizePhaseName,
   getMilestoneFromPhaseId,
   getPhaseDirFromPhaseId,
+  getPhaseDisplayLabel,
+  PHASE_DIR_TOKEN_RE,
+  roadmapHeadingPhaseRe,
+  SENTINEL_RANGES,
+  isSentinelPhaseId,
   phaseMarkdownRegexSource,
   phaseMarkdownRegexSourceExact,
   comparePhaseNum,

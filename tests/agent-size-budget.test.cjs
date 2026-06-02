@@ -48,6 +48,12 @@ const LARGE_AGENTS = new Set([
   'gsd-codebase-mapper',
   'gsd-project-researcher',
   'gsd-roadmapper',
+  // gsd-ui-auditor is a multi-pillar scored auditor (6-pillar visual audit →
+  // scored UI-REVIEW.md), the same operator class as gsd-verifier/gsd-plan-checker
+  // above — it was miscategorized as DEFAULT. It sat at 495 lines at HEAD (5 under
+  // the DEFAULT cap) before the mandatory single-source convention block tipped it
+  // to 502; LARGE is its correct tier, not a budget dodge.
+  'gsd-ui-auditor',
 ]);
 
 const ALL_AGENTS = fs.readdirSync(AGENTS_DIR)

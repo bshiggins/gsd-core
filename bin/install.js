@@ -145,6 +145,9 @@ const {
   resolveTierEntry: gsdResolveTierEntry,
   EFFORT_SET: GSD_EFFORT_SET,
 } = require(path.join(_gsdLibDir, 'core.cjs'));
+// Single source of truth for the bracket phase-ID convention card (ADDENDUM-1),
+// rendered once at install completion (and identically by the migrator).
+const { phaseIdCard: gsdPhaseIdCard } = require(path.join(_gsdLibDir, 'phase-id-card.cjs'));
 
 // #443 — model-catalog and config-defaults.manifest.json exports needed only
 // by effort-resolution code paths (resolveInstallTimeEffort /
@@ -10237,6 +10240,15 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   if (runtime === 'cline') command = '/gsd-new-project';
   if (runtime === 'qwen') command = '/gsd-new-project';
   if (runtime === 'hermes') command = '/gsd-new-project';
+
+  // Render the canonical phase-ID convention card once at install completion
+  // (ADDENDUM-1). Single source of truth — imported from phase-id-card.cjs and
+  // rendered identically by the migrator. Shown on both fresh + upgrade installs.
+  console.log(`
+  ${cyan}Phase-ID convention:${reset} GSD names every phase with the bracket form.
+
+${gsdPhaseIdCard().split('\n').map((l) => '  ' + l).join('\n')}
+`);
 
   // Claude Code global installs use the skills/ format (CC 2.1.88+).
   // Restart is required for CC to pick up newly-installed skills, and the

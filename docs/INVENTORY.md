@@ -262,7 +262,7 @@ Full roster at `get-shit-done/workflows/*.md`. Workflows are thin orchestrators 
 
 ---
 
-## References (62 shipped)
+## References (63 shipped)
 
 Full roster at `get-shit-done/references/*.md`. References are shared knowledge documents that workflows and agents `@-reference`. The groupings below match [`docs/ARCHITECTURE.md`](ARCHITECTURE.md#references-get-shit-donereferencesmd) — core, workflow, thinking-model clusters, and the modular planner decomposition.
 
@@ -302,6 +302,7 @@ Full roster at `get-shit-done/references/*.md`. References are shared knowledge 
 | `worktree-path-safety.md` | Worktree guard suite: HEAD assertion, cwd-drift sentinel (step 0a, #3097), and absolute-path guard (step 0b, #3099) — loaded into executor spawn prompts via `<execution_context>`. |
 | `artifact-types.md` | Planning artifact type definitions. |
 | `phase-argument-parsing.md` | Phase argument parsing conventions. |
+| `phase-id-convention.md` | Canonical bracket phase-ID grammar: annotated card, phase/milestone heading forms, on-disk encoding, and the phase-argument contract. |
 | `decimal-phase-calculation.md` | Decimal sub-phase numbering rules. |
 | `workstream-flag.md` | Workstream active-pointer conventions (`--ws`). |
 | `user-profiling.md` | User behavioral profiling detection heuristics. |
@@ -363,7 +364,7 @@ The `gsd-planner` agent is decomposed into a core agent plus reference modules t
 
 ---
 
-## CLI Modules (81 shipped)
+## CLI Modules (82 shipped)
 
 Full listing: `get-shit-done/bin/lib/*.cjs`.
 
@@ -410,6 +411,7 @@ Full listing: `get-shit-done/bin/lib/*.cjs`.
 | `model-profiles.cjs` | Backward-compatible profile helpers derived from `model-catalog.cjs`; no longer owns its own model table |
 | `package-identity.cjs` | Generated single source for GSD's published-package coordinates (npm name, bin name, repo slug, changelog URL, manual-install command), derived from package.json; read by the update worker, `check-latest-version`, and installer (#498) |
 | `phase-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools phase` |
+| `phase-id-card.cjs` | Single-source bracket phase-ID convention card (annotated grammar + legend); rendered at install completion and migrator start |
 | `phase-lifecycle.cjs` | Pure-computation phase lifecycle helpers extracted from the phase-lifecycle SDK handler |
 | `phase.cjs` | Phase directory operations, decimal numbering, plan indexing |
 | `phases-command-router.cjs` | Thin CJS subcommand router adapter for `gsd-tools phases` |

@@ -2,7 +2,12 @@
 
 Template for `.planning/ROADMAP.md`.
 
-## Initial Roadmap (v1.0 Greenfield)
+Phase identity uses the **bracket convention**: `[{PROJECT}.{MM}]` (project code +
+zero-padded milestone integer), then a zero-padded phase number, then optional
+`.SS` subphase. There is **no "Phase" word**, no `vX.Y` version literal, and no
+milestone emoji on any heading. On disk: `{PROJECT}.{MM}-{NN}[.{SS}]-slug/`.
+
+## Initial Roadmap (First Milestone)
 
 ```markdown
 # Roadmap: [Project Name]
@@ -14,19 +19,21 @@ Template for `.planning/ROADMAP.md`.
 ## Phases
 
 **Phase Numbering:**
-- Integer phases (1, 2, 3): Planned milestone work
-- Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
+- Phases are zero-padded integers within a milestone (`01`, `02`, `03`).
+- Subphases (`02.01`, `02.02`) are genuine decomposition of a phase into
+  parallel/sequential parts — NOT urgent insertions. They appear under their
+  parent phase in numeric order.
+- Phase numbers restart at `01` in each new milestone (the milestone integer in
+  the bracket disambiguates: `[GSD.01] 01` vs `[GSD.02] 01`).
 
-Decimal phases appear between their surrounding integers in numeric order.
-
-- [ ] **Phase 1: [Name]** - [One-line description]
-- [ ] **Phase 2: [Name]** - [One-line description]
-- [ ] **Phase 3: [Name]** - [One-line description]
-- [ ] **Phase 4: [Name]** - [One-line description]
+- [ ] **[GSD.01] 01: [Name]** - [One-line description]
+- [ ] **[GSD.01] 02: [Name]** - [One-line description]
+- [ ] **[GSD.01] 03: [Name]** - [One-line description]
+- [ ] **[GSD.01] 04: [Name]** - [One-line description]
 
 ## Phase Details
 
-### Phase 1: [Name]
+### [GSD.01] 01: [Name]
 **Goal**: [What this phase delivers]
 **Depends on**: Nothing (first phase)
 **Requirements**: [REQ-01, REQ-02, REQ-03]  <!-- brackets optional, parser handles both formats -->
@@ -41,9 +48,9 @@ Plans:
 - [ ] 01-02: [Brief description of second plan]
 - [ ] 01-03: [Brief description of third plan]
 
-### Phase 2: [Name]
+### [GSD.01] 02: [Name]
 **Goal**: [What this phase delivers]
-**Depends on**: Phase 1
+**Depends on:** [GSD.01] 01
 **Requirements**: [REQ-04, REQ-05]
 **Success Criteria** (what must be TRUE):
   1. [Observable behavior from user perspective]
@@ -54,19 +61,21 @@ Plans:
 - [ ] 02-01: [Brief description]
 - [ ] 02-02: [Brief description]
 
-### Phase 2.1: Critical Fix (INSERTED)
-**Goal**: [Urgent work inserted between phases]
-**Depends on**: Phase 2
+### [GSD.01] 02.01: [Name]
+**Goal**: [A genuine decomposition of phase 02 — a coherent sub-slice planned and
+executed on its own. Use a subphase when one phase splits into independently
+plannable parts, NOT for urgent fixes.]
+**Depends on:** [GSD.01] 02
 **Success Criteria** (what must be TRUE):
-  1. [What the fix achieves]
+  1. [What this sub-slice achieves]
 **Plans**: 1 plan
 
 Plans:
-- [ ] 02.1-01: [Description]
+- [ ] 02.01-01: [Description]
 
-### Phase 3: [Name]
+### [GSD.01] 03: [Name]
 **Goal**: [What this phase delivers]
-**Depends on**: Phase 2
+**Depends on:** [GSD.01] 02
 **Requirements**: [REQ-06, REQ-07, REQ-08]
 **Success Criteria** (what must be TRUE):
   1. [Observable behavior from user perspective]
@@ -78,9 +87,9 @@ Plans:
 - [ ] 03-01: [Brief description]
 - [ ] 03-02: [Brief description]
 
-### Phase 4: [Name]
+### [GSD.01] 04: [Name]
 **Goal**: [What this phase delivers]
-**Depends on**: Phase 3
+**Depends on:** [GSD.01] 03
 **Requirements**: [REQ-09, REQ-10]
 **Success Criteria** (what must be TRUE):
   1. [Observable behavior from user perspective]
@@ -93,22 +102,24 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 2 → 2.1 → 2.2 → 3 → 3.1 → 4
+Phases execute in numeric order within a milestone: 01 → 02 → 02.01 → 03 → 04
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. [Name] | 0/3 | Not started | - |
-| 2. [Name] | 0/2 | Not started | - |
-| 3. [Name] | 0/2 | Not started | - |
-| 4. [Name] | 0/1 | Not started | - |
+| [GSD.01] 01: [Name] | 0/3 | Not started | - |
+| [GSD.01] 02: [Name] | 0/2 | Not started | - |
+| [GSD.01] 02.01: [Name] | 0/1 | Not started | - |
+| [GSD.01] 03: [Name] | 0/2 | Not started | - |
+| [GSD.01] 04: [Name] | 0/1 | Not started | - |
 ```
 
 <guidelines>
-**Initial planning (v1.0):**
+**Initial planning (first milestone):**
 - Phase count depends on granularity setting (coarse: 3-5, standard: 5-8, fine: 8-12)
 - Each phase delivers something coherent
 - Phases can have 1+ plans (split if >3 tasks or multiple subsystems)
-- Plans use naming: {phase}-{plan}-PLAN.md (e.g., 01-02-PLAN.md)
+- Plans use naming: {phase}[.{subphase}]-{plan}-PLAN.md (e.g., 01-02-PLAN.md, 02.01-01-PLAN.md)
+  — the milestone lives in the directory prefix, NOT the plan filename
 - No time estimates (this isn't enterprise PM)
 - Progress table updated by execute workflow
 - Plan count can be "TBD" initially, refined during planning
@@ -123,7 +134,8 @@ Phases execute in numeric order: 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 **After milestones ship:**
 - Collapse completed milestones in `<details>` tags
 - Add new milestone sections for upcoming work
-- Keep continuous phase numbering (never restart at 01)
+- Phase numbers restart at `01` in each new milestone — the milestone integer in
+  the bracket (`[GSD.02]`) keeps them unambiguous
 </guidelines>
 
 <status_values>
@@ -133,25 +145,27 @@ Phases execute in numeric order: 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 - `Deferred` - Pushed to later (with reason)
 </status_values>
 
-## Milestone-Grouped Roadmap (After v1.0 Ships)
+## Milestone-Grouped Roadmap (After First Milestone Ships)
 
-After completing first milestone, reorganize with milestone groupings:
+After completing the first milestone, reorganize with milestone groupings. Each
+milestone section heading is `## [{PROJECT}.{MM}] [Name]` — the milestone integer
+rides in the bracket; no version literal, no emoji.
 
 ```markdown
 # Roadmap: [Project Name]
 
 ## Milestones
 
-- ✅ **v1.0 MVP** - Phases 1-4 (shipped YYYY-MM-DD)
-- 🚧 **v1.1 [Name]** - Phases 5-6 (in progress)
-- 📋 **v2.0 [Name]** - Phases 7-10 (planned)
+- **[GSD.01] MVP** - phases 01-04 (shipped YYYY-MM-DD)
+- **[GSD.02] [Name]** - phases 01-02 (in progress)
+- **[GSD.03] [Name]** - phases 01-04 (planned)
 
 ## Phases
 
 <details>
-<summary>✅ v1.0 MVP (Phases 1-4) - SHIPPED YYYY-MM-DD</summary>
+<summary>[GSD.01] MVP (phases 01-04) - SHIPPED YYYY-MM-DD</summary>
 
-### Phase 1: [Name]
+### [GSD.01] 01: [Name]
 **Goal**: [What this phase delivers]
 **Plans**: 3 plans
 
@@ -160,43 +174,47 @@ Plans:
 - [x] 01-02: [Brief description]
 - [x] 01-03: [Brief description]
 
-[... remaining v1.0 phases ...]
+[... remaining milestone 01 phases ...]
 
 </details>
 
-### 🚧 v1.1 [Name] (In Progress)
+## [GSD.02] [Name]
 
-**Milestone Goal:** [What v1.1 delivers]
+**Milestone Goal:** [What this milestone delivers]
 
-#### Phase 5: [Name]
+### [GSD.02] 01: [Name]
 **Goal**: [What this phase delivers]
-**Depends on**: Phase 4
+**Depends on:** [GSD.01] 04
 **Plans**: 2 plans
 
 Plans:
-- [ ] 05-01: [Brief description]
-- [ ] 05-02: [Brief description]
+- [ ] 01-01: [Brief description]
+- [ ] 01-02: [Brief description]
 
-[... remaining v1.1 phases ...]
+[... remaining milestone 02 phases ...]
 
-### 📋 v2.0 [Name] (Planned)
+## [GSD.03] [Name]
 
-**Milestone Goal:** [What v2.0 delivers]
+**Milestone Goal:** [What this milestone delivers]
 
-[... v2.0 phases ...]
+[... milestone 03 phases ...]
 
 ## Progress
 
-| Phase | Milestone | Plans Complete | Status | Completed |
-|-------|-----------|----------------|--------|-----------|
-| 1. Foundation | v1.0 | 3/3 | Complete | YYYY-MM-DD |
-| 2. Features | v1.0 | 2/2 | Complete | YYYY-MM-DD |
-| 5. Security | v1.1 | 0/2 | Not started | - |
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| [GSD.01] 01: Foundation | 3/3 | Complete | YYYY-MM-DD |
+| [GSD.01] 02: Features | 2/2 | Complete | YYYY-MM-DD |
+| [GSD.02] 01: Security | 0/2 | Not started | - |
 ```
 
 **Notes:**
-- Milestone emoji: ✅ shipped, 🚧 in progress, 📋 planned
+- Milestone section heading = `## [{PROJECT}.{MM}] [Name]` (bracket + name, no
+  phase number after the bracket — that's the milestone-vs-phase discriminator)
+- Phase heading = `### [{PROJECT}.{MM}] {NN}: [Name]` (bracket followed by a phase
+  number then a colon)
 - Completed milestones collapsed in `<details>` for readability
 - Current/future milestones expanded
-- Continuous phase numbering (01-99)
-- Progress table includes milestone column
+- Phase numbers restart at `01` each milestone; the bracket integer disambiguates
+- The single Progress table's Phase cell carries the full bracket label, so no
+  separate milestone column is needed

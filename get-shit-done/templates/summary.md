@@ -1,6 +1,6 @@
 # Summary Template
 
-Template for `.planning/phases/XX-name/{phase}-{plan}-SUMMARY.md` - phase completion documentation.
+Template for `.planning/phases/{PROJECT}.{MM}-{NN}[.{SS}]-name/{phase}[.{subphase}]-{plan}-SUMMARY.md` - phase completion documentation. The milestone lives in the directory prefix, NOT the SUMMARY filename.
 
 ---
 
@@ -8,7 +8,7 @@ Template for `.planning/phases/XX-name/{phase}-{plan}-SUMMARY.md` - phase comple
 
 ```markdown
 ---
-phase: XX-name
+phase: {PROJECT}.{MM}-{NN}[.{SS}]-name
 plan: YY
 subsystem: [primary category: auth, payments, ui, api, database, infra, testing, etc.]
 tags: [searchable tech: jwt, stripe, react, postgres, prisma]
@@ -45,7 +45,7 @@ duration: Xmin
 completed: YYYY-MM-DD
 ---
 
-# Phase [X]: [Name] Summary
+# [{PROJECT}.{MM}] [NN]: [Name] Summary
 
 **[Substantive one-liner describing outcome - NOT "phase complete" or "implementation finished"]**
 
@@ -125,7 +125,7 @@ None - no external service configuration required.
 [Any blockers or concerns]
 
 ---
-*Phase: XX-name*
+*Phase: {PROJECT}.{MM}-{NN}[.{SS}]-name*
 *Completed: [date]*
 ```
 
@@ -166,7 +166,7 @@ The one-liner should tell someone what actually shipped.
 
 <example>
 ```markdown
-# Phase 1: Foundation Summary
+# [GSD.01] 01: Foundation Summary
 
 **JWT auth with refresh rotation using jose library, Prisma User model, and protected API middleware**
 
@@ -229,7 +229,7 @@ The one-liner should tell someone what actually shipped.
 - User registration endpoint needed before public launch
 
 ---
-*Phase: 01-foundation*
+*Phase: GSD.01-01-foundation*
 *Completed: 2025-01-15*
 ```
 </example>

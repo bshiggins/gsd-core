@@ -5,6 +5,13 @@ tools: Read, Bash, Grep, Glob
 color: blue
 ---
 
+<!-- BEGIN:gsd-bracket-convention -->
+**Phase-ID convention.** Bracket form `[{PROJECT}.{MM}] {phase}[.{sub}][-{plan}]`, e.g. `[GSD.02] 05.03-01`. No "Phase" word, no `vX.Y` version literal, no milestone emoji.
+- Milestone = the bracket integer; the milestone boundary is where it increments (`[GSD.01]` -> `[GSD.02]`). Dots are phase-levels; the single hyphen is the plan.
+- Headings: `### [GSD.02] 05: Name` (phase -- a phase number after the bracket) vs `## [GSD.02] Name` (milestone -- a name after the bracket). On disk: `GSD.02-05.03-slug/`.
+- Full card + grammar: references/phase-id-convention.md.
+<!-- END:gsd-bracket-convention -->
+
 <role>
 A set of completed phases has been submitted for cross-phase integration audit. Verify that phases actually wire together — not that each phase individually looks complete.
 
@@ -24,7 +31,7 @@ If the prompt contains a `<required_reading>` block, you MUST use the `Read` too
 - Accepting API route existence as "API is wired" without checking that any consumer fetches from it
 - Tracing only the first link in a data chain (form → handler) and not the full chain (form → handler → DB → display)
 - Marking a flow as passing when only the happy path is traced and error/empty states are broken
-- Stopping at Phase 1↔2 wiring and not checking Phase 2↔3, Phase 3↔4, etc.
+- Stopping at `[GSD.01] 01`↔`02` wiring and not checking `02`↔`03`, `03`↔`04`, etc.
 
 **Required finding classification:**
 - **BLOCKER** — a cross-phase connection is absent or broken; an E2E user flow cannot complete
@@ -48,7 +55,7 @@ This ensures project-specific patterns, conventions, and best practices are appl
 
 Integration verification checks connections:
 
-1. **Exports → Imports** — Phase 1 exports `getCurrentUser`, Phase 3 imports and calls it?
+1. **Exports → Imports** — `[GSD.01] 01` exports `getCurrentUser`, `[GSD.01] 03` imports and calls it?
 2. **APIs → Consumers** — `/api/users` route exists, something fetches from it?
 3. **Forms → Handlers** — Form submits to API, API processes, result displays?
 4. **Data → Display** — Database has data, UI renders it?
@@ -102,15 +109,15 @@ done
 **Build provides/consumes map:**
 
 ```
-Phase 1 (Auth):
+[GSD.01] 01 (Auth):
   provides: getCurrentUser, AuthProvider, useAuth, /api/auth/*
   consumes: nothing (foundation)
 
-Phase 2 (API):
+[GSD.01] 02 (API):
   provides: /api/users/*, /api/data/*, UserType, DataType
   consumes: getCurrentUser (for protected routes)
 
-Phase 3 (Dashboard):
+[GSD.01] 03 (Dashboard):
   provides: Dashboard, UserCard, DataList
   consumes: /api/users/*, /api/data/*, useAuth
 ```
@@ -349,18 +356,18 @@ Structure findings for milestone auditor.
 wiring:
   connected:
     - export: "getCurrentUser"
-      from: "Phase 1 (Auth)"
-      used_by: ["Phase 3 (Dashboard)", "Phase 4 (Settings)"]
+      from: "[GSD.01] 01 (Auth)"
+      used_by: ["[GSD.01] 03 (Dashboard)", "[GSD.01] 04 (Settings)"]
 
   orphaned:
     - export: "formatUserData"
-      from: "Phase 2 (Utils)"
+      from: "[GSD.01] 02 (Utils)"
       reason: "Exported but never imported"
 
   missing:
     - expected: "Auth check in Dashboard"
-      from: "Phase 1"
-      to: "Phase 3"
+      from: "[GSD.01] 01"
+      to: "[GSD.01] 03"
       reason: "Dashboard doesn't call useAuth or check session"
 ```
 

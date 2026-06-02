@@ -224,6 +224,34 @@ function renderProgressBar(percent) {
 }
 
 /**
+ * Render the bracket-native phase identity token for the statusline.
+ * Output form: `[{code}.{MM}] {phaseN}` (e.g. `[GSD.02] 05`).
+ *
+ * The milestone segment `MM` is sourced from STATE.md `milestone:` and parsed
+ * to a 2-digit integer — it is NOT a v-literal. Accepts the milestone in either
+ * its STATE.md `v2.0` form OR an already-stripped `02`/`2`. There is NO literal
+ * "Phase" word: the bracket IS the phase-identity token.
+ *
+ *   renderPhaseDisplay('v2.0', '05', 'GSD') → '[GSD.02] 05'
+ *   renderPhaseDisplay('02',   '05', 'GSD') → '[GSD.02] 05'
+ *   renderPhaseDisplay('v2.0', '05', '')    → '05'   (no project code → bare)
+ *
+ * @param {string|null} milestone  STATE.md milestone marker (`v2.0` or `02`/`2`).
+ * @param {string|number} phaseN   Phase number/token to display verbatim.
+ * @param {string} projectCode     Project code (e.g. `GSD`); falsy → bare phaseN.
+ * @returns {string}
+ */
+function renderPhaseDisplay(milestone, phaseN, projectCode) {
+  const phase = String(phaseN == null ? '' : phaseN);
+  if (!projectCode) return phase;
+  // Parse the leading integer out of the milestone marker (`v2.0` → 2, `02` → 2),
+  // then pad to 2 digits. Missing/unparseable → `00` (surfaces the wiring gap).
+  const mMatch = String(milestone == null ? '' : milestone).match(/(\d+)/);
+  const mm = mMatch ? mMatch[1].padStart(2, '0') : '00';
+  return `[${projectCode}.${mm}] ${phase}`;
+}
+
+/**
  * Format GSD state into display string.
  *
  * Backward-compatible default (no new fields populated):
@@ -240,10 +268,25 @@ function renderProgressBar(percent) {
  * Progress bar is opt-in: appended to the milestone segment only when
  * progress.percent is present in frontmatter; absent → empty string.
  */
-function formatGsdState(s) {
+function formatGsdState(s, opts = {}) {
   const parts = [];
 
-  // Milestone segment: version + name + (opt-in) progress bar
+  // Bracket-native phase identity is gated on the project's convention. Legacy
+  // repos (no `phase_id_convention: 'bracket'`) keep the literal "Phase" word so
+  // their status line shape is byte-for-byte unchanged.
+  const bracket = opts.convention === 'bracket';
+  const projectCode = opts.projectCode || '';
+  // Bracket render drops the "Phase" word: the bracket IS the identity token.
+  // `s.milestone` is the STATE.md `v2.0` marker; renderPhaseDisplay strips the v.
+  const phaseLabel = (phaseN) =>
+    (bracket && projectCode)
+      ? renderPhaseDisplay(s.milestone, phaseN, projectCode)
+      : `Phase ${phaseN}`;
+
+  // Milestone segment: version + name + (opt-in) progress bar.
+  // Under bracket convention the milestone version is no longer the phase
+  // IDENTITY (the bracket token carries it). It MAY still appear as the
+  // milestone NAME label, so the segment is preserved as-is.
   if (s.milestone || s.milestoneName) {
     const ver = s.milestone || '';
     const name = (s.milestoneName && s.milestoneName !== 'milestone') ? s.milestoneName : '';
@@ -261,7 +304,7 @@ function formatGsdState(s) {
     // stage = whichever lifecycle status was written by the orchestrator
     //   (discussing / planning / executing / verifying)
     const stage = s.status || '';
-    parts.push(stage ? `Phase ${s.activePhase} ${stage}` : `Phase ${s.activePhase}`);
+    parts.push(stage ? `${phaseLabel(s.activePhase)} ${stage}` : phaseLabel(s.activePhase));
   } else if (s.nextAction && phasesStr) {
     // Scene 2: idle + a recommended next command is visible to the user.
     // Surfaces "what to run next" without the user opening STATE.md.
@@ -275,9 +318,17 @@ function formatGsdState(s) {
     // earlier so no existing project's status-line changes shape.
     if (s.status) parts.push(s.status);
     if (s.phaseNum && s.phaseTotal) {
-      const phase = s.phaseName
-        ? `${s.phaseName} (${s.phaseNum}/${s.phaseTotal})`
-        : `ph ${s.phaseNum}/${s.phaseTotal}`;
+      const ident = (bracket && projectCode)
+        ? renderPhaseDisplay(s.milestone, s.phaseNum, projectCode)
+        : null;
+      let phase;
+      if (s.phaseName) {
+        phase = ident ? `${ident} ${s.phaseName} (${s.phaseNum}/${s.phaseTotal})`
+                      : `${s.phaseName} (${s.phaseNum}/${s.phaseTotal})`;
+      } else {
+        phase = ident ? `${ident} (${s.phaseNum}/${s.phaseTotal})`
+                      : `ph ${s.phaseNum}/${s.phaseTotal}`;
+      }
       parts.push(phase);
     }
   }
@@ -391,8 +442,14 @@ function runStatusline() {
       }
     }
 
-    // GSD state (milestone · status · phase) — shown when no todo task
-    const gsdStateStr = task ? '' : formatGsdState(readGsdState(dir) || {});
+    // GSD state (milestone · status · phase) — shown when no todo task.
+    // Pass the convention + project_code so bracket repos render the
+    // bracket-native phase identity and legacy repos keep "Phase N".
+    const gsdCfg = readGsdConfig(dir);
+    const gsdStateStr = task ? '' : formatGsdState(readGsdState(dir) || {}, {
+      convention: gsdCfg.phase_id_convention,
+      projectCode: gsdCfg.project_code,
+    });
 
     // GSD update available?
     // Check shared cache first (#1421), fall back to runtime-specific cache for
@@ -509,7 +566,7 @@ function isInstalledAheadOfLatest(installed, latest) {
 
 // Export helpers for unit tests. Harmless when run as a script.
 module.exports = {
-  readGsdState, parseStateMd, formatGsdState,
+  readGsdState, parseStateMd, formatGsdState, renderPhaseDisplay,
   readGsdConfig, getConfigValue, readLastSlashCommand,
   composeStatusline,
   isInstalledAheadOfLatest,
@@ -538,7 +595,11 @@ function renderStatusline(data) {
     if (cfgPos != null) position = cfgPos;
   } catch (e) { /* swallow */ }
 
-  const gsdStateStr = formatGsdState(readGsdState(dir) || {});
+  const gsdCfg = readGsdConfig(dir);
+  const gsdStateStr = formatGsdState(readGsdState(dir) || {}, {
+    convention: gsdCfg.phase_id_convention,
+    projectCode: gsdCfg.project_code,
+  });
   const middle = gsdStateStr ? `\x1b[2m${gsdStateStr}\x1b[0m` : null;
   return composeStatusline({ model, ctx: '', middle, dirname, lastCmdSuffix, position });
 }

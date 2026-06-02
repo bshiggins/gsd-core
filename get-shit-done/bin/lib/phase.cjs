@@ -14,7 +14,44 @@
 
 const fs = require('fs');
 const path = require('path');
-const { escapeRegex, loadConfig, normalizePhaseName, phaseMarkdownRegexSource, comparePhaseNum, findPhaseInternal, getArchivedPhaseDirs, generateSlugInternal, getMilestonePhaseFilter, stripShippedMilestones, extractCurrentMilestone, replaceInCurrentMilestone, toPosixPath, output, error, readSubdirectories, phaseTokenMatches, ERROR_REASON } = require('./core.cjs');
+const { escapeRegex, loadConfig, normalizePhaseName, phaseMarkdownRegexSource, comparePhaseNum, findPhaseInternal, getArchivedPhaseDirs, generateSlugInternal, getMilestonePhaseFilter, stripShippedMilestones, extractCurrentMilestone, replaceInCurrentMilestone, toPosixPath, output, error, readSubdirectories, phaseTokenMatches, getMilestoneInfo, getPhaseDirFromPhaseId, getPhaseDisplayLabel, roadmapHeadingPhaseRe, ERROR_REASON } = require('./core.cjs');
+
+/**
+ * Resolve the bracket emit context for a phase add/insert on a bracket repo.
+ *
+ * Returns `{ bracket, projectCode, milestoneMM, pcm }` where:
+ *   - `bracket`      = true when config.phase_id_convention === 'bracket' AND a
+ *     project_code is set. This is the SOLE gate for bracket emit (the prior
+ *     code gated dir-prefix emit on project_code presence alone — a latent bug
+ *     that emitted a `{code}-` prefix on non-bracket repos; fixed here).
+ *   - `milestoneMM`  = 2-digit milestone from STATE.md (`v2.0` → `02`), the 4th
+ *     arg to getPhaseDirFromPhaseId (the `.00`-prefix fix: prior 3-arg callers
+ *     emitted a wrong `.00`).
+ *   - `pcm`          = `{code}.{MM}` join for getPhaseDisplayLabel headings/bullets.
+ */
+/**
+ * Read `phase_id_convention` from config.json RAW. `loadConfig` strips keys not
+ * in its schema defaults (phase_id_convention among them) — the migrator writes
+ * it directly to config.json, so emit/validation/banner sites read it raw to keep
+ * config.json authoritative. Mirrors roadmap-command-router.cjs / verify.cjs.
+ */
+function readPhaseIdConvention(cwd) {
+  try {
+    const raw = fs.readFileSync(path.join(planningDir(cwd), 'config.json'), 'utf8');
+    return JSON.parse(raw).phase_id_convention;
+  } catch {
+    return undefined;
+  }
+}
+
+function bracketEmitContext(cwd, config) {
+  const projectCode = config.project_code || '';
+  const bracket = readPhaseIdConvention(cwd) === 'bracket' && !!projectCode;
+  if (!bracket) return { bracket: false, projectCode, milestoneMM: '', pcm: '' };
+  const mMatch = String(getMilestoneInfo(cwd).version || '').match(/(\d+)/);
+  const milestoneMM = mMatch ? mMatch[1].padStart(2, '0') : '00';
+  return { bracket: true, projectCode, milestoneMM, pcm: `${projectCode}.${milestoneMM}` };
+}
 const { platformWriteSync, platformReadSync, platformEnsureDir } = require('./shell-command-projection.cjs');
 const { planningDir, withPlanningLock } = require('./planning-workspace.cjs');
 const { extractFrontmatter } = require('./frontmatter.cjs');
@@ -651,9 +688,12 @@ function cmdPhaseAdd(cwd, description, raw, customId) {
     const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
     const content = extractCurrentMilestone(rawContent, cwd);
 
-    // Optional project code prefix (e.g., 'CK' → 'CK-01-foundation')
+    // Bracket emit context — gated on config.phase_id_convention === 'bracket'
+    // (NOT project_code presence; that was the latent dir-prefix bug). Legacy
+    // repos keep the historic `[CODE-]NN-slug` dir + `### Phase N:` heading.
+    const ctx = bracketEmitContext(cwd, config);
     const projectCode = config.project_code || '';
-    const prefix = projectCode ? `${projectCode}-` : '';
+    const prefix = (!ctx.bracket && projectCode) ? `${projectCode}-` : '';
 
     let _newPhaseId;
     let _dirName;
@@ -662,13 +702,18 @@ function cmdPhaseAdd(cwd, description, raw, customId) {
       // Custom phase naming: use provided ID or generate from description
       _newPhaseId = customId || slug.toUpperCase().replace(/-/g, '-');
       if (!_newPhaseId) error('--id required when phase_naming is "custom"');
-      _dirName = `${prefix}${_newPhaseId}-${slug}`;
+      _dirName = ctx.bracket
+        ? getPhaseDirFromPhaseId(_newPhaseId, description, ctx.projectCode, ctx.milestoneMM)
+        : `${prefix}${_newPhaseId}-${slug}`;
     } else {
       // Sequential mode: find highest integer phase number from two sources:
       // 1. ROADMAP.md (current milestone only)
       // 2. .planning/phases/ on disk (orphan directories not tracked in roadmap)
-      // Skip 999.x backlog phases — they live outside the active sequence
-      const phasePattern = /#{2,4}\s*Phase\s+(\d+)[A-Z]?(?:\.\d+)*:/gi;
+      // Skip 999.x backlog phases — they live outside the active sequence.
+      // roadmapHeadingPhaseRe() matches BOTH legacy `### Phase N:` and bracket
+      // `### [GSD.02] N:` headings (the bracket read-regex swap — without it the
+      // scan misses every bracket heading and add always restarts at 01).
+      const phasePattern = roadmapHeadingPhaseRe();
       let maxPhase = 0;
       let m;
       while ((m = phasePattern.exec(content)) !== null) {
@@ -678,11 +723,12 @@ function cmdPhaseAdd(cwd, description, raw, customId) {
       }
 
       // Also scan .planning/phases/ for orphan directories not tracked in ROADMAP.
-      // Directory names follow: [PREFIX-]NN-slug (e.g. 03-api or CK-05-old-feature).
-      // Strip the optional project_code prefix before extracting the leading integer.
+      // Dir forms: legacy `[CODE-]NN-slug` (e.g. 03-api, CK-05-old) AND bracket
+      // `CODE.MM-NN[.sub]-slug`. The pattern tolerates the optional `.MM` segment
+      // in the prefix so bracket orphans contribute to maxPhase too.
       const phasesOnDisk = path.join(planningDir(cwd), 'phases');
       if (fs.existsSync(phasesOnDisk)) {
-        const dirNumPattern = /^(?:[A-Z][A-Z0-9]*-)?(\d+)-/;
+        const dirNumPattern = /^(?:[A-Z][A-Z0-9]*(?:\.\d+)?-)?(\d+)[A-Z]?(?:[.-]|$)/i;
         for (const entry of fs.readdirSync(phasesOnDisk)) {
           const match = entry.match(dirNumPattern);
           if (!match) continue;
@@ -694,7 +740,9 @@ function cmdPhaseAdd(cwd, description, raw, customId) {
 
       _newPhaseId = maxPhase + 1;
       const paddedNum = String(_newPhaseId).padStart(2, '0');
-      _dirName = `${prefix}${paddedNum}-${slug}`;
+      _dirName = ctx.bracket
+        ? getPhaseDirFromPhaseId(paddedNum, description, ctx.projectCode, ctx.milestoneMM)
+        : `${prefix}${paddedNum}-${slug}`;
     }
 
     const dirPath = path.join(planningDir(cwd), 'phases', _dirName);
@@ -703,9 +751,18 @@ function cmdPhaseAdd(cwd, description, raw, customId) {
     platformEnsureDir(dirPath);
     platformWriteSync(path.join(dirPath, '.gitkeep'), '');
 
-    // Build phase entry
-    const dependsOn = config.phase_naming === 'custom' ? '' : `\n**Depends on:** Phase ${typeof _newPhaseId === 'number' ? _newPhaseId - 1 : 'TBD'}`;
-    const phaseEntry = `\n### Phase ${_newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd))} ${_newPhaseId} to break down)\n`;
+    // Build phase entry. Bracket repos emit `### [GSD.02] N: Name` (no "Phase"
+    // word) + bracket `Depends on:`; legacy repos keep `### Phase N:`.
+    const headingLabel = ctx.bracket ? getPhaseDisplayLabel(_newPhaseId, ctx.pcm) : `Phase ${_newPhaseId}`;
+    let dependsOn = '';
+    if (config.phase_naming !== 'custom') {
+      const prevId = typeof _newPhaseId === 'number' ? _newPhaseId - 1 : 'TBD';
+      const dependsLabel = ctx.bracket && typeof _newPhaseId === 'number'
+        ? getPhaseDisplayLabel(prevId, ctx.pcm)
+        : `Phase ${prevId}`;
+      dependsOn = `\n**Depends on:** ${dependsLabel}`;
+    }
+    const phaseEntry = `\n### ${headingLabel}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd))} ${_newPhaseId} to break down)\n`;
 
     // Find insertion point: before last "---" or at end
     let updatedContent;
@@ -739,15 +796,17 @@ function cmdPhaseAddBatch(cwd, descriptions, raw) {
   const config = loadConfig(cwd);
   const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
   if (!fs.existsSync(roadmapPath)) { error('ROADMAP.md not found'); }
+  const ctx = bracketEmitContext(cwd, config);
   const projectCode = config.project_code || '';
-  const prefix = projectCode ? `${projectCode}-` : '';
+  const prefix = (!ctx.bracket && projectCode) ? `${projectCode}-` : '';
 
   const results = withPlanningLock(cwd, () => {
     let rawContent = fs.readFileSync(roadmapPath, 'utf-8');
     const content = extractCurrentMilestone(rawContent, cwd);
     let maxPhase = 0;
     if (config.phase_naming !== 'custom') {
-      const phasePattern = /#{2,4}\s*Phase\s+(\d+)[A-Z]?(?:\.\d+)*:/gi;
+      // Bracket-tolerant heading scan (legacy `Phase N` + bracket `[GSD.02] N`).
+      const phasePattern = roadmapHeadingPhaseRe();
       let m;
       while ((m = phasePattern.exec(content)) !== null) {
         const num = parseInt(m[1], 10);
@@ -756,7 +815,7 @@ function cmdPhaseAddBatch(cwd, descriptions, raw) {
       }
       const phasesOnDisk = path.join(planningDir(cwd), 'phases');
       if (fs.existsSync(phasesOnDisk)) {
-        const dirNumPattern = /^(?:[A-Z][A-Z0-9]*-)?(\d+)-/;
+        const dirNumPattern = /^(?:[A-Z][A-Z0-9]*(?:\.\d+)?-)?(\d+)[A-Z]?(?:[.-]|$)/i;
         for (const entry of fs.readdirSync(phasesOnDisk)) {
           const match = entry.match(dirNumPattern);
           if (!match) continue;
@@ -772,17 +831,29 @@ function cmdPhaseAddBatch(cwd, descriptions, raw) {
       let newPhaseId, dirName;
       if (config.phase_naming === 'custom') {
         newPhaseId = slug.toUpperCase().replace(/-/g, '-');
-        dirName = `${prefix}${newPhaseId}-${slug}`;
+        dirName = ctx.bracket
+          ? getPhaseDirFromPhaseId(newPhaseId, description, ctx.projectCode, ctx.milestoneMM)
+          : `${prefix}${newPhaseId}-${slug}`;
       } else {
         maxPhase += 1;
         newPhaseId = maxPhase;
-        dirName = `${prefix}${String(newPhaseId).padStart(2, '0')}-${slug}`;
+        dirName = ctx.bracket
+          ? getPhaseDirFromPhaseId(String(newPhaseId).padStart(2, '0'), description, ctx.projectCode, ctx.milestoneMM)
+          : `${prefix}${String(newPhaseId).padStart(2, '0')}-${slug}`;
       }
       const dirPath = path.join(planningDir(cwd), 'phases', dirName);
       platformEnsureDir(dirPath);
       platformWriteSync(path.join(dirPath, '.gitkeep'), '');
-      const dependsOn = config.phase_naming === 'custom' ? '' : `\n**Depends on:** Phase ${typeof newPhaseId === 'number' ? newPhaseId - 1 : 'TBD'}`;
-      const phaseEntry = `\n### Phase ${newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd))} ${newPhaseId} to break down)\n`;
+      const headingLabel = ctx.bracket ? getPhaseDisplayLabel(newPhaseId, ctx.pcm) : `Phase ${newPhaseId}`;
+      let dependsOn = '';
+      if (config.phase_naming !== 'custom') {
+        const prevId = typeof newPhaseId === 'number' ? newPhaseId - 1 : 'TBD';
+        const dependsLabel = ctx.bracket && typeof newPhaseId === 'number'
+          ? getPhaseDisplayLabel(prevId, ctx.pcm)
+          : `Phase ${prevId}`;
+        dependsOn = `\n**Depends on:** ${dependsLabel}`;
+      }
+      const phaseEntry = `\n### ${headingLabel}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd))} ${newPhaseId} to break down)\n`;
       const lastSeparator = rawContent.lastIndexOf('\n---');
       rawContent = lastSeparator > 0
         ? rawContent.slice(0, lastSeparator) + phaseEntry + rawContent.slice(lastSeparator)
@@ -819,12 +890,21 @@ function cmdPhaseInsert(cwd, afterPhase, description, raw) {
     const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
     const content = extractCurrentMilestone(rawContent, cwd);
 
+    // Bracket emit context — gates whether the inserted phase + the heading
+    // locators speak bracket or legacy. `headingPrefixFrag` matches BOTH legacy
+    // `Phase N` and bracket `[GSD.02] N` heading/bullet prefixes so a bracket
+    // repo's `### [GSD.02] 05:` target heading is located (without this swap the
+    // `Phase\s+` locators miss every bracket heading and insert errors out).
+    const config = loadConfig(cwd);
+    const ctx = bracketEmitContext(cwd, config);
+    const headingPrefixFrag = '(?:Phase\\s+|\\[[A-Z][A-Z0-9]*\\.\\d+\\]\\s+)';
+
     // Normalize input then route through canonical padding-tolerant fragment
     // (#3537). The prior hand-rolled `0*${unpadded}` worked for the integer
     // base but duplicated logic — funnel it through the shared helper.
     const normalizedAfter = normalizePhaseName(afterPhase);
     const afterPhaseEscaped = phaseMarkdownRegexSource(normalizedAfter);
-    const targetPattern = new RegExp(`#{2,4}\\s*Phase\\s+${afterPhaseEscaped}:`, 'i');
+    const targetPattern = new RegExp(`#{2,4}\\s*${headingPrefixFrag}${afterPhaseEscaped}:`, 'i');
     const headingMatch = targetPattern.test(content);
 
     // #3815: also recognise the checked-bullet phase format used by projects
@@ -836,10 +916,10 @@ function cmdPhaseInsert(cwd, afterPhase, description, raw) {
     // means the detail section is missing — that is the #3098 case and must keep
     // producing the "missing a detail section" error.
     const bulletPattern = new RegExp(
-      `-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?Phase\\s+${afterPhaseEscaped}[:\\s]`,
+      `-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?${headingPrefixFrag}${afterPhaseEscaped}[:\\s]`,
       'i',
     );
-    const anyHeadingPattern = /#{2,4}\s*Phase\s+\d/i;
+    const anyHeadingPattern = new RegExp(`#{2,4}\\s*${headingPrefixFrag}\\d`, 'i');
     const roadmapHasHeadingPhases = anyHeadingPattern.test(content);
     const isBulletStyle = !headingMatch && bulletPattern.test(content) && !roadmapHasHeadingPhases;
 
@@ -848,7 +928,7 @@ function cmdPhaseInsert(cwd, afterPhase, description, raw) {
       // the summary checklist exists for this phase (no `### Phase N:` detail
       // section), point the user at the missing detail section.
       const checklistPattern = new RegExp(
-        `-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?Phase\\s+${afterPhaseEscaped}[:\\s]`,
+        `-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?${headingPrefixFrag}${afterPhaseEscaped}[:\\s]`,
         'i',
       );
       if (checklistPattern.test(content)) {
@@ -865,7 +945,8 @@ function cmdPhaseInsert(cwd, afterPhase, description, raw) {
     try {
       const entries = fs.readdirSync(phasesDir, { withFileTypes: true });
       const dirs = entries.filter(e => e.isDirectory()).map(e => e.name);
-      const decimalPattern = new RegExp(`^(?:[A-Z]{1,6}-)?${escapeRegex(normalizedBase)}\\.(\\d+)`);
+      // Tolerate both legacy `[CODE-]NN.SS` and bracket `CODE.MM-NN.SS` dir prefixes.
+      const decimalPattern = new RegExp(`^(?:[A-Z]{1,6}(?:\\.\\d+)?-)?${escapeRegex(normalizedBase)}\\.(\\d+)`);
       for (const dir of dirs) {
         const dm = dir.match(decimalPattern);
         if (dm) decimalSet.add(parseInt(dm[1], 10));
@@ -874,9 +955,10 @@ function cmdPhaseInsert(cwd, afterPhase, description, raw) {
 
     // Also scan ROADMAP.md content (already loaded) for decimal entries.
     // #3537: padding-tolerant fragment so un-padded `Phase 2.7:` is found
-    // when caller passes the padded base `02`.
+    // when caller passes the padded base `02`. headingPrefixFrag tolerates the
+    // bracket heading form as well.
     const rmPhasePattern = new RegExp(
-      `#{2,4}\\s*Phase\\s+${phaseMarkdownRegexSource(normalizedBase)}\\.(\\d+)\\s*:`, 'gi'
+      `#{2,4}\\s*${headingPrefixFrag}${phaseMarkdownRegexSource(normalizedBase)}\\.(\\d+)\\s*:`, 'gi'
     );
     let rmMatch;
     while ((rmMatch = rmPhasePattern.exec(rawContent)) !== null) {
@@ -885,11 +967,13 @@ function cmdPhaseInsert(cwd, afterPhase, description, raw) {
 
     const nextDecimal = decimalSet.size === 0 ? 1 : Math.max(...decimalSet) + 1;
     const _decimalPhase = `${normalizedBase}.${nextDecimal}`;
-    // Optional project code prefix
-    const insertConfig = loadConfig(cwd);
-    const projectCode = insertConfig.project_code || '';
-    const pfx = projectCode ? `${projectCode}-` : '';
-    const _dirName = `${pfx}${_decimalPhase}-${slug}`;
+    // Dir name: bracket repos route through getPhaseDirFromPhaseId (milestone
+    // prefix from STATE.md). Legacy repos keep the optional `CODE-` prefix.
+    const projectCode = config.project_code || '';
+    const pfx = (!ctx.bracket && projectCode) ? `${projectCode}-` : '';
+    const _dirName = ctx.bracket
+      ? getPhaseDirFromPhaseId(_decimalPhase, description, ctx.projectCode, ctx.milestoneMM)
+      : `${pfx}${_decimalPhase}-${slug}`;
     const dirPath = path.join(planningDir(cwd), 'phases', _dirName);
 
     // Create directory with .gitkeep so git tracks empty folders
@@ -903,18 +987,20 @@ function cmdPhaseInsert(cwd, afterPhase, description, raw) {
       // surrounding entries.  Detect whether the matched bullet uses bold
       // (`**Phase N: …**`) to preserve file-internal format consistency.
       const boldBulletPattern = new RegExp(
-        `-\\s*\\[[ x]\\]\\s*\\*\\*Phase\\s+${afterPhaseEscaped}:`,
+        `-\\s*\\[[ x]\\]\\s*\\*\\*${headingPrefixFrag}${afterPhaseEscaped}:`,
         'i',
       );
       const useBold = boldBulletPattern.test(content);
+      // Bracket repos emit `[GSD.02] N.S: Name` (no "Phase" word); legacy keep `Phase N.S`.
+      const insertLabel = ctx.bracket ? getPhaseDisplayLabel(_decimalPhase, ctx.pcm) : `Phase ${_decimalPhase}`;
       const phaseLabel = useBold
-        ? `**Phase ${_decimalPhase}: ${description}**`
-        : `Phase ${_decimalPhase}: ${description}`;
+        ? `**${insertLabel}: ${description}**`
+        : `${insertLabel}: ${description}`;
       const bulletEntry = `\n- [ ] ${phaseLabel}`;
 
       // Locate the target bullet line in the raw content
       const targetBulletPattern = new RegExp(
-        `(-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?Phase\\s+${afterPhaseEscaped}[:\\s][^\\n]*)`,
+        `(-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?${headingPrefixFrag}${afterPhaseEscaped}[:\\s][^\\n]*)`,
         'i',
       );
       const bulletMatchResult = rawContent.match(targetBulletPattern);
@@ -924,7 +1010,7 @@ function cmdPhaseInsert(cwd, afterPhase, description, raw) {
 
       const bulletLineEnd = rawContent.indexOf(bulletMatchResult[0]) + bulletMatchResult[0].length;
       const afterBullet = rawContent.slice(bulletLineEnd);
-      const nextBulletMatch = afterBullet.match(/\n-\s*\[[ x]\]\s*(?:\*\*)?Phase\s+\d/i);
+      const nextBulletMatch = afterBullet.match(new RegExp(`\\n-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?${headingPrefixFrag}\\d`, 'i'));
 
       let insertIdx;
       if (nextBulletMatch) {
@@ -935,12 +1021,15 @@ function cmdPhaseInsert(cwd, afterPhase, description, raw) {
 
       updatedContent = rawContent.slice(0, insertIdx) + bulletEntry + rawContent.slice(insertIdx);
     } else {
-      // Heading-style insert (original path)
-      // Build phase entry
-      const phaseEntry = `\n### Phase ${_decimalPhase}: ${description} (INSERTED)\n\n**Goal:** [Urgent work - to be planned]\n**Requirements**: TBD\n**Depends on:** Phase ${afterPhase}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd))} ${_decimalPhase} to break down)\n`;
+      // Heading-style insert (original path).
+      // Bracket repos emit `### [GSD.02] N.S: Name` + bracket `Depends on:`;
+      // legacy repos keep `### Phase N.S:`.
+      const insertHeading = ctx.bracket ? getPhaseDisplayLabel(_decimalPhase, ctx.pcm) : `Phase ${_decimalPhase}`;
+      const dependsLabel = ctx.bracket ? getPhaseDisplayLabel(afterPhase, ctx.pcm) : `Phase ${afterPhase}`;
+      const phaseEntry = `\n### ${insertHeading}: ${description} (INSERTED)\n\n**Goal:** [Urgent work - to be planned]\n**Requirements**: TBD\n**Depends on:** ${dependsLabel}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd))} ${_decimalPhase} to break down)\n`;
 
       // Insert after the target phase section
-      const headerPattern = new RegExp(`(#{2,4}\\s*Phase\\s+${afterPhaseEscaped}:[^\\n]*\\n)`, 'i');
+      const headerPattern = new RegExp(`(#{2,4}\\s*${headingPrefixFrag}${afterPhaseEscaped}:[^\\n]*\\n)`, 'i');
       const headerMatch = rawContent.match(headerPattern);
       if (!headerMatch) {
         error(`Could not find Phase ${afterPhase} header`);
@@ -949,8 +1038,8 @@ function cmdPhaseInsert(cwd, afterPhase, description, raw) {
       const headerIdx = rawContent.indexOf(headerMatch[0]);
       const afterHeader = rawContent.slice(headerIdx + headerMatch[0].length);
       // #3691: `\d` → `\d[\d.]*` so decimal phase headings (e.g. `### Phase 02.3:`) are
-      // recognised as section boundaries.
-      const nextPhaseMatch = afterHeader.match(/\n#{2,4}\s+Phase\s+\d[\d.]*/i);
+      // recognised as section boundaries. headingPrefixFrag tolerates bracket too.
+      const nextPhaseMatch = afterHeader.match(new RegExp(`\\n#{2,4}\\s+${headingPrefixFrag}\\d[\\d.]*`, 'i'));
 
       let insertIdx;
       if (nextPhaseMatch) {
@@ -1141,6 +1230,116 @@ function updateRoadmapAfterPhaseRemoval(roadmapPath, targetPhase, isDecimal, rem
   });
 }
 
+// ─── Bracket-aware remove + renumber (gated on phase_id_convention === 'bracket') ─
+//
+// On a bracket repo, phase dirs are `{PROJECT}.{MM}-{token}-slug` and ROADMAP
+// headings are `### [{PROJECT}.{MM}] {token}: Name` — neither carries the legacy
+// "Phase" word, so every legacy regex below (target-find, section-remove, the
+// `decrementRoadmap*` renumberers) silently no-ops. The bracket helpers below
+// mirror the legacy ones but:
+//   - SCOPE everything to the removed phase's milestone bracket prefix
+//     (`{PROJECT}.{MM}-` on disk / `[{PROJECT}.{MM}]` in headings). A
+//     same-numbered phase in ANOTHER milestone is never touched.
+//   - renumber siblings on disk (dirs + plan/summary files) and in ROADMAP
+//     headings only — bare-number cross-refs, inline `Phase N`, and bare-number
+//     `Depends on` are deliberately NOT rewritten (milestone-ambiguous; see
+//     phase-id-convention.md "phase.remove scope").
+
+/**
+ * Renumber sibling INTEGER phases after removedInt, scoped to a single milestone
+ * bracket prefix (`{PROJECT}.{MM}-`). Mirrors renameIntegerPhases but matches
+ * bracket dirs `{PROJECT}.{MM}-{int}[.{dec}]-slug` and only within `dirPrefix`.
+ * Returns { renamedDirs, renamedFiles }.
+ */
+function renameBracketIntegerPhases(phasesDir, removedInt, dirPrefix) {
+  const renamedDirs = [], renamedFiles = [];
+  const dirs = readSubdirectories(phasesDir, true);
+  const toRename = dirs
+    .map(dir => {
+      if (!dir.startsWith(dirPrefix)) return null;
+      const rest = dir.slice(dirPrefix.length);
+      const m = rest.match(/^(\d+)([A-Z])?(?:\.(\d+))?-(.+)$/i);
+      if (!m) return null;
+      const dirInt = parseInt(m[1], 10);
+      return (dirInt > removedInt && dirInt !== 999)
+        ? { dir, oldInt: dirInt, letter: m[2] ? m[2].toUpperCase() : '', decimal: m[3] ? parseInt(m[3], 10) : null, slug: m[4] }
+        : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.oldInt !== b.oldInt ? b.oldInt - a.oldInt : (b.decimal || 0) - (a.decimal || 0));
+
+  for (const item of toRename) {
+    const newInt = item.oldInt - 1;
+    const newPadded = String(newInt).padStart(2, '0');
+    const oldPadded = String(item.oldInt).padStart(2, '0');
+    const letterSuffix = item.letter || '';
+    const decimalSuffix = item.decimal !== null ? `.${item.decimal}` : '';
+    const oldTokenPrefix = `${oldPadded}${letterSuffix}${decimalSuffix}`;
+    const newTokenPrefix = `${newPadded}${letterSuffix}${decimalSuffix}`;
+    const newDirName = `${dirPrefix}${newTokenPrefix}-${item.slug}`;
+    fs.renameSync(path.join(phasesDir, item.dir), path.join(phasesDir, newDirName));
+    renamedDirs.push({ from: item.dir, to: newDirName });
+    // Plan/summary files inside the dir are named with the bare phase token
+    // (`{token}-{NN}-PLAN.md`), no bracket prefix — renumber that token.
+    for (const f of fs.readdirSync(path.join(phasesDir, newDirName))) {
+      if (f.startsWith(oldTokenPrefix)) {
+        const newFileName = newTokenPrefix + f.slice(oldTokenPrefix.length);
+        fs.renameSync(path.join(phasesDir, newDirName, f), path.join(phasesDir, newDirName, newFileName));
+        renamedFiles.push({ from: f, to: newFileName });
+      }
+    }
+  }
+  return { renamedDirs, renamedFiles };
+}
+
+/**
+ * Remove a bracket phase section from ROADMAP.md and renumber sibling bracket
+ * headings, ALL scoped to the active milestone bracket `[{PROJECT}.{MM}]`.
+ *
+ *   - Section remove: drop `### [PCM] {removedInt}[.dec]: …` through the next
+ *     same-depth bracket heading or the next shallower `## ` milestone section
+ *     (so a trailing phase does not consume the following milestone to EOF).
+ *   - Renumber: any `### [PCM] {N}[.dec]: …` heading whose top int `> removedInt`
+ *     decrements by one. The literal `[PCM]` in the pattern is the milestone
+ *     scope — a `[GSD.01] 02` decoy never matches `[GSD.02]`.
+ *   - Bare-number cross-refs / inline `Phase N` / bare `Depends on` are NOT
+ *     rewritten (milestone-ambiguous on bracket repos — deliberate per doc).
+ */
+function updateRoadmapAfterBracketPhaseRemoval(roadmapPath, removedInt, pcm, cwd) {
+  withPlanningLock(cwd, () => {
+    let content = fs.readFileSync(roadmapPath, 'utf-8');
+    const escPcm = escapeRegex(pcm);
+    const escInt = escapeRegex(String(removedInt));
+
+    // Section remove (depth-aware). Match the removed heading at depth 2–4, then
+    // consume up to (but not including) the next same-depth bracket heading, OR
+    // any shallower `## ` milestone-section heading, OR EOF.
+    content = content.replace(
+      new RegExp(
+        `\\n?(?<h>#{2,4})\\s*\\[${escPcm}\\]\\s+0*${escInt}(?:\\.\\d+)?\\s*:[\\s\\S]*?` +
+        `(?=\\n\\k<h>(?!#)\\s*\\[|\\n##\\s+\\[|$)`,
+        'i'
+      ),
+      ''
+    );
+
+    // Renumber sibling bracket phase headings within this milestone only.
+    // Bracket tokens are zero-padded — decrement the top int and re-pad to the
+    // original width (`03` → `02`, not `2`). Subphase tail (`.NN`) is preserved.
+    content = content.replace(
+      new RegExp(`(#{2,4}\\s*\\[${escPcm}\\]\\s+)(\\d+)((?:\\.\\d+)*)(\\s*:)`, 'gi'),
+      (_match, prefix, num, decTail, suffix) => {
+        const n = parseInt(num, 10);
+        if (!Number.isInteger(n) || n <= removedInt || n === 999) return _match;
+        const renum = String(n - 1).padStart(num.length, '0');
+        return `${prefix}${renum}${decTail}${suffix}`;
+      }
+    );
+
+    platformWriteSync(roadmapPath, content);
+  });
+}
+
 function cmdPhaseRemove(cwd, targetPhase, options, raw) {
   if (!targetPhase) error('phase number required for phase remove');
 
@@ -1153,9 +1352,32 @@ function cmdPhaseRemove(cwd, targetPhase, options, raw) {
   const isDecimal = targetPhase.includes('.');
   const force = options.force || false;
 
-  // Find target directory
+  // Bracket repos: removal + renumber are scoped to the removed phase's
+  // milestone bracket prefix (`{PROJECT}.{MM}-`). Gated on the convention +
+  // project_code (bracketEmitContext). Legacy repos take the prefixless path.
+  const ctx = bracketEmitContext(cwd, loadConfig(cwd));
+  const bracketDirPrefix = ctx.bracket ? `${ctx.pcm}-` : null;
+
+  // Decimal (subphase) remove on a bracket repo is out of scope for the
+  // bracket-aware remover (phase-id-convention.md scopes remove+renumber to
+  // INTEGER phases within a milestone). The bracket branch has no decimal
+  // renumber path, so completing the delete would orphan the `### [PCM] N.M:`
+  // ROADMAP section against a deleted dir. Refuse BEFORE any deletion rather
+  // than half-complete into a corrupt state.
+  if (bracketDirPrefix && isDecimal) {
+    error(
+      `Decimal/subphase remove (${targetPhase}) is not supported on bracket repos yet — ` +
+      'integer phase remove only. Remove the subphase directory + ROADMAP heading manually, ' +
+      'or remove the parent integer phase.'
+    );
+  }
+
+  // Find target directory. On a bracket repo, SCOPE the find to the active
+  // milestone prefix BEFORE matching the token — `phaseTokenMatches` drops the
+  // prefix, so an unscoped find would match `GSD.01-02-*` AND `GSD.02-02-*`
+  // (FS-order-dependent → could delete the wrong milestone's phase).
   const targetDir = readSubdirectories(phasesDir, true)
-    .find(d => phaseTokenMatches(d, normalized)) || null;
+    .find(d => (!bracketDirPrefix || d.startsWith(bracketDirPrefix)) && phaseTokenMatches(d, normalized)) || null;
 
   // Guard against removing executed work
   if (targetDir && !force) {
@@ -1171,15 +1393,27 @@ function cmdPhaseRemove(cwd, targetPhase, options, raw) {
   // Renumber subsequent phases on disk
   let renamedDirs = [], renamedFiles = [];
   try {
-    const renamed = isDecimal
-      ? renameDecimalPhases(phasesDir, parseInt(normalized.split('.')[0], 10), parseInt(normalized.split('.')[1], 10))
-      : renameIntegerPhases(phasesDir, parseInt(normalized, 10));
+    let renamed;
+    if (bracketDirPrefix) {
+      // Bracket repo: integer remove only (decimal already refused above).
+      // Fully bracket-aware + scoped to the active milestone prefix.
+      renamed = renameBracketIntegerPhases(phasesDir, parseInt(normalized, 10), bracketDirPrefix);
+    } else {
+      renamed = isDecimal
+        ? renameDecimalPhases(phasesDir, parseInt(normalized.split('.')[0], 10), parseInt(normalized.split('.')[1], 10))
+        : renameIntegerPhases(phasesDir, parseInt(normalized, 10));
+    }
     renamedDirs = renamed.renamedDirs;
     renamedFiles = renamed.renamedFiles;
   } catch { /* intentionally empty */ }
 
   // Update ROADMAP.md
-  updateRoadmapAfterPhaseRemoval(roadmapPath, targetPhase, isDecimal, parseInt(normalized, 10), cwd);
+  if (bracketDirPrefix) {
+    // Bracket repo: milestone-scoped section-remove + heading renumber (integer).
+    updateRoadmapAfterBracketPhaseRemoval(roadmapPath, parseInt(normalized, 10), ctx.pcm, cwd);
+  } else {
+    updateRoadmapAfterPhaseRemoval(roadmapPath, targetPhase, isDecimal, parseInt(normalized, 10), cwd);
+  }
 
   // Update STATE.md phase count atomically (#P4.4)
   const statePath = path.join(planningDir(cwd), 'STATE.md');

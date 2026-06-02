@@ -6,9 +6,9 @@ This template is used by the complete-milestone workflow to create archive files
 
 ## File Template
 
-# Milestone v{{VERSION}}: {{MILESTONE_NAME}}
+# Milestone [{{PROJECT}}.{{MM}}]: {{MILESTONE_NAME}}
 
-**Status:** ✅ SHIPPED {{DATE}}
+**Status:** SHIPPED {{DATE}}
 **Phases:** {{PHASE_START}}-{{PHASE_END}}
 **Total Plans:** {{TOTAL_PLANS}}
 
@@ -22,10 +22,10 @@ This template is used by the complete-milestone workflow to create archive files
 
 [For each phase in this milestone, include:]
 
-### Phase {{PHASE_NUM}}: {{PHASE_NAME}}
+### [{{PROJECT}}.{{MM}}] {{PHASE_NUM}}: {{PHASE_NAME}}
 
 **Goal**: {{PHASE_GOAL}}
-**Depends on**: {{DEPENDS_ON}}
+**Depends on:** [{{PROJECT}}.{{MM}}] {{DEPENDS_ON}}
 **Plans**: {{PLAN_COUNT}} plans
 
 Plans:
@@ -37,17 +37,17 @@ Plans:
 **Details:**
 {{PHASE_DETAILS_FROM_ROADMAP}}
 
-**For decimal phases, include (INSERTED) marker:**
+**For a subphase (genuine decomposition `.SS` of a phase):**
 
-### Phase 2.1: Critical Security Patch (INSERTED)
+### [{{PROJECT}}.{{MM}}] 02.01: Auth Hardening
 
-**Goal**: Fix authentication bypass vulnerability
-**Depends on**: Phase 2
+**Goal**: Harden the authentication path split out of phase 02
+**Depends on:** [{{PROJECT}}.{{MM}}] 02
 **Plans**: 1 plan
 
 Plans:
 
-- [x] 02.1-01: Patch auth vulnerability
+- [x] 02.01-01: Patch auth vulnerability
 
 **Details:**
 {{PHASE_DETAILS_FROM_ROADMAP}}
@@ -56,17 +56,12 @@ Plans:
 
 ## Milestone Summary
 
-**Decimal Phases:**
-
-- Phase 2.1: Critical Security Patch (inserted after Phase 2 for urgent fix)
-- Phase 5.1: Performance Hotfix (inserted after Phase 5 for production issue)
-
 **Key Decisions:**
 {{DECISIONS_FROM_PROJECT_STATE}}
 [Example:]
 
 - Decision: Use ROADMAP.md split (Rationale: Constant context cost)
-- Decision: Decimal phase numbering (Rationale: Clear insertion semantics)
+- Decision: Subphase decomposition `.SS` (Rationale: Parallel-plannable slices)
 
 **Issues Resolved:**
 {{ISSUES_RESOLVED_DURING_MILESTONE}}
@@ -105,7 +100,7 @@ _For current project status, see .planning/ROADMAP.md_
 
 - Replace {{PLACEHOLDERS}} with actual values
 - Extract phase details from ROADMAP.md
-- Document decimal phases with (INSERTED) marker
+- Document subphases (`.SS`) as genuine decomposition of their parent phase
 - Include key decisions from PROJECT-STATE.md or SUMMARY files
 - List issues resolved vs deferred
 - Capture technical debt for future reference
@@ -119,5 +114,6 @@ _For current project status, see .planning/ROADMAP.md_
 
 - Update ROADMAP.md to collapse completed milestone in `<details>` tag
 - Update PROJECT.md to brownfield format with Current State section
-- Continue phase numbering in next milestone (never restart at 01)
+- Phase numbering restarts at `01` in the next milestone (the bracket integer
+  `[{PROJECT}.{MM}]` disambiguates phases across milestones)
   </guidelines>

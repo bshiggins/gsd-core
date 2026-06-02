@@ -1,20 +1,25 @@
 /**
- * Backwards-compatibility tests for legacy phase ID conventions.
+ * Backwards-compatibility tests for the LEGACY `Phase N` phase ID convention
+ * under the bracket era (migration-window READ tolerance).
  *
- * Covers:
- *   1. Legacy 'Phase N' ROADMAP entries still work when phase_id_convention
- *      is null (the default — no config key set).
+ * Per BRACKET-NATIVE-CJS-SCOPE.md §1: the runtime speaks one convention
+ * (bracket), but read locators keep tolerance so a not-yet-migrated LEGACY
+ * (`Phase N` / `01-slug`) repo still reads. This is migration-window
+ * robustness, NOT a second active convention.
+ *
+ * Covers (bracket-era legacy `Phase N` tolerance — the M-NN `Phase 2-01` form
+ * is NOT a tolerated read form; it is migrator-only input, so those assertions
+ * were removed when the M-NN convention was superseded):
+ *   1. Legacy 'Phase N' ROADMAP entries still read when phase_id_convention
+ *      is null (the legacy default — no config key set).
  *   2. Deprecated warning fires for free-form roadmaps (non-fatal).
- *   3. No automatic migration happens when a free-form roadmap is loaded.
- *   4. isDirInMilestone still works for old-style dirs ('02-setup') against
- *      ROADMAP entries 'Phase 2:'.
- *   5. isDirInMilestone works for new-style dirs ('GSD-02-01-setup') against
- *      ROADMAP entries 'Phase 2-01:'.
- *   6. Heading regex matches both '### Phase 2-01: Setup' and
- *      '### [GSD] Phase 2-01: Setup'.
+ *   3. No automatic migration happens when a free-form roadmap is loaded
+ *      (the migrator is the sole on-disk converter).
+ *   4. getMilestonePhaseFilter still matches old-style dirs ('02-setup')
+ *      against ROADMAP entries 'Phase 2:'.
  *
- * Tests 1-3 exercise new behavior and will FAIL until implemented.
- * Tests 4-6 exercise existing/new behavior and should pass once wired.
+ * Positive bracket read-path coverage lives in tests/bracket-roadmap-parse.test.cjs
+ * and tests/bracket-helper.test.cjs.
  */
 
 'use strict';
@@ -24,20 +29,13 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { createTempProject, cleanup, runGsdTools, captureConsole } = require('./helpers.cjs');
+const { createTempProject, cleanup, captureConsole } = require('./helpers.cjs');
 const { getMilestonePhaseFilter } = require('../get-shit-done/bin/lib/core.cjs');
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 function writeRoadmap(tmpDir, content) {
   fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), content);
-}
-
-function writeConfig(tmpDir, obj) {
-  fs.writeFileSync(
-    path.join(tmpDir, '.planning', 'config.json'),
-    JSON.stringify(obj)
-  );
 }
 
 // ─── suite ───────────────────────────────────────────────────────────────────
@@ -130,58 +128,5 @@ describe('backwards-compat: legacy Phase N roadmap entries', () => {
     assert.strictEqual(filter('02-setup'), true, '"02-setup" must match "Phase 2:"');
     assert.strictEqual(filter('2-setup'), true, '"2-setup" must also match "Phase 2:"');
     assert.strictEqual(filter('03-other'), false, 'unlisted dir must not match');
-  });
-
-  // ── test 5: new-style dirs ('GSD-02-01-setup') match 'Phase 2-01:' ───────
-
-  test('isDirInMilestone: new-style dir "GSD-02-01-setup" matches ROADMAP "Phase 2-01:"', () => {
-    writeRoadmap(tmpDir, [
-      '## Roadmap v1.0: Current',
-      '',
-      '### Phase 2-01: Setup',
-      '**Goal:** setup',
-    ].join('\n'));
-    writeConfig(tmpDir, { project_code: 'GSD' });
-
-    const filter = getMilestonePhaseFilter(tmpDir);
-    assert.strictEqual(
-      filter('GSD-02-01-setup'),
-      true,
-      '"GSD-02-01-setup" must match "Phase 2-01:"'
-    );
-    assert.strictEqual(
-      filter('02-01-setup'),
-      true,
-      '"02-01-setup" must match "Phase 2-01:" without project prefix'
-    );
-  });
-
-  // ── test 6: heading regex matches both plain and [GSD]-prefixed headings ──
-
-  test('phase heading regex matches "### Phase 2-01: Setup" and "### [GSD] Phase 2-01: Setup"', () => {
-    const plain = '### Phase 2-01: Setup';
-    const bracketed = '### [GSD] Phase 2-01: Setup';
-
-    // Both heading variants must be captured by the phasePattern used internally.
-    // We exercise this via getMilestonePhaseFilter with a roadmap containing each form.
-
-    const plainRoadmap = ['## Roadmap v1.0: Current', '', plain, '**Goal:** g'].join('\n');
-    const bracketedRoadmap = ['## Roadmap v1.0: Current', '', bracketed, '**Goal:** g'].join('\n');
-
-    writeRoadmap(tmpDir, plainRoadmap);
-    const filterPlain = getMilestonePhaseFilter(tmpDir);
-    assert.strictEqual(
-      filterPlain('02-01-setup'),
-      true,
-      'plain heading "### Phase 2-01:" must be matched'
-    );
-
-    writeRoadmap(tmpDir, bracketedRoadmap);
-    const filterBracketed = getMilestonePhaseFilter(tmpDir);
-    assert.strictEqual(
-      filterBracketed('02-01-setup'),
-      true,
-      '"### [GSD] Phase 2-01:" must also be matched by the heading regex'
-    );
   });
 });

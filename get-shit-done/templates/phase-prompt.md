@@ -3,9 +3,9 @@
 > **Note:** Planning methodology is in `agents/gsd-planner.md`.
 > This template defines the PLAN.md output format that the agent produces.
 
-Template for `.planning/phases/XX-name/{phase}-{plan}-PLAN.md` - executable phase plans optimized for parallel execution.
+Template for `.planning/phases/{PROJECT}.{MM}-{NN}[.{SS}]-name/{phase}[.{subphase}]-{plan}-PLAN.md` - executable phase plans optimized for parallel execution.
 
-**Naming:** Use `{phase}-{plan}-PLAN.md` format (e.g., `01-02-PLAN.md` for Phase 1, Plan 2)
+**Naming:** Use `{phase}[.{subphase}]-{plan}-PLAN.md` format (e.g., `01-02-PLAN.md` for phase 01 plan 02; `02.01-01-PLAN.md` for subphase 02.01 plan 01). The milestone lives in the directory prefix, NOT the plan filename.
 
 ---
 
@@ -13,7 +13,7 @@ Template for `.planning/phases/XX-name/{phase}-{plan}-PLAN.md` - executable phas
 
 ```markdown
 ---
-phase: XX-name
+phase: {PROJECT}.{MM}-{NN}[.{SS}]-name
 plan: NN
 type: execute
 wave: N                     # Execution wave (1, 2, 3...). Pre-computed at plan time.
@@ -121,7 +121,7 @@ Before declaring plan complete:
   </success_criteria>
 
 <output>
-After completion, create `.planning/phases/XX-name/{phase}-{plan}-SUMMARY.md`
+After completion, create `.planning/phases/{PROJECT}.{MM}-{NN}[.{SS}]-name/{phase}[.{subphase}]-{plan}-SUMMARY.md`
 </output>
 ```
 
@@ -131,7 +131,7 @@ After completion, create `.planning/phases/XX-name/{phase}-{plan}-SUMMARY.md`
 
 | Field | Required | Purpose |
 |-------|----------|---------|
-| `phase` | Yes | Phase identifier (e.g., `01-foundation`) |
+| `phase` | Yes | Phase identifier (e.g., `GSD.01-01-foundation` — the on-disk directory name) |
 | `plan` | Yes | Plan number within phase (e.g., `01`, `02`) |
 | `type` | Yes | Always `execute` for standard plans, `tdd` for TDD plans |
 | `wave` | Yes | Execution wave number (1, 2, 3...). Pre-computed at plan time. |
@@ -235,8 +235,8 @@ Wave 3 runs after Waves 1 and 2. Pauses at checkpoint, orchestrator presents to 
 **Bad pattern (creates false dependencies):**
 ```markdown
 <context>
-@.planning/phases/03-features/03-01-SUMMARY.md  # Just because it's earlier
-@.planning/phases/03-features/03-02-SUMMARY.md  # Reflexive chaining
+@.planning/phases/GSD.01-03-features/03-01-SUMMARY.md  # Just because it's earlier
+@.planning/phases/GSD.01-03-features/03-02-SUMMARY.md  # Reflexive chaining
 </context>
 ```
 
@@ -306,7 +306,7 @@ See `~/.claude/get-shit-done/references/tdd.md` for TDD plan structure.
 
 ```markdown
 ---
-phase: 03-features
+phase: GSD.01-03-features
 plan: 01
 type: execute
 wave: 1
@@ -357,7 +357,7 @@ Output: User model, API endpoints, and UI components.
 </success_criteria>
 
 <output>
-After completion, create `.planning/phases/03-features/03-01-SUMMARY.md`
+After completion, create `.planning/phases/GSD.01-03-features/03-01-SUMMARY.md`
 </output>
 ```
 
@@ -365,7 +365,7 @@ After completion, create `.planning/phases/03-features/03-01-SUMMARY.md`
 
 ```markdown
 ---
-phase: 03-features
+phase: GSD.01-03-features
 plan: 03
 type: execute
 wave: 2
@@ -390,8 +390,8 @@ Output: Working dashboard component.
 <context>
 @.planning/PROJECT.md
 @.planning/ROADMAP.md
-@.planning/phases/03-features/03-01-SUMMARY.md
-@.planning/phases/03-features/03-02-SUMMARY.md
+@.planning/phases/GSD.01-03-features/03-01-SUMMARY.md
+@.planning/phases/GSD.01-03-features/03-02-SUMMARY.md
 </context>
 
 <tasks>
@@ -428,7 +428,7 @@ Output: Working dashboard component.
 </success_criteria>
 
 <output>
-After completion, create `.planning/phases/03-features/03-03-SUMMARY.md`
+After completion, create `.planning/phases/GSD.01-03-features/03-03-SUMMARY.md`
 </output>
 ```
 

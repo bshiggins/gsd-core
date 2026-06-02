@@ -56,7 +56,8 @@
   "hooks": {
     "context_warnings": true
   },
-  "project_code": null,
+  "phase_id_convention": "bracket",
+  "project_code": "PROJ",
   "agent_skills": {},
   "claude_md_path": "./CLAUDE.md"
 }

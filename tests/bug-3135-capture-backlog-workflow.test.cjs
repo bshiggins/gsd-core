@@ -50,19 +50,17 @@ describe('#3135: get-shit-done/workflows/add-backlog.md', () => {
     assert.ok(src.includes('ROADMAP.md'), 'add-backlog.md must write to ROADMAP.md');
   });
 
-  test('creates a .planning/phases/ directory', () => {
+  test('creates a phase directory via the bracket-aware CLI scaffold path', () => {
+    // Bracket-native supersede: dir creation is delegated to the centralized,
+    // convention-aware `scaffold phase-dir` query (same code path as
+    // phase.add/phase.insert) rather than fabricated in bash with a hand-built
+    // ${PROJECT_CODE}-${NEXT}-${SLUG} prefix. The CLI applies the project_code
+    // prefix and generates the slug internally; sentinels (999.x) get the
+    // project-only single-hyphen prefix under both conventions.
     const src = fs.readFileSync(WORKFLOW, 'utf8');
     assert.ok(
-      src.includes('.planning/phases') || src.includes('planning/phases'),
-      'add-backlog.md must create a phase directory under .planning/phases/',
-    );
-  });
-
-  test('uses generate-slug for the directory name', () => {
-    const src = fs.readFileSync(WORKFLOW, 'utf8');
-    assert.ok(
-      src.includes('generate-slug'),
-      'add-backlog.md must use gsd-sdk query generate-slug to build the phase directory slug',
+      src.includes('scaffold phase-dir'),
+      'add-backlog.md must route phase-directory creation through the `scaffold phase-dir` CLI query',
     );
   });
 

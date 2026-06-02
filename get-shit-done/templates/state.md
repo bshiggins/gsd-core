@@ -10,6 +10,8 @@ Template for `.planning/STATE.md` — the project's living memory.
 ---
 gsd_state_version: '1.0'  # placeholder; syncStateFrontmatter overwrites on first state.* call
 status: planning
+milestone: v1.0           # active milestone (v{N}.0 form) — the {MM} source for bracket phase ids
+milestone_name: ''        # human name of the active milestone (e.g. "Foundation")
 progress:
   total_phases: 0
   completed_phases: 0
@@ -29,7 +31,7 @@ See: .planning/PROJECT.md (updated [date])
 
 ## Current Position
 
-Phase: [X] of [Y] ([Phase name])
+Phase: [GSD.MM] [NN] of [Y] ([Phase name])
 Plan: [A] of [B] in current phase
 Status: [Ready to plan / Planning / Ready to execute / In progress / Phase complete]
 Last activity: [YYYY-MM-DD] — [What happened]
@@ -143,7 +145,7 @@ Claude reads PROJECT.md directly for requirements, constraints, and decisions.
 
 ### Current Position
 Where we are right now:
-- Phase X of Y — which phase
+- Phase [GSD.MM] NN of Y — which phase (bracket display: project + milestone + phase number)
 - Plan A of B — which plan within phase
 - Status — current state
 - Last activity — what happened most recently

@@ -11,6 +11,13 @@ color: green
 #           command: "npx eslint --fix $FILE 2>/dev/null || true"
 ---
 
+<!-- BEGIN:gsd-bracket-convention -->
+**Phase-ID convention.** Bracket form `[{PROJECT}.{MM}] {phase}[.{sub}][-{plan}]`, e.g. `[GSD.02] 05.03-01`. No "Phase" word, no `vX.Y` version literal, no milestone emoji.
+- Milestone = the bracket integer; the milestone boundary is where it increments (`[GSD.01]` -> `[GSD.02]`). Dots are phase-levels; the single hyphen is the plan.
+- Headings: `### [GSD.02] 05: Name` (phase -- a phase number after the bracket) vs `## [GSD.02] Name` (milestone -- a name after the bracket). On disk: `GSD.02-05.03-slug/`.
+- Full card + grammar: references/phase-id-convention.md.
+<!-- END:gsd-bracket-convention -->
+
 <role>
 A completed phase has been submitted for goal-backward verification. Verify that the phase goal is actually achieved in the codebase — SUMMARY.md claims are not evidence.
 
@@ -584,7 +591,7 @@ Before reporting gaps, check if any identified gaps are explicitly addressed in 
 ROADMAP_DATA=$(gsd-tools query roadmap.analyze --raw)
 ```
 
-Parse the JSON to extract all phases. Identify phases with `number > current_phase_number` (later phases in the milestone). For each later phase, extract its `goal` and `success_criteria`.
+Parse the JSON to extract all phases. Identify later phases in the **current milestone** — phases sharing the same `[{PROJECT}.{MM}]` bracket prefix as the current phase whose phase number is greater than the current phase number. Phases under a different bracket (`[{PROJECT}.{MM+1}]` and beyond) belong to other milestones and are out of scope for this filter. For each later same-milestone phase, extract its `goal` and `success_criteria`.
 
 **For each potential gap identified in Step 9:**
 
@@ -630,8 +637,8 @@ If Step 9b identified deferred items, add a `deferred` section after `gaps`:
 ```yaml
 deferred:  # Items addressed in later phases — not actionable gaps
   - truth: "Observable truth not yet met"
-    addressed_in: "Phase 5"
-    evidence: "Phase 5 success criteria: 'Implement RuntimeConfigC FFI bindings'"
+    addressed_in: "[GSD.02] 05"
+    evidence: "[GSD.02] 05 success criteria: 'Implement RuntimeConfigC FFI bindings'"
 ```
 
 Deferred items are informational only — they do not require closure plans.

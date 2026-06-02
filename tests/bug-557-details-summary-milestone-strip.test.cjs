@@ -211,9 +211,12 @@ describe('bug #557 — <details>/<summary> active milestone strip', () => {
     );
   });
 
-  // ── Health check W021: milestone_complete vs unstarted phases ─────────────
+  // ── Health check W022: milestone_complete vs unstarted phases ─────────────
+  // R4: renumbered from W021 → W022 in the bracket-native supersede (WAVE 2b),
+  // so this "STATE-complete-but-phases-unstarted" check no longer collides with
+  // the bracket phase-id-convention warning (also W021 historically).
 
-  test('validate health emits W021 when STATE says milestone complete but ROADMAP has unstarted phases', () => {
+  test('validate health emits W022 when STATE says milestone complete but ROADMAP has unstarted phases', () => {
     const planning = path.join(tmpDir, '.planning');
     // ROADMAP still has active phases in it
     fs.writeFileSync(path.join(planning, 'ROADMAP.md'), ROADMAP_DETAILS_SUMMARY, 'utf-8');
@@ -238,10 +241,10 @@ Phase: Milestone v1.3 complete
 
     const output = JSON.parse(result.output);
     const warnings = output.warnings || [];
-    const w021 = warnings.find(w => w.code === 'W021');
+    const w022 = warnings.find(w => w.code === 'W022');
     assert.ok(
-      w021 !== undefined,
-      `Expected W021 warning (milestone-status vs. roadmap-progress incoherence). ` +
+      w022 !== undefined,
+      `Expected W022 warning (milestone-status vs. roadmap-progress incoherence). ` +
       `Got warnings: ${JSON.stringify(warnings.map(w => w.code))}`
     );
   });

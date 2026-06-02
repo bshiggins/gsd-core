@@ -205,6 +205,11 @@ function buildNewProjectConfig(userChoices) {
       context_warnings: true,
     },
     project_code: null,
+    // New projects default to the bracket phase-ID convention (LOCKED DECISION
+    // Q1, BRACKET-NATIVE-CJS-SCOPE-ADDENDA). `null` is preserved only for
+    // un-migrated EXISTING configs; a fresh init is a new project. Overridable
+    // via userChoices / ~/.gsd/defaults.json like any other field.
+    phase_id_convention: 'bracket',
     phase_naming: 'sequential',
     agent_skills: {},
     claude_md_path: './CLAUDE.md',
@@ -251,8 +256,72 @@ function buildNewProjectConfig(userChoices) {
     },
   };
 
+  // ADDENDUM-4: bracket structurally REQUIRES a non-null project_code (the
+  // milestone rides in the `[PROJECT.MM]` bracket; a code-less emit resolves
+  // found:false and the phase.add bracket gate refuses). Under bracket, if the
+  // user did not supply a project_code, DERIVE a deterministic fallback from the
+  // project name so init never produces a bracket project with project_code:null
+  // and never hard-blocks. The user can override later by editing config.json.
+  if (config.phase_id_convention === 'bracket' && !config.project_code) {
+    config.project_code = deriveProjectCode(choices.project_name);
+  }
+
+  // `project_name` is a derivation INPUT only, never a persisted config key
+  // (it is not in VALID_CONFIG_KEYS — bug-2530). Strip it so it doesn't leak
+  // into config.json via the `...choices` spread above.
+  delete config.project_name;
+
   validateShipPrBodySections(config.ship.pr_body_sections);
   return config;
+}
+
+/**
+ * Derive a deterministic project_code from a project name, for bracket projects
+ * where the user did not supply one explicitly.
+ *
+ * Derivation rule (deterministic; the result MUST be a parseable bracket
+ * project-code, i.e. match the core bracket regex `[A-Z][A-Z0-9]*` —
+ * LETTER-FIRST, then A-Z0-9. A digit-leading code like `2P` would fail the
+ * `### [2P.01] Name` heading parse → found:false → the exact code-less-emit
+ * breakage ADDENDUM-4 exists to prevent, so leading digits are stripped):
+ *   1. Split the name on any non-alphanumeric boundary into words.
+ *   2. If 2+ words → take the first letter of each word (initials), uppercased.
+ *   3. If exactly 1 word → take its first 4 characters, uppercased.
+ *   4. Strip to [A-Z0-9], then strip any LEADING digits so the first char is a
+ *      letter (parser requirement), and cap at 5 characters.
+ *   5. If nothing letter-led remains (empty / symbols-only / digits-only /
+ *      missing name) → 'PROJ' (matches the templates/config.json placeholder).
+ *
+ * Examples: "My Care UC" → "MCU"; "carekit" → "CARE"; "GSD Core" → "GC";
+ *           "2024 plan" → "P" (initials "2P" → leading digit stripped → "P");
+ *           "3D" → "PROJ" (digits-only after the lone-letter slice? no — "3D"
+ *           is one word → first-4 "3D" → strip leading digit → "D");
+ *           "" / undefined / "123" → "PROJ".
+ */
+function deriveProjectCode(projectName) {
+  const FALLBACK = 'PROJ';
+  if (!projectName || typeof projectName !== 'string') return FALLBACK;
+
+  const words = projectName
+    .split(/[^A-Za-z0-9]+/)
+    .filter((w) => w.length > 0);
+  if (words.length === 0) return FALLBACK;
+
+  let code;
+  if (words.length >= 2) {
+    code = words.map((w) => w[0]).join('');
+  } else {
+    code = words[0].slice(0, 4);
+  }
+
+  // Uppercase, restrict to A-Z0-9, then enforce letter-first (bracket parser
+  // requires `[A-Z][A-Z0-9]*`), then cap length.
+  code = code
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .replace(/^[0-9]+/, '')
+    .slice(0, 5);
+  return code.length > 0 ? code : FALLBACK;
 }
 
 /**
@@ -718,6 +787,8 @@ async function cmdMigrateConfig(cwd, raw) {
 
 module.exports = {
   VALID_CONFIG_KEYS,
+  buildNewProjectConfig,
+  deriveProjectCode,
   cmdConfigEnsureSection,
   cmdConfigSet,
   cmdConfigGet,

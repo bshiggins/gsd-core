@@ -1,3 +1,10 @@
+<!-- BEGIN:gsd-bracket-convention -->
+**Phase-ID convention.** Bracket form `[{PROJECT}.{MM}] {phase}[.{sub}][-{plan}]`, e.g. `[GSD.02] 05.03-01`. No "Phase" word, no `vX.Y` version literal, no milestone emoji.
+- Milestone = the bracket integer; the milestone boundary is where it increments (`[GSD.01]` -> `[GSD.02]`). Dots are phase-levels; the single hyphen is the plan.
+- Headings: `### [GSD.02] 05: Name` (phase -- a phase number after the bracket) vs `## [GSD.02] Name` (milestone -- a name after the bracket). On disk: `GSD.02-05.03-slug/`.
+- Full card + grammar: references/phase-id-convention.md.
+<!-- END:gsd-bracket-convention -->
+
 <purpose>
 Add a new integer phase to the end of the current milestone in the roadmap. Automatically calculates next phase number, creates phase directory, and updates roadmap structure.
 </purpose>
@@ -53,8 +60,8 @@ The CLI handles:
 - Finding the highest existing integer phase number
 - Calculating next phase number (max + 1)
 - Generating slug from description
-- Creating the phase directory (`.planning/phases/{NN}-{slug}/`)
-- Inserting the phase entry into ROADMAP.md with Goal, Depends on, and Plans sections
+- Creating the phase directory (`.planning/phases/{PROJECT}.{MM}-{NN}-{slug}/`)
+- Inserting the phase entry into ROADMAP.md as a bracket heading (`### [{PROJECT}.{MM}] {NN}: Name`) with Goal, Depends on, and Plans sections
 
 Extract from result: `phase_number`, `padded`, `name`, `slug`, `directory`.
 </step>
@@ -65,7 +72,7 @@ Update STATE.md to reflect the new phase:
 1. Read `.planning/STATE.md`
 2. Under "## Accumulated Context" → "### Roadmap Evolution" add entry:
    ```
-   - Phase {N} added: {description}
+   - [{PROJECT}.{MM}] {N} added: {description}
    ```
 
 If "Roadmap Evolution" section doesn't exist, create it.
@@ -75,9 +82,9 @@ If "Roadmap Evolution" section doesn't exist, create it.
 Present completion summary:
 
 ```
-Phase {N} added to current milestone:
+[{PROJECT}.{MM}] {N} added to current milestone:
 - Description: {description}
-- Directory: .planning/phases/{phase-num}-{slug}/
+- Directory: .planning/phases/{PROJECT}.{MM}-{phase-num}-{slug}/
 - Status: Not planned yet
 
 Roadmap updated: .planning/ROADMAP.md
@@ -86,7 +93,7 @@ Roadmap updated: .planning/ROADMAP.md
 
 ## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
-**Phase {N}: {description}**
+**[${PROJECT_CODE}.${MM}] {N}: {description}**
 
 `/clear` then:
 

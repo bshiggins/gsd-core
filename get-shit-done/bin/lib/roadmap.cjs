@@ -61,17 +61,23 @@ function countPhasePlansAndSummaries(phaseDir) {
  * checklist-only match), or null if the phase is not present at all.
  */
 function searchPhaseInContent(content, escapedPhase, phaseNum) {
-  // Match "## Phase X:", "### Phase X:", or "#### Phase X:" with optional name
+  // Bracket model: a phase heading is `### [GSD.02] 05: Name` (no "Phase" word).
+  // The `(?:\[…\]\s*|Phase\s+)` alternation matches the bracket form AND keeps
+  // legacy `### Phase N:` read-tolerance (migration window). Mirrors the core.cjs
+  // idiom (getRoadmapPhaseInternal). The escapedPhase fragment is the all-dot
+  // padding-tolerant token from phaseMarkdownRegexSource.
   const phasePattern = new RegExp(
-    `#{2,4}\\s*(?:\\[[^\\]]+\\]\\s*)?Phase\\s+${escapedPhase}:\\s*([^\\n]+)`,
+    `#{2,4}\\s*(?:\\[[^\\]]+\\]\\s*|Phase\\s+)${escapedPhase}:\\s*([^\\n]+)`,
     'i'
   );
   const headerMatch = content.match(phasePattern);
 
   if (!headerMatch) {
-    // Fallback: check if phase exists in summary list but missing detail section
+    // Fallback: check if phase exists in summary list but missing detail section.
+    // Bracket bullet form is `**[GSD.02] 05: Name**` (no "Phase" word); the
+    // alternation keeps legacy `**Phase N: Name**` read-tolerance.
     const checklistPattern = new RegExp(
-      `-\\s*\\[[ x]\\]\\s*\\*\\*Phase\\s+${escapedPhase}:\\s*([^*]+)\\*\\*`,
+      `-\\s*\\[[ x]\\]\\s*\\*\\*(?:\\[[^\\]]+\\]\\s*|Phase\\s+)${escapedPhase}:\\s*([^*]+)\\*\\*`,
       'i'
     );
     const checklistMatch = content.match(checklistPattern);
@@ -93,9 +99,11 @@ function searchPhaseInContent(content, escapedPhase, phaseNum) {
   const headerIndex = headerMatch.index;
 
   // Find the end of this section (next ## or ### phase header, or end of file).
-  // Also matches bracket-prefixed headings like ### [GSD] Phase 2-01:.
+  // Boundary: next phase heading — bracket form `### [GSD.02] 05:` (digit after
+  // bracket) OR legacy `### Phase N:`. Mirrors core.cjs:1510. All-dot only — the
+  // hyphen sub-token is gone (the hyphen is only the plan suffix on filenames).
   const restOfContent = content.slice(headerIndex);
-  const nextHeaderMatch = restOfContent.match(/\n#{2,4}\s+(?:\[[^\]]+\]\s*)?Phase\s+[\w][\w.-]*/i);
+  const nextHeaderMatch = restOfContent.match(/\n#{2,4}\s+(?:\[[^\]]+\]\s*\d|Phase\s+\d)/i);
   const sectionEnd = nextHeaderMatch
     ? headerIndex + nextHeaderMatch.index
     : content.length;
@@ -203,8 +211,14 @@ function cmdRoadmapAnalyze(cwd, raw) {
   const content = extractCurrentMilestone(rawContent, cwd);
   const phasesDir = planningPaths(cwd).phases;
 
-  // Extract all phase headings: ## Phase N: Name or ### Phase N: Name
-  const phasePattern = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+(\d+[A-Z]?(?:[.-]\d+)*)\s*:\s*([^\n]+)/gi;
+  // Extract all phase headings: bracket `### [GSD.02] 05: Name` (no "Phase"
+  // word) OR legacy `### Phase N: Name`. The trailing colon is the ADDENDUM-3
+  // discriminator — a milestone section heading `## [GSD.02] Foundation` has no
+  // `NN:` after the bracket and so is NOT captured as a phase (even a
+  // digit-leading milestone name like `2024 Plan` lacks the colon). All-dot
+  // capture only: the `-` sub-token is dropped (hyphen = plan suffix on
+  // filenames, never inside a heading token).
+  const phasePattern = /#{2,4}\s*(?:\[[^\]]+\]\s*|Phase\s+)(\d+[A-Z]?(?:\.\d+)*)\s*:\s*([^\n]+)/gi;
   const phases = [];
   let match;
 
@@ -224,9 +238,10 @@ function cmdRoadmapAnalyze(cwd, raw) {
     // Extract goal from the section
     const sectionStart = match.index;
     const restOfContent = content.slice(sectionStart);
-    // #3691: `\d` → `\d[\d.]*` so decimal phase headings (e.g. `### Phase 02.3:`) are
-    // recognised as section boundaries.
-    const nextHeader = restOfContent.match(/\n#{2,4}\s+(?:\[[^\]]+\]\s*)?Phase\s+\d[\d.-]*/i);
+    // Boundary: next phase heading — bracket form `### [GSD.02] 05:` (digit
+    // after bracket) OR legacy `### Phase N:`. All-dot only (#3691 decimal
+    // headings still bound; the `-` sub-token is dropped). Mirrors core.cjs:1510.
+    const nextHeader = restOfContent.match(/\n#{2,4}\s+(?:\[[^\]]+\]\s*\d|Phase\s+\d)/i);
     const sectionEnd = nextHeader ? sectionStart + nextHeader.index : content.length;
     const section = content.slice(sectionStart, sectionEnd);
 
@@ -270,7 +285,7 @@ function cmdRoadmapAnalyze(cwd, raw) {
     // #3537: padding-tolerant fragment — the heading discovered above may use
     // a different padding than the summary-bullet checkbox below it (mixed
     // padding inside one ROADMAP is legal and seen in real projects).
-    const checkboxPattern = new RegExp(`-\\s*\\[(x| )\\]\\s*.*Phase\\s+${phaseMarkdownRegexSource(phaseNum)}[:\\s]`, 'i');
+    const checkboxPattern = new RegExp(`-\\s*\\[(x| )\\]\\s*.*(?:\\[[^\\]]+\\]\\s*|Phase\\s+)${phaseMarkdownRegexSource(phaseNum)}[:\\s]`, 'i');
     const checkboxMatch = content.match(checkboxPattern);
     const roadmapComplete = checkboxMatch ? checkboxMatch[1] === 'x' : false;
 
@@ -296,13 +311,45 @@ function cmdRoadmapAnalyze(cwd, raw) {
     });
   }
 
-  // Extract milestone info
+  // Extract milestone info.
+  //
+  // Bracket model (ADDENDUM-3): a milestone section heading is
+  // `## [GSD.02] Foundation` — the milestone integer rides in the bracket, and
+  // there is no `vX.Y` literal or emoji. The version is derived from the bracket
+  // integer (`02` → `v2.0`). A phase heading `### [GSD.02] 05: Name` has a
+  // `NN:` after the bracket and must NOT be captured here; the discriminator is
+  // "bracket followed by a NAME (no leading `NN:` digit-then-colon)".
+  //
+  // Legacy fallback: a `## ... vX.Y ...` heading (un-migrated repos) is still
+  // captured by the version-literal branch so legacy roadmaps keep populating
+  // milestones[] (dropping this is a read regression, not an expected supersede).
   const milestones = [];
+  const seenMilestoneHeadings = new Set();
+
+  // Bracket milestone headings: `## [GSD.02] Foundation`. Negative lookahead
+  // `(?!\d+[A-Z]?(?:\.\d+)*\s*:)` after the bracket rejects phase headings
+  // (`### [GSD.02] 05: Name`) — a phase has a phase-number-then-colon, a
+  // milestone name does not (even a digit-leading name like `2024 Plan`).
+  const bracketMilestonePattern = /^#{2,4}\s*\[[A-Z][A-Z0-9]*\.(\d+)\]\s+(?!\d+[A-Z]?(?:\.\d+)*\s*:)([^\n]+)/gim;
+  let bMatch;
+  while ((bMatch = bracketMilestonePattern.exec(content)) !== null) {
+    const heading = bMatch[0].replace(/^#{2,4}\s*/, '').trim();
+    const milestoneInt = parseInt(bMatch[1], 10);
+    milestones.push({
+      heading,
+      version: `v${milestoneInt}.0`,
+    });
+    seenMilestoneHeadings.add(heading);
+  }
+
+  // Legacy version-literal milestone headings: `## ... vX.Y ...`.
   const milestonePattern = /##\s*(.*v(\d+(?:\.\d+)+)[^(\n]*)/gi;
   let mMatch;
   while ((mMatch = milestonePattern.exec(content)) !== null) {
+    const heading = mMatch[1].trim();
+    if (seenMilestoneHeadings.has(heading)) continue;
     milestones.push({
-      heading: mMatch[1].trim(),
+      heading,
       version: 'v' + mMatch[2],
     });
   }
@@ -317,7 +364,9 @@ function cmdRoadmapAnalyze(cwd, raw) {
   const completedPhases = phases.filter(p => p.disk_status === 'complete').length;
 
   // Detect phases in summary list without detail sections (malformed ROADMAP)
-  const checklistPattern = /-\s*\[[ x]\]\s*\*\*Phase\s+(\d+[A-Z]?(?:\.\d+)*)/gi;
+  // Bracket bullet form `**[GSD.02] 05: ...` (no "Phase" word) OR legacy
+  // `**Phase N: ...`. All-dot capture only (the `-` sub-token is dropped).
+  const checklistPattern = /-\s*\[[ x]\]\s*\*\*(?:\[[^\]]+\]\s*|Phase\s+)(\d+[A-Z]?(?:\.\d+)*)/gi;
   const checklistPhases = new Set();
   let checklistMatch;
   while ((checklistMatch = checklistPattern.exec(content)) !== null) {
@@ -398,9 +447,10 @@ function cmdRoadmapUpdatePlanProgress(cwd, phaseNum, raw) {
       return '|' + cells.join('|') + '|';
     });
 
-    // Update plan count in phase detail section
+    // Update plan count in phase detail section. Bracket heading
+    // `### [GSD.02] 05:` (no "Phase" word) OR legacy `### Phase N:`.
     const planCountPattern = new RegExp(
-      `(#{2,4}\\s*Phase\\s+${phasePattern}(?=[:\\s])[\\s\\S]*?\\*\\*Plans:\\*\\*\\s*)[^\\n]+`,
+      `(#{2,4}\\s*(?:\\[[^\\]]+\\]\\s*|Phase\\s+)${phasePattern}(?=[:\\s])[\\s\\S]*?\\*\\*Plans:\\*\\*\\s*)[^\\n]+`,
       'i'
     );
     const planCountText = isComplete
@@ -411,7 +461,7 @@ function cmdRoadmapUpdatePlanProgress(cwd, phaseNum, raw) {
     // If complete: check checkbox
     if (isComplete) {
       const checkboxPattern = new RegExp(
-        `(-\\s*\\[)[ ](\\]\\s*.*Phase\\s+${phasePattern}[:\\s][^\\n]*)`,
+        `(-\\s*\\[)[ ](\\]\\s*.*(?:\\[[^\\]]+\\]\\s*|Phase\\s+)${phasePattern}[:\\s][^\\n]*)`,
         'i'
       );
       roadmapContent = replaceInCurrentMilestone(roadmapContent, checkboxPattern, `$1x$2 (completed ${today})`);
@@ -536,13 +586,16 @@ function cmdRoadmapAnnotateDependencies(cwd, phaseNum, raw) {
     // #3537: padding-tolerant fragment so the caller's resolved padded id
     // matches un-padded ROADMAP headings.
     const phaseEscaped = phaseMarkdownRegexSource(phaseNum);
-    const phaseHeaderPattern = new RegExp(`(#{2,4}\\s*Phase\\s+${phaseEscaped}:[^\\n]*)`, 'i');
+    // Bracket heading `### [GSD.02] 05:` (no "Phase" word) OR legacy `### Phase N:`.
+    const phaseHeaderPattern = new RegExp(`(#{2,4}\\s*(?:\\[[^\\]]+\\]\\s*|Phase\\s+)${phaseEscaped}:[^\\n]*)`, 'i');
     const phaseMatch = content.match(phaseHeaderPattern);
     if (!phaseMatch) return;
 
     const phaseStart = phaseMatch.index;
     const restAfterHeader = content.slice(phaseStart);
-    const nextPhaseOffset = restAfterHeader.slice(1).search(/\n#{2,4}\s+Phase\s+\d/i);
+    // Boundary: next phase heading — bracket `### [GSD.02] 05:` (digit after
+    // bracket) OR legacy `### Phase N:`.
+    const nextPhaseOffset = restAfterHeader.slice(1).search(/\n#{2,4}\s+(?:\[[^\]]+\]\s*\d|Phase\s+\d)/i);
     const phaseEnd = nextPhaseOffset >= 0 ? phaseStart + 1 + nextPhaseOffset : content.length;
     const phaseSection = content.slice(phaseStart, phaseEnd);
 

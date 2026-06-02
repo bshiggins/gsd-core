@@ -4,7 +4,23 @@
 const fs = require('fs');
 const path = require('path');
 const { execGit, platformWriteSync, platformReadSync, platformEnsureDir } = require('./shell-command-projection.cjs');
-const { loadConfig, isGitIgnored, normalizePhaseName, comparePhaseNum, getArchivedPhaseDirs, generateSlugInternal, getMilestoneInfo, getMilestonePhaseFilter, resolveModelInternal, resolveEffortInternal, resolveFastModeInternal, resolveEffortForTier, stripShippedMilestones, extractCurrentMilestone, toPosixPath, output, error, findPhaseInternal, extractOneLinerFromBody, getRoadmapPhaseInternal, extractPhaseToken } = require('./core.cjs');
+const { loadConfig, isGitIgnored, normalizePhaseName, comparePhaseNum, getArchivedPhaseDirs, generateSlugInternal, getMilestoneInfo, getMilestonePhaseFilter, resolveModelInternal, resolveEffortInternal, resolveFastModeInternal, resolveEffortForTier, stripShippedMilestones, extractCurrentMilestone, toPosixPath, output, error, findPhaseInternal, extractOneLinerFromBody, getRoadmapPhaseInternal, extractPhaseToken, getPhaseDisplayLabel } = require('./core.cjs');
+
+/**
+ * Build the `projectCodeWithMilestone` join (e.g. `'GSD.02'`) used by
+ * getPhaseDisplayLabel, from config.project_code + the milestone version
+ * (`v2.0` → `02`). Returns `''` when project_code is absent, so
+ * getPhaseDisplayLabel degrades to the bare token. Additive: display_id is a
+ * new field nothing reads back, so this is safe to compute unconditionally —
+ * legacy repos (no project_code) simply get a bare display_id == number.
+ */
+function buildProjectCodeWithMilestone(config, milestoneVersion) {
+  const projectCode = (config && config.project_code) || '';
+  if (!projectCode) return '';
+  const mMatch = String(milestoneVersion == null ? '' : milestoneVersion).match(/(\d+)/);
+  const mm = mMatch ? mMatch[1].padStart(2, '0') : '00';
+  return `${projectCode}.${mm}`;
+}
 const { renderEffortForRuntime, RUNTIMES_WITH_FAST_MODE } = require('./model-catalog.cjs');
 const { planningDir, planningPaths } = require('./planning-workspace.cjs');
 const { extractFrontmatter } = require('./frontmatter.cjs');
@@ -804,6 +820,8 @@ function cmdProgressRender(cwd, format, raw) {
   const phasesDir = planningPaths(cwd).phases;
   const roadmapPath = planningPaths(cwd).roadmap;
   const milestone = getMilestoneInfo(cwd);
+  // projectCodeWithMilestone (e.g. 'GSD.02') for the bracket display_id field.
+  const pcm = buildProjectCodeWithMilestone(loadConfig(cwd), milestone.version);
 
   const phases = [];
   let totalPlans = 0;
@@ -814,9 +832,18 @@ function cmdProgressRender(cwd, format, raw) {
     const dirs = entries.filter(e => e.isDirectory()).map(e => e.name).sort((a, b) => comparePhaseNum(a, b));
 
     for (const dir of dirs) {
-      const dm = dir.match(/^(\d+(?:\.\d+)*)-?(.*)/);
-      const phaseNum = dm ? dm[1] : dir;
-      const phaseName = dm && dm[2] ? dm[2].replace(/-/g, ' ') : '';
+      // extractPhaseToken handles bracket (`GSD.02-05-slug`), code-prefixed, and
+      // plain dir forms — the naive `^(\d+…)-` parse mangled bracket dirs (the
+      // number became the whole dir). The token may sit AFTER a `CODE.MM-` prefix,
+      // so locate `<token>-` in the dir and take the slug that follows it.
+      const phaseToken = extractPhaseToken(dir);
+      const phaseNum = phaseToken || dir;
+      let phaseName = '';
+      if (phaseToken) {
+        const tokenIdx = dir.indexOf(`${phaseToken}-`);
+        const afterToken = tokenIdx >= 0 ? dir.slice(tokenIdx + phaseToken.length + 1) : '';
+        phaseName = afterToken ? afterToken.replace(/-/g, ' ') : '';
+      }
       const phaseFiles = fs.readdirSync(path.join(phasesDir, dir));
       const plans = phaseFiles.filter(f => f.endsWith('-PLAN.md') || f === 'PLAN.md').length;
       const summaries = phaseFiles.filter(f => f.endsWith('-SUMMARY.md') || f === 'SUMMARY.md').length;
@@ -826,7 +853,9 @@ function cmdProgressRender(cwd, format, raw) {
 
       const status = determinePhaseStatus(plans, summaries, path.join(phasesDir, dir), 'Pending');
 
-      phases.push({ number: phaseNum, name: phaseName, plans, summaries, status });
+      // `number` stays BARE (on-disk join key). `display_id` is the human-facing
+      // bracket label (e.g. '[GSD.02] 05'); bare token when no project_code.
+      phases.push({ number: phaseNum, display_id: getPhaseDisplayLabel(phaseNum, pcm), name: phaseName, plans, summaries, status });
     }
   } catch { /* intentionally empty */ }
 
@@ -1082,6 +1111,8 @@ function cmdStats(cwd, format, raw) {
   const statePath = planningPaths(cwd).state;
   const milestone = getMilestoneInfo(cwd);
   const isDirInMilestone = getMilestonePhaseFilter(cwd);
+  // projectCodeWithMilestone (e.g. 'GSD.02') for the bracket display_id field.
+  const pcm = buildProjectCodeWithMilestone(loadConfig(cwd), milestone.version);
 
   // Phase & plan stats (reuse progress pattern)
   const phasesByNumber = new Map();
@@ -1092,15 +1123,26 @@ function cmdStats(cwd, format, raw) {
     const roadmapRaw = platformReadSync(roadmapPath);
     if (roadmapRaw === null) throw new Error('roadmap missing');
     const roadmapContent = extractCurrentMilestone(roadmapRaw, cwd);
-    // Matches both plain numeric (Phase 1:) and milestone-prefixed (Phase 2-01:) headings.
-    // Also tolerates optional [bracket-token] scope prefix on phase headings.
-    const headingPattern = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*(?:-[\w.-]+)*)\s*:\s*([^\n]+)/gi;
+    // Matches three phase-heading forms, all sharing a trailing `<token>: name`:
+    //   - bracket   `### [GSD.02] 05: Name`   (no "Phase" word — the bracket IS
+    //     the identity token; the number group is digit-anchored so the bracket
+    //     MILESTONE heading `## [GSD.02] Foundation` does NOT match)
+    //   - plain     `### Phase 1: Name` / `### Phase 2-01: Name` (M-NN, legacy)
+    //   - custom    `### Phase AUTH-1: Name` (word-leading token; needs "Phase")
+    // Branch 1 = digit-anchored token (optional "Phase"); branch 2 = the legacy
+    // "Phase <word-token>" path preserved verbatim for custom phase IDs.
+    const headingPattern = /#{2,4}\s*(?:\[[^\]]+\]\s*)?(?:(?:Phase\s+)?(\d+[A-Z]?(?:[.-]\d+)*)|Phase\s+([\w][\w.-]*(?:-[\w.-]+)*))\s*:\s*([^\n]+)/gi;
     let match;
     while ((match = headingPattern.exec(roadmapContent)) !== null) {
-      const key = normalizePhaseName(match[1]);
+      // Group 1 = digit-anchored token (bracket/plain/M-NN); group 2 = custom
+      // word-token (legacy "Phase <id>"); group 3 = the phase name.
+      const token = match[1] || match[2];
+      const name = match[3];
+      const key = normalizePhaseName(token);
       phasesByNumber.set(key, {
         number: key,
-        name: match[2].replace(/\(INSERTED\)/i, '').trim(),
+        display_id: getPhaseDisplayLabel(key, pcm),
+        name: name.replace(/\(INSERTED\)/i, '').trim(),
         plans: 0,
         summaries: 0,
         status: 'Not Started',
@@ -1136,6 +1178,7 @@ function cmdStats(cwd, format, raw) {
       const existing = phasesByNumber.get(normalizedNum);
       phasesByNumber.set(normalizedNum, {
         number: normalizedNum,
+        display_id: getPhaseDisplayLabel(normalizedNum, pcm),
         name: existing?.name || phaseName,
         plans: (existing?.plans || 0) + plans,
         summaries: (existing?.summaries || 0) + summaries,

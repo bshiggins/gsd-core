@@ -1,11 +1,16 @@
-# Decimal Phase Calculation
+# Subphase Calculation
 
-Calculate the next decimal phase number for urgent insertions.
+Calculate the next **subphase** number for a phase. A subphase (`.NN`) is genuine
+decomposition of a phase — breaking phase `06` into `06.1`, `06.2` — not an "urgent
+insertion" hack. See `phase-id-convention.md` for the bracket grammar.
+
+> The `gsd-tools query phase.next-decimal` command name is a code surface and is unchanged;
+> only the conceptual framing (subphase, not insertion) is updated here.
 
 ## Using gsd-tools
 
 ```bash
-# Get next decimal phase after phase 6
+# Get next subphase after phase 6
 gsd-tools query phase.next-decimal 6
 ```
 
@@ -32,20 +37,20 @@ With existing decimals:
 ## Extract Values
 
 ```bash
-DECIMAL_PHASE=$(gsd-tools query phase.next-decimal "${AFTER_PHASE}" --pick next)
+SUBPHASE=$(gsd-tools query phase.next-decimal "${AFTER_PHASE}" --pick next)
 BASE_PHASE=$(gsd-tools query phase.next-decimal "${AFTER_PHASE}" --pick base_phase)
 ```
 
 Or with --raw flag:
 ```bash
-DECIMAL_PHASE=$(gsd-tools query phase.next-decimal "${AFTER_PHASE}" --raw)
+SUBPHASE=$(gsd-tools query phase.next-decimal "${AFTER_PHASE}" --raw)
 # Returns just: 06.1
 ```
 
 ## Examples
 
-| Existing Phases | Next Phase |
-|-----------------|------------|
+| Existing Phases | Next Subphase |
+|-----------------|---------------|
 | 06 only | 06.1 |
 | 06, 06.1 | 06.2 |
 | 06, 06.1, 06.2 | 06.3 |
@@ -53,12 +58,14 @@ DECIMAL_PHASE=$(gsd-tools query phase.next-decimal "${AFTER_PHASE}" --raw)
 
 ## Directory Naming
 
-Decimal phase directories use the full decimal number:
+Subphase directories use the bracket on-disk encoding: project + milestone prefix, then the
+full phase token (`{NN}.{SS}`), then the slug. Build the dir through `gsd-tools` so the
+`{PROJECT}.{MM}-` prefix is sourced from `STATE.md milestone:`; do not hand-assemble it:
 
 ```bash
 SLUG=$(gsd-tools query generate-slug "$DESCRIPTION" --raw)
-PHASE_DIR=".planning/phases/${DECIMAL_PHASE}-${SLUG}"
-mkdir -p "$PHASE_DIR"
+# Resolved form: .planning/phases/{PROJECT}.{MM}-{NN}.{SS}-{slug}/
 ```
 
-Example: `.planning/phases/06.1-fix-critical-auth-bug/`
+Example: `.planning/phases/GSD.02-06.1-fix-critical-auth-bug/` (project `GSD`, milestone
+`02`, phase `06`, subphase `1`).

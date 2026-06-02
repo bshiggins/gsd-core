@@ -3,11 +3,11 @@
 Add this entry to `.planning/MILESTONES.md` when completing a milestone:
 
 ```markdown
-## v[X.Y] [Name] (Shipped: YYYY-MM-DD)
+## [{PROJECT}.{MM}] [Name] (Shipped: YYYY-MM-DD)
 
 **Delivered:** [One sentence describing what shipped]
 
-**Phases completed:** [X-Y] ([Z] plans total)
+**Phases completed:** [01-Y] ([Z] plans total)
 
 **Key accomplishments:**
 - [Major achievement 1]
@@ -65,11 +65,11 @@ If MILESTONES.md doesn't exist, create it with header:
 ```markdown
 # Project Milestones: WeatherBar
 
-## v1.1 Security & Polish (Shipped: 2025-12-10)
+## [WB.02] Security & Polish (Shipped: 2025-12-10)
 
 **Delivered:** Security hardening with Keychain integration and comprehensive error handling
 
-**Phases completed:** 5-6 (3 plans total)
+**Phases completed:** 01-02 (3 plans total)
 
 **Key accomplishments:**
 - Migrated API key storage from plaintext to macOS Keychain
@@ -83,17 +83,17 @@ If MILESTONES.md doesn't exist, create it with header:
 - 2 phases, 3 plans, 12 tasks
 - 8 days from v1.0 to v1.1
 
-**Git range:** `feat(05-01)` → `feat(06-02)`
+**Git range:** `feat(01-01)` → `feat(02-02)`
 
-**What's next:** v2.0 SwiftUI redesign with widget support
+**What's next:** [WB.03] SwiftUI redesign with widget support
 
 ---
 
-## v1.0 MVP (Shipped: 2025-11-25)
+## [WB.01] MVP (Shipped: 2025-11-25)
 
 **Delivered:** Menu bar weather app with current conditions and 3-day forecast
 
-**Phases completed:** 1-4 (7 plans total)
+**Phases completed:** 01-04 (7 plans total)
 
 **Key accomplishments:**
 - Menu bar app with popover UI (AppKit)

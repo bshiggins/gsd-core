@@ -12,7 +12,7 @@ const {
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { loadConfig, normalizePhaseName, phaseTokenMatches, escapeRegex, findPhaseInternal, getMilestoneInfo, stripShippedMilestones, extractCurrentMilestone, output, error, checkAgentsInstalled, CONFIG_DEFAULTS, inspectWorktreeHealth } = require('./core.cjs');
+const { loadConfig, normalizePhaseName, phaseTokenMatches, escapeRegex, findPhaseInternal, getMilestoneInfo, stripShippedMilestones, extractCurrentMilestone, output, error, checkAgentsInstalled, CONFIG_DEFAULTS, inspectWorktreeHealth, isSentinelPhaseId } = require('./core.cjs');
 const { execGit, platformReadSync: safeReadFile, platformWriteSync } = require('./shell-command-projection.cjs');
 const { PACKAGE_NAME } = require('./package-identity.cjs');
 const { planningDir } = require('./planning-workspace.cjs');
@@ -507,32 +507,36 @@ function collectDiskPhases(planBase) {
   return diskPhases;
 }
 
-// W021: phase ID integer prefix doesn't match its enclosing milestone section
-// Only fires when phase_id_convention is 'milestone-prefixed' (opt-in).
-// Returns array of mismatch objects: { phaseId, foundInMilestone, expectedMilestone }
-function checkMilestonePrefixMismatches(roadmapContent, { getMilestoneFromPhaseId }) {
-  const mismatches = [];
-  // Find all milestone sections (## vN.N or ## [code] vN.N)
-  const sections = [];
-  const sectionRx = /^#{1,3}\s+(?:\[[^\]]+\]\s*)?.*v(\d+\.\d+)/gim;
-  let m;
-  while ((m = sectionRx.exec(roadmapContent)) !== null) {
-    if (sections.length > 0) sections[sections.length - 1].end = m.index;
-    sections.push({ version: `v${m[1]}`, start: m.index, end: roadmapContent.length });
-  }
-  for (const section of sections) {
-    const content = roadmapContent.slice(section.start, section.end);
-    const phaseRx = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*)\s*:/gi;
-    let pm;
-    while ((pm = phaseRx.exec(content)) !== null) {
-      const phaseId = pm[1];
-      const expectedMilestone = getMilestoneFromPhaseId(phaseId);
-      if (expectedMilestone !== null && expectedMilestone !== section.version) {
-        mismatches.push({ phaseId, foundInMilestone: section.version, expectedMilestone });
-      }
+/**
+ * Bracket-form-presence check (WAVE 2b — supersedes checkMilestonePrefixMismatches).
+ *
+ * On a bracket repo a phase heading MUST be the clean bracket form
+ * `### [PROJECT.MM] N: Name`. A heading carrying the literal "Phase " word or an
+ * M-NN `N-NN` token is the VIOLATION target (the inverse of the old M-NN check).
+ * Sentinel phases (0.x / 999.x) are exempt. No milestone-from-phase-token
+ * derivation is involved — that derivation is meaningless for the bracket form,
+ * so `getMilestoneFromPhaseId` is no longer imported on this path.
+ *
+ * @param {string} roadmapContent
+ * @returns {Array<{phaseId:string}>} legacy-form headings found
+ */
+function checkBracketFormPresence(roadmapContent) {
+  const violations = [];
+  const lines = roadmapContent.split('\n');
+  // Literal "Phase " word (optionally bracketed) before a `N[.-NN]:` colon.
+  const LITERAL_PHASE_RE = /^#{2,4}\s*(?:\[[^\]]*\]\s*)?Phase\s+(\d+[A-Z]?(?:[.-]\d+)*)\s*:/i;
+  // M-NN hyphen token inside a bracket heading (`[GSD.02] 2-01:`).
+  const BRACKET_MNN_RE = /^#{2,4}\s*\[[A-Z][A-Z0-9]*\.\d+\]\s+(\d+-\d+(?:-\d+)*)\s*:/i;
+  for (const line of lines) {
+    const lit = line.match(LITERAL_PHASE_RE);
+    if (lit) {
+      if (!isSentinelPhaseId(lit[1])) violations.push({ phaseId: lit[1] });
+      continue;
     }
+    const mnn = line.match(BRACKET_MNN_RE);
+    if (mnn && !isSentinelPhaseId(mnn[1])) violations.push({ phaseId: mnn[1] });
   }
-  return mismatches;
+  return violations;
 }
 
 function cmdValidateConsistency(cwd, raw) {
@@ -555,12 +559,19 @@ function cmdValidateConsistency(cwd, raw) {
   // stripped). Used for the "in ROADMAP but not on disk" check — we only require
   // disk dirs for the active milestone's phases.
   const roadmapPhases = new Set();
-  // Matches both legacy numeric (Phase 1:), decimal (Phase 2.1:), and
-  // milestone-prefixed (Phase 2-01:) headings, including bracket-prefixed form.
-  const phasePattern = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*(?:-[\w.-]+)*)\s*:/gi;
+  // BRACKET-native + legacy read-tolerance. Matches `### [GSD.02] 05: Name`
+  // (bracket) and legacy `### Phase 5: Name` headings, capturing the all-dot
+  // phase token. The trailing `:` is the load-bearing phase discriminator
+  // (ADDENDUM-3): a milestone SECTION heading `## [GSD.02] Foundation` (or a
+  // digit-leading name `## [GSD.02] 2024 Plan`) has no `NN:` colon and must NOT
+  // be captured as a phase. The milestone in the bracket prefix is dropped.
+  // Legacy `Phase ` branch keeps hyphen tolerance (`Phase 2-01:` un-migrated
+  // M-NN reads); bracket branch is strictly all-dot (`[GSD.02] 05.03:`).
+  const HEADING_RE_SRC = '#{2,4}\\s*(?:Phase\\s+([\\w][\\w.-]*(?:-[\\w.-]+)*)|\\[[A-Z][A-Z0-9]*\\.\\d+\\]\\s+(\\d+[A-Z]?(?:\\.\\d+)*))\\s*:';
+  const phasePattern = new RegExp(HEADING_RE_SRC, 'gi');
   let m;
   while ((m = phasePattern.exec(roadmapContent)) !== null) {
-    roadmapPhases.add(m[1]);
+    roadmapPhases.add(m[1] || m[2]);
   }
 
   // Extract phases from the FULL ROADMAP (every milestone). Used for the
@@ -569,10 +580,10 @@ function cmdValidateConsistency(cwd, raw) {
   // though it is absent from the active-milestone scope. Without this, narrowing
   // the scope (#501) would flag every shipped phase dir as a spurious orphan.
   const fullRoadmapPhases = new Set();
-  const fullPhasePattern = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*(?:-[\w.-]+)*)\s*:/gi;
+  const fullPhasePattern = new RegExp(HEADING_RE_SRC, 'gi');
   let fm;
   while ((fm = fullPhasePattern.exec(roadmapContentRaw)) !== null) {
-    fullRoadmapPhases.add(fm[1]);
+    fullRoadmapPhases.add(fm[1] || fm[2]);
   }
 
   // Get phases on disk (flat layout + milestone-archive layout)
@@ -1093,8 +1104,13 @@ function cmdValidateHealth(cwd, options, raw) {
     }
   } catch { /* git worktree not available or not a git repo — skip silently */ }
 
-  // ─── Check 11b: Phase ID / milestone-section mismatch (W021) ─────────────
-  // Only active when phase_id_convention === 'milestone-prefixed' in config.json.
+  // ─── Check 11b: Bracket-form-presence (W021) ─────────────────────────────
+  // DEFAULT-ON for bracket repos (the retired `milestone-prefixed` opt-in gate
+  // is gone). On a bracket repo, a phase heading carrying the literal "Phase "
+  // word or an M-NN `N-NN` token is a violation — the INVERSE of the old M-NN
+  // check. Legacy repos (convention null / absent) are NOT flagged: the bracket
+  // form is the violation target only on a bracket repo (migration-window
+  // read-tolerance). No phase-token milestone derivation is involved.
   try {
     const phaseConvention = (() => {
       if (!fs.existsSync(configPath)) return null;
@@ -1104,15 +1120,15 @@ function cmdValidateHealth(cwd, options, raw) {
         return configParsed.phase_id_convention || null;
       } catch { return null; }
     })();
-    if (phaseConvention === 'milestone-prefixed') {
+    if (phaseConvention === 'bracket') {
       if (fs.existsSync(roadmapPath)) {
         const roadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
-        const { getMilestoneFromPhaseId } = require('./core.cjs');
-        const mismatches = checkMilestonePrefixMismatches(roadmapContent, { getMilestoneFromPhaseId });
-        for (const m of mismatches) {
+        const violations = checkBracketFormPresence(roadmapContent);
+        for (const v of violations) {
           addIssue('warning', 'W021',
-            `Phase ${m.phaseId}: integer prefix implies ${m.expectedMilestone} but listed under ${m.foundInMilestone}`,
-            'Run `gsd-tools roadmap upgrade --convention milestone-prefixed` to migrate (dry-run by default)');
+            `Phase heading "${v.phaseId}" is not in bracket form (### [PROJECT.MM] N: Name); ` +
+            `bracket convention is active`,
+            'Run `gsd-tools roadmap upgrade --convention bracket` to migrate (dry-run by default)');
         }
       }
     }
@@ -1166,7 +1182,12 @@ function cmdValidateHealth(cwd, options, raw) {
     }
   } catch { /* artifact check is advisory — skip on error */ }
 
-  // ─── Check 14: milestone-status vs. roadmap-progress incoherence (W021) ───
+  // ─── Check 14: milestone-status vs. roadmap-progress incoherence (W022) ───
+  // R4: this check formerly emitted W021, colliding with the (now bracket)
+  // phase-id-convention check above. Renumbered to W022 so consumers can
+  // disambiguate "STATE-says-complete-but-phases-unstarted" from the
+  // convention warning. Phase pattern matches BOTH bracket `### [GSD.02] 05:`
+  // and legacy `### Phase 5:` so the check is not dead on bracket repos.
   try {
     if (fs.existsSync(statePath) && fs.existsSync(roadmapPath)) {
       const stateRaw = fs.readFileSync(statePath, 'utf-8');
@@ -1178,7 +1199,7 @@ function cmdValidateHealth(cwd, options, raw) {
         // then check for phases with no directory on disk (unstarted).
         const roadmapRaw = fs.readFileSync(roadmapPath, 'utf-8');
         const scopedContent = extractCurrentMilestone(roadmapRaw, cwd);
-        const phasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:\s*([^\n]+)/gi;
+        const phasePattern = /#{2,4}\s*(?:Phase\s+|\[[A-Z][A-Z0-9]*\.\d+\]\s+)(\d+[A-Z]?(?:\.\d+)*)\s*:/gi;
         const unstarted = [];
         let pm;
         const planningWorkspace = require('./planning-workspace.cjs');
@@ -1202,13 +1223,13 @@ function cmdValidateHealth(cwd, options, raw) {
           }
         }
         if (unstarted.length > 0) {
-          addIssue('warning', 'W021',
-            `STATE says milestone complete but ROADMAP lists ${unstarted.length} unstarted phase(s) (e.g. Phase ${unstarted[0]})`,
+          addIssue('warning', 'W022',
+            `STATE says milestone complete but ROADMAP lists ${unstarted.length} unstarted phase(s) (e.g. phase ${unstarted[0]})`,
             'Run validate consistency or re-run complete-milestone after verifying all phases are done');
         }
       }
     }
-  } catch { /* W021 check is advisory — skip on error */ }
+  } catch { /* W022 check is advisory — skip on error */ }
 
   // ─── Perform repairs if requested ─────────────────────────────────────────
   const repairActions = [];

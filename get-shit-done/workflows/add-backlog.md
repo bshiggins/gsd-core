@@ -1,3 +1,10 @@
+<!-- BEGIN:gsd-bracket-convention -->
+**Phase-ID convention.** Bracket form `[{PROJECT}.{MM}] {phase}[.{sub}][-{plan}]`, e.g. `[GSD.02] 05.03-01`. No "Phase" word, no `vX.Y` version literal, no milestone emoji.
+- Milestone = the bracket integer; the milestone boundary is where it increments (`[GSD.01]` -> `[GSD.02]`). Dots are phase-levels; the single hyphen is the plan.
+- Headings: `### [GSD.02] 05: Name` (phase -- a phase number after the bracket) vs `## [GSD.02] Name` (milestone -- a name after the bracket). On disk: `GSD.02-05.03-slug/`.
+- Full card + grammar: references/phase-id-convention.md.
+<!-- END:gsd-bracket-convention -->
+
 # Add Backlog Item Workflow
 
 Invoked by `/gsd:capture --backlog` (`commands/gsd/capture.md`).
@@ -50,14 +57,21 @@ Plans:
 
 ## Step 4: Create the phase directory
 
-Apply the `project_code` prefix (if set in `.planning/config.json`) so the backlog directory name is consistent with all other phase-creation paths:
+Route directory creation through the CLI (`scaffold phase-dir`) so the backlog
+directory is produced by the same centralized, convention-aware code path as
+`phase.add`/`phase.insert` — rather than fabricating the dir name in bash. The
+CLI applies the `project_code` prefix when set (e.g. `GSD-999.1-slug`) and omits
+it on legacy/code-less repos (`999.1-slug`); backlog phases are milestone-less
+sentinels (`999.x`), so the prefix is the project-only single-hyphen form under
+both bracket and legacy conventions. The sentinel ROADMAP heading written in
+Step 3 stays in the legacy `### Phase 999.1:` form (milestone-less,
+convention-independent).
 
 ```bash
-SLUG=$(gsd_run query generate-slug "$ARGUMENTS" --raw)
-PROJECT_CODE=$(gsd_run query config-get project_code --raw 2>/dev/null || echo "")
-PREFIX=$([ -n "$PROJECT_CODE" ] && echo "${PROJECT_CODE}-" || echo "")
-PHASE_DIR=".planning/phases/${PREFIX}${NEXT}-${SLUG}"
-mkdir -p "${PHASE_DIR}"
+SCAFFOLD=$(gsd_run query scaffold phase-dir --phase "${NEXT}" --name "$ARGUMENTS")
+PHASE_DIR=$(printf '%s' "$SCAFFOLD" | grep -o '"directory": *"[^"]*"' | head -1 | sed 's/.*"directory": *"//;s/"$//')
+# scaffold creates the dir but not the placeholder file — add it so the empty
+# backlog phase is git-trackable.
 touch "${PHASE_DIR}/.gitkeep"
 ```
 

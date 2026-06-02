@@ -29,14 +29,40 @@
  */
 
 // ── Issue #26: regex constants (W005, W006-archived) ────────────────────────
-// Matches legacy numeric dirs (01-setup), milestone-prefixed dirs (02-01-setup),
-// deep dirs (02-04-01-deep), and project-code-prefixed variants (GSD-02-01-setup).
-const phaseDirNameRe = /^(?:[A-Z]{1,6}-)?\d{2,}(?:-\d+)*(?:\.\d+)*-[\w-]+$/i;
-// Extracts the full phase token from a directory name, including milestone-prefixed
-// multi-segment tokens like "02-01" from "02-01-setup" or "GSD-02-01-setup".
-// Greedily captures all leading all-digit segments before the first letter-start segment.
-const PHASE_TOKEN_FROM_DIR_RE = /^(?:[A-Z]{1,6}-)?(\d+(?:-\d+)*[A-Z]?(?:\.\d+)*)(?:-[a-z]|$)/i;
+// W005 phase directory naming. Two accepted forms:
+//   - BRACKET (canonical, Option-B on disk): `{PROJECT}.{MM}-{N}[.{sub}]-slug`
+//     e.g. `GSD.02-05-feature`, `GSD.02-05.03-deep`. The milestone rides in the
+//     `{PROJECT}.{MM}-` prefix; the phase token is all-dot.
+//   - LEGACY read-tolerance (un-migrated repos): numeric `01-setup`, M-NN
+//     `02-01-setup`, deep `02-04-01-deep`, project-code `GSD-02-01-setup`.
+// Both branches are kept so a not-yet-migrated repo still validates (migration-
+// window robustness, not a second active convention). On a bracket repo the
+// bracket form is canonical; legacy forms remain READABLE, not emitted.
+const phaseDirNameRe = /^(?:[A-Z][A-Z0-9]*\.\d+-\d+[A-Z]?(?:\.\d+)*|(?:[A-Z]{1,6}-)?\d{2,}(?:-\d+)*(?:\.\d+)*)-[\w-]+$/i;
+// Extracts the full phase token from a directory name (single capture group, so
+// consumers keep using `m[1]`). An optional BRACKET prefix `{PROJECT}.{MM}-` is
+// stripped (non-capturing) so `GSD.02-05.03-slug` → `05.03` (milestone dropped —
+// recovered via getMilestoneFromPhaseId). Falls back to legacy project-code /
+// milestone-prefixed multi-segment tokens like "02-01" from "02-01-setup".
+// NOTE: the bracket prefix `[A-Z]+\.\d+-` is tried first; if it does not match,
+// the legacy `[A-Z]{1,6}-` (no dot) project-code strip applies.
+const PHASE_TOKEN_FROM_DIR_RE = /^(?:[A-Z][A-Z0-9]*\.\d+-|[A-Z]{1,6}-)?(\d+(?:-\d+)*[A-Z]?(?:\.\d+)*)(?:-[a-z]|$)/i;
 const MILESTONE_ARCHIVE_DIR_RE = /^v\d+.*-phases$/i;
+
+// ── Bracket-native phase regexes (WAVE 2b) ──────────────────────────────────
+// Canonical bracket phase HEADING: `### [{PROJECT}.{MM}] {N}[.{sub}]: Name`.
+// The phase NUMBER appears AFTER the bracket and BEFORE a colon (ADDENDUM-3:
+// the `\d+...:` colon is the load-bearing phase signal; a milestone section
+// heading `## [GSD.02] Foundation` has a NAME, no `NN:`, and must NOT match).
+// Capture 1 = milestone MM (from the bracket); capture 2 = all-dot phase token.
+const BRACKET_PHASE_HEADING_RE = /#{2,4}\s*\[[A-Z][A-Z0-9]*\.(\d+)\]\s+(\d+[A-Z]?(?:\.\d+)*)\s*:/gi;
+// Canonical bracket phase DIRECTORY: `{PROJECT}.{MM}-{N}[.{sub}]-slug`.
+const BRACKET_PHASE_DIR_RE = /^[A-Z][A-Z0-9]*\.(\d+)-(\d+[A-Z]?(?:\.\d+)*)-[\w-]+$/i;
+// A heading carrying the LITERAL "Phase " word OR an M-NN `N-NN` phase token —
+// the violation target on a bracket repo (the INVERSE of the old M-NN check).
+// `Phase\s+` literal, or a bracket/Phase prefix followed by a hyphenated
+// numeric token (`2-01`) before the colon.
+const LEGACY_PHASE_FORM_RE = /#{2,4}\s*(?:\[[^\]]*\]\s*)?(?:Phase\s+(\d+[A-Z]?(?:[.-]\d+)*)|\[[A-Z][A-Z0-9]*\.\d+\]\s+(\d+(?:-\d+)+))\s*:/i;
 
 // ── Issue #26: I001 canonicalization ────────────────────────────────────────
 function canonicalPlanStem(stem) {
@@ -83,24 +109,39 @@ function phaseVariants(phase) {
 function buildRoadmapPhaseVariants(roadmapContent) {
   const roadmapPhases = new Set();
   const roadmapPhaseVariants = new Set();
-  // Matches both legacy numeric (Phase 1:), decimal (Phase 2.1:), milestone-prefixed (Phase 2-01:),
-  // and bracket-prefixed (### [GSD] Phase 2-01:) headings.
+  // LEGACY read-tolerance: numeric (Phase 1:), decimal (Phase 2.1:),
+  // milestone-prefixed (Phase 2-01:), bracket+Phase (### [GSD] Phase 2-01:).
   const phasePattern = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*(?:-[\w.-]+)*)\s*:/gi;
   let m;
   while ((m = phasePattern.exec(roadmapContent)) !== null) {
     roadmapPhases.add(m[1]);
     for (const variant of phaseVariants(m[1])) roadmapPhaseVariants.add(variant);
   }
+  // BRACKET-native headings (no "Phase" word): `### [GSD.02] 05[.03]: Name`.
+  // Capture the all-dot phase token (the milestone in the bracket prefix is the
+  // dir-prefix, not the on-disk phase token, so it is dropped here).
+  const bracketPattern = new RegExp(BRACKET_PHASE_HEADING_RE.source, 'gi');
+  let bm;
+  while ((bm = bracketPattern.exec(roadmapContent)) !== null) {
+    roadmapPhases.add(bm[2]);
+    for (const variant of phaseVariants(bm[2])) roadmapPhaseVariants.add(variant);
+  }
   return { roadmapPhases, roadmapPhaseVariants };
 }
 
 function buildNotStartedPhaseVariants(roadmapContent) {
   const notStartedPhases = new Set();
-  // Also matches milestone-prefixed and bracket-prefixed checklist items.
+  // LEGACY checklist items (milestone-prefixed and bracket+Phase forms).
   const uncheckedPattern = /-\s*\[\s\]\s*\*{0,2}Phase\s+([\w][\w.-]*(?:-[\w.-]+)*)[:\s*]/gi;
   let um;
   while ((um = uncheckedPattern.exec(roadmapContent)) !== null) {
     for (const variant of phaseVariants(um[1])) notStartedPhases.add(variant);
+  }
+  // BRACKET-native checklist items: `- [ ] **[GSD.02] 05: Name**`.
+  const bracketUnchecked = /-\s*\[\s\]\s*\*{0,2}\[[A-Z][A-Z0-9]*\.\d+\]\s+(\d+[A-Z]?(?:\.\d+)*)\s*:/gi;
+  let bum;
+  while ((bum = bracketUnchecked.exec(roadmapContent)) !== null) {
+    for (const variant of phaseVariants(bum[1])) notStartedPhases.add(variant);
   }
   return notStartedPhases;
 }
@@ -111,6 +152,10 @@ module.exports = {
   PHASE_TOKEN_FROM_DIR_RE,
   MILESTONE_ARCHIVE_DIR_RE,
   canonicalPlanStem,
+  // WAVE 2b: bracket-native phase regexes
+  BRACKET_PHASE_HEADING_RE,
+  BRACKET_PHASE_DIR_RE,
+  LEGACY_PHASE_FORM_RE,
   // Issue #6 exports (W006/W007 phase variant helpers)
   phaseVariants,
   buildRoadmapPhaseVariants,

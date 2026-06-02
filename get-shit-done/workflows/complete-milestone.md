@@ -1,3 +1,10 @@
+<!-- BEGIN:gsd-bracket-convention -->
+**Phase-ID convention.** Bracket form `[{PROJECT}.{MM}] {phase}[.{sub}][-{plan}]`, e.g. `[GSD.02] 05.03-01`. No "Phase" word, no `vX.Y` version literal, no milestone emoji.
+- Milestone = the bracket integer; the milestone boundary is where it increments (`[GSD.01]` -> `[GSD.02]`). Dots are phase-levels; the single hyphen is the plan.
+- Headings: `### [GSD.02] 05: Name` (phase -- a phase number after the bracket) vs `## [GSD.02] Name` (milestone -- a name after the bracket). On disk: `GSD.02-05.03-slug/`.
+- Full card + grammar: references/phase-id-convention.md.
+<!-- END:gsd-bracket-convention -->
+
 <purpose>
 
 Mark a shipped version (v1.0, v1.1, v2.0) as complete. Creates historical record in MILESTONES.md, performs full PROJECT.md evolution review, reorganizes ROADMAP.md with milestone groupings, and tags the release in git.
@@ -105,10 +112,10 @@ Present:
 Milestone: [Name, e.g., "v1.0 MVP"]
 
 Includes:
-- Phase 1: Foundation (2/2 plans complete)
-- Phase 2: Authentication (2/2 plans complete)
-- Phase 3: Core Features (3/3 plans complete)
-- Phase 4: Polish (1/1 plan complete)
+- [{PROJECT}.01] 01: Foundation (2/2 plans complete)
+- [{PROJECT}.01] 02: Authentication (2/2 plans complete)
+- [{PROJECT}.01] 03: Core Features (3/3 plans complete)
+- [{PROJECT}.01] 04: Polish (1/1 plan complete)
 
 Total: {phase_count} phases, {total_plans} plans, all complete
 Requirements: {N}/{M} v1 requirements checked off
@@ -119,8 +126,8 @@ Requirements: {N}/{M} v1 requirements checked off
 ```
 ⚠ Unchecked Requirements:
 
-- [ ] {REQ-ID}: {description} (Phase {X})
-- [ ] {REQ-ID}: {description} (Phase {Y})
+- [ ] {REQ-ID}: {description} ([{PROJECT}.{MM}] {X})
+- [ ] {REQ-ID}: {description} ([{PROJECT}.{MM}] {Y})
 ```
 
 MUST present 3 options:
@@ -373,26 +380,26 @@ Update `.planning/ROADMAP.md` — group completed milestone phases:
 
 ## Milestones
 
-- ✅ **v1.0 MVP** — Phases 1-4 (shipped YYYY-MM-DD)
-- 🚧 **v1.1 Security** — Phases 5-6 (in progress)
-- 📋 **v2.0 Redesign** — Phases 7-10 (planned)
+- **[{PROJECT}.01] MVP** — phases 01-04 (shipped YYYY-MM-DD)
+- **[{PROJECT}.02] Security** — phases 05-06 (in progress)
+- **[{PROJECT}.03] Redesign** — phases 07-10 (planned)
 
 ## Phases
 
 <details>
-<summary>✅ v1.0 MVP (Phases 1-4) — SHIPPED YYYY-MM-DD</summary>
+<summary>[{PROJECT}.01] MVP (phases 01-04) — SHIPPED YYYY-MM-DD</summary>
 
-- [x] Phase 1: Foundation (2/2 plans) — completed YYYY-MM-DD
-- [x] Phase 2: Authentication (2/2 plans) — completed YYYY-MM-DD
-- [x] Phase 3: Core Features (3/3 plans) — completed YYYY-MM-DD
-- [x] Phase 4: Polish (1/1 plan) — completed YYYY-MM-DD
+- [x] [{PROJECT}.01] 01: Foundation (2/2 plans) — completed YYYY-MM-DD
+- [x] [{PROJECT}.01] 02: Authentication (2/2 plans) — completed YYYY-MM-DD
+- [x] [{PROJECT}.01] 03: Core Features (3/3 plans) — completed YYYY-MM-DD
+- [x] [{PROJECT}.01] 04: Polish (1/1 plan) — completed YYYY-MM-DD
 
 </details>
 
-### 🚧 v[Next] [Name] (In Progress / Planned)
+### [{PROJECT}.{Next}] [Name] (In Progress / Planned)
 
-- [ ] Phase 5: [Name] ([N] plans)
-- [ ] Phase 6: [Name] ([N] plans)
+- [ ] [{PROJECT}.{Next}] 05: [Name] ([N] plans)
+- [ ] [{PROJECT}.{Next}] 06: [Name] ([N] plans)
 
 ## Progress
 
@@ -474,16 +481,16 @@ If `$BACKLOG_SECTION` is empty, there is no Backlog section — skip silently.
 
 ## Milestones
 
-- ✅ **v1.0 MVP** — Phases 1-4 (shipped YYYY-MM-DD)
-- 🚧 **v1.1 Security** — Phases 5-6 (in progress)
+- **[{PROJECT}.01] MVP** — phases 01-04 (shipped YYYY-MM-DD)
+- **[{PROJECT}.02] Security** — phases 05-06 (in progress)
 
 ## Phases
 
 <details>
-<summary>✅ v1.0 MVP (Phases 1-4) — SHIPPED YYYY-MM-DD</summary>
+<summary>[{PROJECT}.01] MVP (phases 01-04) — SHIPPED YYYY-MM-DD</summary>
 
-- [x] Phase 1: Foundation (2/2 plans) — completed YYYY-MM-DD
-- [x] Phase 2: Authentication (2/2 plans) — completed YYYY-MM-DD
+- [x] [{PROJECT}.01] 01: Foundation (2/2 plans) — completed YYYY-MM-DD
+- [x] [{PROJECT}.01] 02: Authentication (2/2 plans) — completed YYYY-MM-DD
 
 </details>
 ```

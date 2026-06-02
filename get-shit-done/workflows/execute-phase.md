@@ -1,3 +1,10 @@
+<!-- BEGIN:gsd-bracket-convention -->
+**Phase-ID convention.** Bracket form `[{PROJECT}.{MM}] {phase}[.{sub}][-{plan}]`, e.g. `[GSD.02] 05.03-01`. No "Phase" word, no `vX.Y` version literal, no milestone emoji.
+- Milestone = the bracket integer; the milestone boundary is where it increments (`[GSD.01]` -> `[GSD.02]`). Dots are phase-levels; the single hyphen is the plan.
+- Headings: `### [GSD.02] 05: Name` (phase -- a phase number after the bracket) vs `## [GSD.02] Name` (milestone -- a name after the bracket). On disk: `GSD.02-05.03-slug/`.
+- Full card + grammar: references/phase-id-convention.md.
+<!-- END:gsd-bracket-convention -->
+
 <purpose>
 Execute all plans in a phase using wave-based parallel execution. Orchestrator stays lean — delegates plan execution to subagents.
 </purpose>
@@ -997,7 +1004,7 @@ When executor returns a checkpoint AND `AUTO_MODE` is `true`:
 After all waves:
 
 ```markdown
-## Phase {X}: {Name} Execution Complete
+## [{PROJECT}.{MM}] {X}: {Name} Execution Complete
 
 **Waves:** {N} | **Plans:** {M}/{total} complete
 
@@ -1517,7 +1524,7 @@ Extract from result: `next_phase`, `next_phase_name`, `is_last_phase`, `warnings
 
 **If has_warnings is true:**
 ```
-## Phase {X} marked complete with {N} warnings:
+## [{PROJECT}.{MM}] {X} marked complete with {N} warnings:
 
 {list each warning}
 

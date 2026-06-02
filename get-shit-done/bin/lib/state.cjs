@@ -4,7 +4,40 @@
 
 const fs = require('fs');
 const path = require('path');
-const { escapeRegex, loadConfig, getMilestoneInfo, getMilestonePhaseFilter, extractCurrentMilestone, output, error } = require('./core.cjs');
+const { escapeRegex, loadConfig, getMilestoneInfo, getMilestonePhaseFilter, extractCurrentMilestone, getPhaseDisplayLabel, output, error } = require('./core.cjs');
+
+/**
+ * Human-facing phase label for STATE.md DISPLAY/descriptive strings only.
+ *
+ * Under the bracket convention (config.phase_id_convention === 'bracket') with a
+ * project_code, returns the bracket form `[GSD.02] 05`; otherwise the legacy
+ * `Phase 05` form (byte-for-byte unchanged). Gated on convention — NOT on
+ * project_code — so legacy repos are untouched.
+ *
+ * USE ONLY for descriptive strings (Last Activity Description, Current focus).
+ * Do NOT use for the `Current Phase` data field or any `Status:`/`Phase:` line
+ * that a regex reads back — those stay bare.
+ */
+function readPhaseIdConvention(cwd) {
+  // loadConfig strips keys not in its schema defaults (phase_id_convention among
+  // them); read it from config.json RAW. Mirrors roadmap-command-router.cjs.
+  try {
+    const raw = fs.readFileSync(path.join(planningDir(cwd), 'config.json'), 'utf8');
+    return JSON.parse(raw).phase_id_convention;
+  } catch {
+    return undefined;
+  }
+}
+
+function phaseDisplayFor(cwd, phaseN) {
+  const config = loadConfig(cwd);
+  if (readPhaseIdConvention(cwd) === 'bracket' && config.project_code) {
+    const mMatch = String(getMilestoneInfo(cwd).version || '').match(/(\d+)/);
+    const mm = mMatch ? mMatch[1].padStart(2, '0') : '00';
+    return getPhaseDisplayLabel(phaseN, `${config.project_code}.${mm}`);
+  }
+  return `Phase ${phaseN}`;
+}
 const { platformWriteSync, platformReadSync, platformEnsureDir } = require('./shell-command-projection.cjs');
 const { planningDir, planningPaths } = require('./planning-workspace.cjs');
 const { realClock } = require('./clock.cjs');
@@ -1232,8 +1265,8 @@ function cmdStateBeginPhase(cwd, phaseNumber, phaseName, planCount, raw) {
     if (!isAlreadyExecuting) {
       // First-time execution: set all progress fields
 
-      // Update Last Activity Description
-      const activityDesc = `Phase ${phaseNumber} execution started`;
+      // Update Last Activity Description (descriptive — bracket-aware display)
+      const activityDesc = `${phaseDisplayFor(cwd, phaseNumber)} execution started`;
       result = stateReplaceField(content, 'Last Activity Description', activityDesc);
       if (result) { content = result; updated.push('Last Activity Description'); }
 
@@ -1257,8 +1290,9 @@ function cmdStateBeginPhase(cwd, phaseNumber, phaseName, planCount, raw) {
         if (result) { content = result; updated.push('Total Plans in Phase'); }
       }
 
-      // Update **Current focus:** body text line (#1104)
-      const focusLabel = phaseName ? `Phase ${phaseNumber} — ${phaseName}` : `Phase ${phaseNumber}`;
+      // Update **Current focus:** body text line (#1104) — descriptive display
+      const phaseDisp = phaseDisplayFor(cwd, phaseNumber);
+      const focusLabel = phaseName ? `${phaseDisp} — ${phaseName}` : phaseDisp;
       const focusPattern = /(\*\*Current focus:\*\*\s*).*/i;
       if (focusPattern.test(content)) {
         content = content.replace(focusPattern, (_match, prefix) => `${prefix}${focusLabel}`);
@@ -1453,7 +1487,7 @@ function cmdStatePlannedPhase(cwd, phaseNumber, planCount, raw) {
 
     // Update Last Activity Description
     {
-      const result = stateReplaceField(content, 'Last Activity Description', `Phase ${phaseNumber} planning complete — ${planCount || '?'} plans ready`);
+      const result = stateReplaceField(content, 'Last Activity Description', `${phaseDisplayFor(cwd, phaseNumber)} planning complete — ${planCount || '?'} plans ready`);
       if (result) { content = result; updated.push('Last Activity Description'); }
     }
 
@@ -1993,8 +2027,8 @@ function cmdStateCompletePhase(cwd, raw, overridePhase) {
     result = stateReplaceField(content, 'Last Activity', today);
     if (result) { content = result; updated.push('Last Activity'); }
 
-    // Update Last Activity Description
-    const activityDesc = `Phase ${currentPhase} marked complete`;
+    // Update Last Activity Description (descriptive — bracket-aware display)
+    const activityDesc = `${phaseDisplayFor(cwd, currentPhase)} marked complete`;
     result = stateReplaceField(content, 'Last Activity Description', activityDesc);
     if (result) { content = result; updated.push('Last Activity Description'); }
 
