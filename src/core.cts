@@ -690,7 +690,18 @@ function normalizePhaseName(phase: unknown): string {
   return str;
 }
 
-function getMilestoneFromPhaseId(phaseId: unknown): string | null {
+function getMilestoneFromPhaseId(phaseId: unknown, convention?: string): string | null {
+  // READING-B (#612): under the bracket convention the milestone comes from the
+  // [PROJECT.MM] / {CODE}.{MM}- prefix, never the phase-token leading integer.
+  // Gated on 'bracket' so null / 'milestone-prefixed' (M-NN) repos keep the
+  // legacy leading-int rule (READING-A) below, untouched.
+  if (convention === 'bracket') {
+    const b = String(phaseId).match(/^([A-Za-z][\w]*)\.(\d+)/);
+    if (!b) return null;
+    const mm = parseInt(b[2], 10);
+    if (mm === 0 || mm === 999) return null; // sentinel ranges
+    return `v${mm}.0`;
+  }
   const str = String(phaseId);
   const stripped = str.replace(/^[A-Z]{1,6}-(?=\d)/i, '');
   const m = stripped.match(/^0*(\d+)-\d/);
@@ -714,6 +725,60 @@ function getPhaseDirFromPhaseId(phaseId: unknown, phaseName: string | null | und
   const parts = [milestone, sub, slug].filter(Boolean);
   const base = parts.join('-');
   return projectCode ? `${projectCode}-${base}` : base;
+}
+
+// ─── Bracket phase-ID grammar (#612, PR 1) ──────────────────────────────────
+// One pure round-trippable model (ADR §3). parsePhaseId accepts the display
+// form `[PROJECT.MM] PP[.SS][-LL]` or the on-disk/token form
+// `{PROJECT}.{MM}-{PP}[.{SS}][-{LL|slug}]`; renderPhaseId / toDir are its two
+// emitters. READING-B: milestone lives in the [PROJECT.MM] prefix, so no token
+// dimension is ever overloaded. `plan` is a filename-surface dimension only —
+// renderPhaseId emits it; toDir drops it (dirs carry a slug, not a plan).
+type PhaseId = {
+  project: string;     // 'GSD'
+  milestone: string;   // '02'  (zero-padded, from the bracket/dir prefix)
+  phase: string;       // '05'  (zero-padded)
+  subphase?: string;   // '03'  (optional)
+  plan?: string;       // '01'  (filename surface only)
+};
+
+const pad2 = (n: string): string => String(parseInt(n, 10)).padStart(2, '0');
+
+function parsePhaseId(input: string): PhaseId {
+  const str = String(input).trim();
+
+  // Display form: [PROJECT.MM] PP[.SS][-LL]
+  const disp = str.match(/^\[([A-Za-z][\w]*)\.(\d+)\]\s+(\d+)(?:\.(\d+))?(?:-(\d+))?$/);
+  if (disp) {
+    const id: PhaseId = { project: disp[1], milestone: pad2(disp[2]), phase: pad2(disp[3]) };
+    if (disp[4] !== undefined) id.subphase = pad2(disp[4]);
+    if (disp[5] !== undefined) id.plan = pad2(disp[5]);
+    return id;
+  }
+
+  // Dir / token form: {PROJECT}.{MM}-{PP}[.{SS}][-{plan|slug}]
+  const dir = str.match(/^([A-Za-z][\w]*)\.(\d+)-(\d+)(?:\.(\d+))?(?:-(.+))?$/);
+  if (dir) {
+    const id: PhaseId = { project: dir[1], milestone: pad2(dir[2]), phase: pad2(dir[3]) };
+    if (dir[4] !== undefined) id.subphase = pad2(dir[4]);
+    // Trailing segment: a pure-integer tail is the plan; anything else is a slug
+    // (dropped from the tuple — it is not an identity dimension).
+    if (dir[5] !== undefined && /^\d+$/.test(dir[5])) id.plan = pad2(dir[5]);
+    return id;
+  }
+
+  throw new Error(`parsePhaseId: not a bracket phase id: ${JSON.stringify(input)}`);
+}
+
+function renderPhaseId(id: PhaseId): string {
+  const sub = id.subphase ? `.${id.subphase}` : '';
+  const plan = id.plan ? `-${id.plan}` : '';
+  return `[${id.project}.${id.milestone}] ${id.phase}${sub}${plan}`;
+}
+
+function toDir(id: PhaseId, slug: string): string {
+  const sub = id.subphase ? `.${id.subphase}` : '';
+  return `${id.project}.${id.milestone}-${id.phase}${sub}-${slug}`;
 }
 
 /**
@@ -2150,6 +2215,9 @@ export = {
   normalizePhaseName,
   getMilestoneFromPhaseId,
   getPhaseDirFromPhaseId,
+  parsePhaseId,
+  renderPhaseId,
+  toDir,
   phaseMarkdownRegexSource,
   phaseMarkdownRegexSourceExact,
   comparePhaseNum,
