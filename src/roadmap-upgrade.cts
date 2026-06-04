@@ -305,6 +305,26 @@ function computeMigrationPlan(cwd: string, options: Record<string, unknown> = {}
   }
 
   const sourcePhases = parsedPhases.filter(e => !e.alreadyMigrated);
+
+  // B-migrator-real-layouts: single-milestone projects (HQ-NN) often omit the
+  // `## vN.M` heading, so legacy phases have no enclosing milestone and would
+  // 0-op. Derive the milestone from STATE.md `milestone:` instead of skipping.
+  if (sourcePhases.some(e => e.source === 'legacy' && (e.milestoneInt === null || e.milestoneInt === undefined))) {
+    let fallbackMilestone: number | null = null;
+    try {
+      const stateRaw = fs.readFileSync(path.join(pDir, 'STATE.md'), 'utf8');
+      const mm = stateRaw.match(/^milestone:\s*v?(\d+)/im);
+      if (mm) fallbackMilestone = parseInt(mm[1], 10);
+    } catch { /* no STATE.md → cannot derive; leave as 0-op */ }
+    if (fallbackMilestone !== null) {
+      for (const e of sourcePhases) {
+        if (e.source === 'legacy' && (e.milestoneInt === null || e.milestoneInt === undefined)) {
+          e.milestoneInt = fallbackMilestone;
+        }
+      }
+    }
+  }
+
   const idMapping = assignBracketTokens(sourcePhases);
 
   // ── HARD-REFUSE: bracket IDs are [CODE.MM] — impossible without project_code ─

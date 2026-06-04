@@ -156,6 +156,61 @@ describe('PR3-A: migrator legacy → bracket (#612)', () => {
   });
 });
 
+describe('PR3-B: migrator real-layout bugs (#612 B-migrator-real-layouts)', () => {
+  let tmpDir;
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => cleanup(tmpDir));
+
+  test('multi-milestone legacy keeps DISTINCT per-milestone prefixes (no flatten)', () => {
+    writeConfig(tmpDir, { project_code: 'GSD' });
+    writeRoadmap(tmpDir,
+`# Roadmap
+
+## v1.0 Foundation
+
+### Phase 1: A
+**Goal:** g
+
+### Phase 2: B
+**Goal:** g
+
+## v2.0 Next
+
+### Phase 1: C
+**Goal:** g
+`);
+    const pl = plan(tmpDir);
+    const tos = pl.roadmapEdits.map((e) => e.to);
+    // v1 phases land under [GSD.01] with their own 01/02 counter; v2 restarts at 01.
+    assert.ok(tos.some((t) => /\[GSD\.01\]\s*01\s*:\s*A/.test(t)), `v1 Phase1→[GSD.01] 01; got ${JSON.stringify(tos)}`);
+    assert.ok(tos.some((t) => /\[GSD\.01\]\s*02\s*:\s*B/.test(t)), `v1 Phase2→[GSD.01] 02; got ${JSON.stringify(tos)}`);
+    assert.ok(tos.some((t) => /\[GSD\.02\]\s*01\s*:\s*C/.test(t)), `v2 Phase1→[GSD.02] 01 (not flattened); got ${JSON.stringify(tos)}`);
+  });
+
+  test('single-milestone HQ-NN (no ## vN.M heading) derives milestone from STATE.md', () => {
+    writeConfig(tmpDir, { project_code: 'HQ' });
+    // No milestone version heading anywhere — milestone identity is in STATE.md.
+    fs.writeFileSync(p(tmpDir, 'STATE.md'), '---\nmilestone: v1.0\n---\n# Session State\n');
+    writeRoadmap(tmpDir,
+`# Roadmap
+
+### Phase 1: Alpha
+**Goal:** g
+
+### Phase 2: Beta
+**Goal:** g
+`);
+    const pl = plan(tmpDir);
+    assert.equal(pl.alreadyMigrated, false,
+      `single-milestone repo must NOT 0-op; got ${JSON.stringify(pl)}`);
+    const tos = pl.roadmapEdits.map((e) => e.to);
+    assert.ok(tos.some((t) => /\[HQ\.01\]\s*01\s*:\s*Alpha/.test(t)),
+      `Phase 1 should become [HQ.01] 01 (milestone derived from STATE.md); got ${JSON.stringify(tos)}`);
+    assert.ok(tos.some((t) => /\[HQ\.01\]\s*02\s*:\s*Beta/.test(t)),
+      `Phase 2 should become [HQ.01] 02; got ${JSON.stringify(tos)}`);
+  });
+});
+
 describe('PR3-A: migrator apply end-to-end (#612)', () => {
   let tmpDir;
   beforeEach(() => { tmpDir = createTempGitProject(); });
