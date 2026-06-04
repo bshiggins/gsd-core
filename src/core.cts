@@ -941,9 +941,36 @@ function extractPhaseToken(dirName: string): string {
 }
 
 /**
+ * Canonical comparable key for a milestone-qualified bracket id or dir name.
+ * Lifts the milestone out of the `{CODE}.{MM}-` prefix so multi-milestone flat
+ * layouts (CK.02-02 and CK.03-02 coexisting in one phases/ dir) disambiguate:
+ *   'CK.03-02'              -> 'CK.3-2'
+ *   'CK.03-02.01'           -> 'CK.3-2.1'
+ *   'CK.03-02-shared-shell' -> 'CK.3-2'   (directory form)
+ * Returns null for UNQUALIFIED ids ('02', 'HQ-11', '11.01', legacy CODE-NN) so
+ * callers fall back to bare-token matching with their existing behavior intact.
+ */
+function bracketQualifiedKey(s: string): string | null {
+  const m = String(s).match(/^([A-Za-z][\w]*)\.(\d+)-(\d+(?:\.\d+)*)/);
+  if (!m) return null;
+  const code = m[1].toUpperCase();
+  const milestone = parseInt(m[2], 10);
+  const phase = m[3].split('.').map(n => parseInt(n, 10)).join('.');
+  return `${code}.${milestone}-${phase}`;
+}
+
+/**
  * Check if a directory name's phase token matches the normalized phase exactly.
  */
 function phaseTokenMatches(dirName: string, normalized: string): boolean {
+  // #612: when the query is a milestone-qualified bracket id, compare on the full
+  // qualified key (milestone INCLUDED) so it resolves to its own milestone's dir
+  // and never the first same-numbered dir of another milestone. normalizePhaseName
+  // preserves the qualified form for bracket inputs, so `normalized` arrives
+  // qualified here. Unqualified ids (null key) keep the bare-token path below.
+  const qKey = bracketQualifiedKey(normalized);
+  if (qKey) return bracketQualifiedKey(dirName) === qKey;
+
   const token = extractPhaseToken(dirName);
   if (token.toUpperCase() === normalized.toUpperCase()) return true;
   const stripped = dirName.replace(/^[A-Z]{1,6}-(?=\d)/i, '');
