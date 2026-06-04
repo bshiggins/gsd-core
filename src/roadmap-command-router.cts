@@ -181,13 +181,16 @@ function routeRoadmapCommand({ roadmap, args, cwd, raw, error }: RouteRoadmapCom
       },
       'upgrade': () => {
         const dryRun = !args.includes('--apply');
-        const convention = args.find((_a, i) => args[i - 1] === '--convention') || 'milestone-prefixed';
-        if (convention !== 'milestone-prefixed') {
-          process.stderr.write('Only --convention milestone-prefixed is supported\n');
+        // #612: bracket is the terminal convention ("two conventions not three").
+        const convention = args.find((_a, i) => args[i - 1] === '--convention') || 'bracket';
+        if (convention !== 'bracket') {
+          process.stderr.write('Only --convention bracket is supported\n');
           process.exit(1);
         }
         const plan = roadmapUpgrade.computeMigrationPlan(cwd);
-        roadmapUpgrade.applyMigration(cwd, plan, { dryRun });
+        const result = roadmapUpgrade.applyMigration(cwd, plan, { dryRun });
+        // #612 HARD-REFUSE (no project_code) is a hard failure, not a no-op.
+        if (result && (result as { refused?: boolean }).refused) process.exit(1);
       },
     },
   });
