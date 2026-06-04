@@ -102,6 +102,14 @@
       ],
       "issue": "180"
     },
+    "validate": {
+      "files": [
+        "bug-3129-validate-commit-git-bypass.test.cjs",
+        "validate-bracket-reads.test.cjs",
+        "validate-context.test.cjs"
+      ],
+      "issue": "TBD"
+    },
     "verify": {
       "files": [
         "bug-2969-verify-reapply-patches.test.cjs",
