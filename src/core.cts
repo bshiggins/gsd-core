@@ -778,7 +778,23 @@ function renderPhaseId(id: PhaseId): string {
 
 function toDir(id: PhaseId, slug: string): string {
   const sub = id.subphase ? `.${id.subphase}` : '';
-  return `${id.project}.${id.milestone}-${id.phase}${sub}-${slug}`;
+  // Slug guard: the slug becomes an on-disk path segment, so collapse it to a
+  // safe lowercase token — never a path separator or `..` traversal.
+  const safeSlug = String(slug).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return `${id.project}.${id.milestone}-${id.phase}${sub}-${safeSlug}`;
+}
+
+// Milestone integers reserved as non-milestone sentinels (0.x backlog / 999.x
+// icebox); a phase id in these ranges has no real milestone.
+const SENTINEL_RANGES: readonly number[] = Object.freeze([0, 999]);
+
+function isSentinelPhaseId(phaseId: unknown): boolean {
+  const s = String(phaseId);
+  const bracket = s.match(/^[A-Za-z][\w]*\.(\d+)/); // bracket: milestone in the prefix
+  if (bracket) return SENTINEL_RANGES.includes(parseInt(bracket[1], 10));
+  const legacy = s.replace(/^[A-Z]{1,6}-(?=\d)/i, '').match(/^0*(\d+)/); // legacy/bare: leading int
+  if (!legacy) return false;
+  return SENTINEL_RANGES.includes(parseInt(legacy[1], 10));
 }
 
 /**
@@ -876,6 +892,12 @@ function comparePhaseNum(a: unknown, b: unknown): number {
  * Extract the phase token from a directory name.
  */
 function extractPhaseToken(dirName: string): string {
+  // Bracket dir form {CODE}.{MM}-{PP}[.{SS}]-slug → phase token 'PP[.SS]'.
+  // The `{CODE}.{MM}` prefix (dot-joined) distinguishes it from legacy
+  // hyphen-joined `{CODE}-{NN}` dirs, which fall through to the logic below.
+  const bracketDir = dirName.match(/^[A-Za-z][\w]*\.\d+-(\d+(?:\.\d+)?)/);
+  if (bracketDir) return bracketDir[1];
+
   const codePrefixMatch = dirName.match(/^([A-Z]{1,6})-(\d.*)/i);
   let prefix = '';
   let rest = dirName;
@@ -2218,6 +2240,8 @@ export = {
   parsePhaseId,
   renderPhaseId,
   toDir,
+  SENTINEL_RANGES,
+  isSentinelPhaseId,
   phaseMarkdownRegexSource,
   phaseMarkdownRegexSourceExact,
   comparePhaseNum,

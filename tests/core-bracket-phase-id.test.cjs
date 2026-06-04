@@ -80,3 +80,51 @@ describe('bracket grammar: getMilestoneFromPhaseId READING-B', () => {
     assert.strictEqual(core.getMilestoneFromPhaseId('CK-2-01'), 'v2.0');
   });
 });
+
+// ─── extractPhaseToken: bracket dir form (CARRY-FORWARD §3 PR1) ──────────────
+describe('bracket grammar: extractPhaseToken', () => {
+  test('extracts the phase token PP[.SS] from a bracket dir', () => {
+    assert.strictEqual(core.extractPhaseToken('CK.02-02.01-slug'), '02.01');
+    assert.strictEqual(core.extractPhaseToken('GSD.02-05-feature'), '05');
+    assert.strictEqual(core.extractPhaseToken('GSD.02-05.03-01'), '05.03'); // plan is not part of the token
+  });
+
+  test('legacy code-prefixed dirs still extract as before (no regression)', () => {
+    assert.strictEqual(core.extractPhaseToken('CK-01-foo'), 'CK-01');
+    assert.strictEqual(core.extractPhaseToken('02-04-some-slug'), '02-04');
+  });
+});
+
+// ─── sentinel guard: isSentinelPhaseId / SENTINEL_RANGES ────────────────────
+describe('bracket grammar: sentinel guard', () => {
+  test('SENTINEL_RANGES are the {0, 999} milestone ranges', () => {
+    assert.deepStrictEqual([...core.SENTINEL_RANGES], [0, 999]);
+  });
+
+  test('isSentinelPhaseId is true for milestone 0 / 999 across forms', () => {
+    assert.strictEqual(core.isSentinelPhaseId('GSD.999-01'), true);
+    assert.strictEqual(core.isSentinelPhaseId('GSD.00-01'), true);
+    assert.strictEqual(core.isSentinelPhaseId('999.1'), true);
+    assert.strictEqual(core.isSentinelPhaseId('0.1'), true);
+  });
+
+  test('isSentinelPhaseId is false for ordinary milestones', () => {
+    assert.strictEqual(core.isSentinelPhaseId('GSD.02-05'), false);
+    assert.strictEqual(core.isSentinelPhaseId('2-01'), false);
+  });
+});
+
+// ─── slug guard: toDir never emits a path-traversal slug ────────────────────
+describe('bracket grammar: toDir slug guard', () => {
+  test('a hostile slug is sanitized to a safe filesystem token', () => {
+    const id = core.parsePhaseId('[GSD.02] 05');
+    const dir = core.toDir(id, '../../etc/passwd');
+    assert.ok(!dir.includes('/'), `dir must not contain a path separator: ${dir}`);
+    assert.ok(!dir.includes('..'), `dir must not contain '..': ${dir}`);
+    assert.strictEqual(dir, 'GSD.02-05-etc-passwd');
+  });
+
+  test('a clean slug is preserved (round-trip unaffected)', () => {
+    assert.strictEqual(core.toDir(core.parsePhaseId('[GSD.02] 05.03-01'), 'feature'), 'GSD.02-05.03-feature');
+  });
+});
