@@ -64,6 +64,7 @@
         "bug-3128-roadmap-plan-count-slug-layout.test.cjs",
         "bug-3599-roadmap-get-phase-project-code-prefix.test.cjs",
         "enh-2447-roadmap-wave-deps.test.cjs",
+        "roadmap-bracket-reads.test.cjs",
         "roadmap-mode-field.test.cjs",
         "roadmap-phase-fallback.test.cjs",
         "roadmap.test.cjs"

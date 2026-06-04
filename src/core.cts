@@ -798,6 +798,22 @@ function isSentinelPhaseId(phaseId: unknown): boolean {
 }
 
 /**
+ * #612: the prefix grammar that introduces a phase heading or checklist bullet,
+ * shared across every read-path matcher so bracket tolerance never drifts across
+ * the (many) inline copies in roadmap.cts / validate.cts / verify.cts.
+ *
+ * A phase heading is introduced by EITHER:
+ *   - a `[CODE.MM]` bracket, with the legacy `Phase` word now optional
+ *     (`### [GSD.02] 05:`, `### [GSD] Phase 2-01:`), OR
+ *   - the legacy literal `Phase` (`### Phase 5:`).
+ *
+ * The bracket-or-`Phase` requirement is deliberate: a bare `### 05: Foo` is NOT a
+ * phase heading. The phase/milestone-boundary discriminator (the trailing colon)
+ * lives at each call site, not in this fragment.
+ */
+const PHASE_HEADING_PREFIX_SRC = '(?:\\[[^\\]]+\\]\\s*(?:Phase\\s+)?|Phase\\s+)';
+
+/**
  * Render a regex source fragment matching a phase number against ROADMAP/STATE
  * prose regardless of zero-padding on either side.
  */
@@ -2242,6 +2258,7 @@ export = {
   toDir,
   SENTINEL_RANGES,
   isSentinelPhaseId,
+  PHASE_HEADING_PREFIX_SRC,
   phaseMarkdownRegexSource,
   phaseMarkdownRegexSourceExact,
   comparePhaseNum,

@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import core = require('./core.cjs');
-const { escapeRegex, normalizePhaseName, phaseMarkdownRegexSource, phaseMarkdownRegexSourceExact, output, error, findPhaseInternal, stripShippedMilestones, extractCurrentMilestone, replaceInCurrentMilestone, phaseTokenMatches } = core;
+const { escapeRegex, normalizePhaseName, PHASE_HEADING_PREFIX_SRC, phaseMarkdownRegexSource, phaseMarkdownRegexSourceExact, output, error, findPhaseInternal, stripShippedMilestones, extractCurrentMilestone, replaceInCurrentMilestone, phaseTokenMatches } = core;
 import { platformWriteSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
@@ -105,17 +105,19 @@ function countPhasePlansAndSummaries(phaseDir: string): PhasePlansAndSummaries {
  * checklist-only match), or null if the phase is not present at all.
  */
 function searchPhaseInContent(content: string, escapedPhase: string, phaseNum: string): PhaseSearchResult | null {
-  // Match "## Phase X:", "### Phase X:", or "#### Phase X:" with optional name
+  // Match "## Phase X:", "### Phase X:", "#### Phase X:" or the bracket form
+  // "### [GSD.02] X:" with optional name (#612, via PHASE_HEADING_PREFIX_SRC).
   const phasePattern = new RegExp(
-    `#{2,4}\\s*(?:\\[[^\\]]+\\]\\s*)?Phase\\s+${escapedPhase}:\\s*([^\\n]+)`,
+    `#{2,4}\\s*${PHASE_HEADING_PREFIX_SRC}${escapedPhase}:\\s*([^\\n]+)`,
     'i'
   );
   const headerMatch = content.match(phasePattern);
 
   if (!headerMatch) {
-    // Fallback: check if phase exists in summary list but missing detail section
+    // Fallback: check if phase exists in summary list but missing detail section.
+    // Bracket bullets `- [ ] **[GSD.02] X: …**` are accepted alongside `**Phase X:**`.
     const checklistPattern = new RegExp(
-      `-\\s*\\[[ x]\\]\\s*\\*\\*Phase\\s+${escapedPhase}:\\s*([^*]+)\\*\\*`,
+      `-\\s*\\[[ x]\\]\\s*\\*\\*${PHASE_HEADING_PREFIX_SRC}${escapedPhase}:\\s*([^*]+)\\*\\*`,
       'i'
     );
     const checklistMatch = content.match(checklistPattern);
@@ -137,9 +139,10 @@ function searchPhaseInContent(content: string, escapedPhase: string, phaseNum: s
   const headerIndex = headerMatch.index!;
 
   // Find the end of this section (next ## or ### phase header, or end of file).
-  // Also matches bracket-prefixed headings like ### [GSD] Phase 2-01:.
+  // Also matches bracket-prefixed headings like ### [GSD] Phase 2-01: and the
+  // #612 bracket form ### [GSD.02] 05: (Phase word optional).
   const restOfContent = content.slice(headerIndex);
-  const nextHeaderMatch = restOfContent.match(/\n#{2,4}\s+(?:\[[^\]]+\]\s*)?Phase\s+[\w][\w.-]*/i);
+  const nextHeaderMatch = restOfContent.match(new RegExp(`\\n#{2,4}\\s+${PHASE_HEADING_PREFIX_SRC}[\\w][\\w.-]*`, 'i'));
   const sectionEnd = nextHeaderMatch
     ? headerIndex + nextHeaderMatch.index!
     : content.length;
@@ -251,8 +254,13 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
   const content = extractCurrentMilestone(rawContent, cwd);
   const phasesDir = planningPaths(cwd).phases;
 
-  // Extract all phase headings: ## Phase N: Name or ### Phase N: Name
-  const phasePattern = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+(\d+[A-Z]?(?:[.-]\d+)*)\s*:\s*([^\n]+)/gi;
+  // Extract all phase headings. Two accepted forms, both colon-terminated:
+  //   legacy / M-NN:  ## Phase N: Name   ### [GSD] Phase 2-01: Name
+  //   bracket (#612):  ### [GSD.02] 05: Name   ### [GSD.02] 05.03: Name
+  // The bracket form carries the milestone inside the bracket and the phase
+  // token directly after it (no "Phase" word), so a bracket prefix OR the
+  // literal "Phase" is required — a bare `### 05: Foo` is not a phase heading.
+  const phasePattern = /#{2,4}\s*(?:\[[^\]]+\]\s*(?:Phase\s+)?|Phase\s+)(\d+[A-Z]?(?:[.-]\d+)*)\s*:\s*([^\n]+)/gi;
   const phases: Array<{
     number: string;
     name: string;
@@ -286,7 +294,9 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
     const restOfContent = content.slice(sectionStart);
     // #3691: `\d` → `\d[\d.]*` so decimal phase headings (e.g. `### Phase 02.3:`) are
     // recognised as section boundaries.
-    const nextHeader = restOfContent.match(/\n#{2,4}\s+(?:\[[^\]]+\]\s*)?Phase\s+\d[\d.-]*/i);
+    // #612: bracket headings (`### [GSD.02] 06:`) also bound a section — accept a
+    // bracket prefix with the "Phase" word optional, mirroring phasePattern.
+    const nextHeader = restOfContent.match(/\n#{2,4}\s+(?:\[[^\]]+\]\s*(?:Phase\s+)?|Phase\s+)\d[\d.-]*/i);
     const sectionEnd = nextHeader ? sectionStart + nextHeader.index! : content.length;
     const section = content.slice(sectionStart, sectionEnd);
 
@@ -330,7 +340,7 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
     // #3537: padding-tolerant fragment — the heading discovered above may use
     // a different padding than the summary-bullet checkbox below it (mixed
     // padding inside one ROADMAP is legal and seen in real projects).
-    const checkboxPattern = new RegExp(`-\\s*\\[(x| )\\]\\s*.*Phase\\s+${phaseMarkdownRegexSource(phaseNum)}[:\\s]`, 'i');
+    const checkboxPattern = new RegExp(`-\\s*\\[(x| )\\]\\s*.*${PHASE_HEADING_PREFIX_SRC}${phaseMarkdownRegexSource(phaseNum)}[:\\s]`, 'i');
     const checkboxMatch = content.match(checkboxPattern);
     const roadmapComplete = checkboxMatch ? checkboxMatch[1] === 'x' : false;
 
@@ -377,7 +387,7 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
   const completedPhases = phases.filter(p => p.disk_status === 'complete').length;
 
   // Detect phases in summary list without detail sections (malformed ROADMAP)
-  const checklistPattern = /-\s*\[[ x]\]\s*\*\*Phase\s+(\d+[A-Z]?(?:\.\d+)*)/gi;
+  const checklistPattern = new RegExp(`-\\s*\\[[ x]\\]\\s*\\*\\*${PHASE_HEADING_PREFIX_SRC}(\\d+[A-Z]?(?:[.-]\\d+)*)`, 'gi');
   const checklistPhases = new Set<string>();
   let checklistMatch: RegExpExecArray | null;
   while ((checklistMatch = checklistPattern.exec(content)) !== null) {
