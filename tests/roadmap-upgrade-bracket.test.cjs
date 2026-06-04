@@ -311,6 +311,33 @@ describe('PR3-C: migrator sentinel + slug safety (#612)', () => {
       `sentinel milestone should bracket-ify to [GSD.999] 01; got ${JSON.stringify(tos)}`);
   });
 
+  test('cross-ref prose retarget: multi-milestone `Phase 1:` collision behavior', () => {
+    writeConfig(tmpDir, { project_code: 'GSD' });
+    writeRoadmap(tmpDir,
+`# Roadmap
+
+## v1.0 Foundation
+
+### Phase 1: A
+**Goal:** g
+
+## v2.0 Next
+
+### Phase 1: B
+**Goal:** g
+`);
+    fs.writeFileSync(p(tmpDir, 'STATE.md'),
+      '# State\n\nv1 work tracked Phase 1: in milestone one.\nv2 work tracked Phase 1: in milestone two.\n');
+    const pl = plan(tmpDir);
+    // Bare prose `Phase 1:` carries NO milestone context, so it cannot be
+    // unambiguously retargeted (v1 vs v2). PR 3 must NOT emit colliding/ambiguous
+    // cross-ref edits for it — STATE/PROJECT reference rewriting is deferred to
+    // PR 4 (write path, where state.cts emit lives).
+    const proseEdits = (pl.crossRefEdits || []).filter((e) => /Phase 1:/.test(e.from));
+    assert.equal(proseEdits.length, 0,
+      `ambiguous bare-prose cross-refs must not be retargeted in PR 3; got ${JSON.stringify(pl.crossRefEdits)}`);
+  });
+
   test('a hostile slug in a phase dir is sanitized (no path traversal)', () => {
     writeConfig(tmpDir, { project_code: 'GSD' });
     writeRoadmap(tmpDir,

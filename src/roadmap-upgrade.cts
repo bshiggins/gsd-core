@@ -440,46 +440,17 @@ function computeMigrationPlan(cwd: string, options: Record<string, unknown> = {}
     }
   }
 
-  // ── Cross-ref edits for STATE.md and PROJECT.md ──────────────────────────────
+  // ── Cross-ref edits for STATE.md / PROJECT.md — DEFERRED to PR 4 ─────────────
+  // Bare prose references (`Phase 1:`) carry NO milestone context, so in a
+  // multi-milestone repo the same `from` string maps to two different bracket
+  // targets — and the string-replace apply (split/join) would assign every
+  // occurrence the FIRST milestone, silently corrupting the others (the exact
+  // ambiguity #612 exists to kill). The heading/dir paths avoid this via
+  // lineIndex / ordered-_used matching; prose has no such anchor. STATE/PROJECT
+  // reference emit belongs with the PR 4 write path (state.cts), where it can be
+  // generated from a single milestone-scoped source rather than guessed from
+  // ambiguous prose. Emitting nothing here is correct-and-incomplete, not wrong.
   const crossRefEdits: CrossRefEdit[] = [];
-  for (const fileName of ['STATE.md', 'PROJECT.md']) {
-    const filePath = path.join(pDir, fileName);
-    if (!fs.existsSync(filePath)) continue;
-    const fileContent = fs.readFileSync(filePath, 'utf8');
-
-    for (const e of idMapping.values()) {
-      const mm = pad2(e.milestoneInt);
-      const newDirPrefix = `${code}.${mm}-${e.token}-`;
-      const newProse = `[${code}.${mm}] ${e.token}:`;
-
-      const oldNums = new Set<string>();
-      if (e.source === 'mnn') {
-        const rest = e.mnnRest!;
-        oldNums.add(`${e.milestoneInt}-${rest}`);
-        oldNums.add(`${mm}-${rest}`);
-      } else {
-        const ln = e.legacyPhaseNum!;
-        const intPart = parseInt(ln, 10);
-        const suf = ln.indexOf('.') !== -1 ? ln.slice(ln.indexOf('.')) : '';
-        oldNums.add(ln);
-        oldNums.add(`${intPart}${suf}`);
-        oldNums.add(`${pad2(intPart)}${suf}`);
-        oldNums.add(String(intPart));
-        oldNums.add(pad2(intPart));
-      }
-
-      for (const oldNum of oldNums) {
-        const oldDirPrefix = `${code}-${oldNum}-`;
-        if (fileContent.includes(oldDirPrefix)) {
-          crossRefEdits.push({ file: fileName, from: oldDirPrefix, to: newDirPrefix });
-        }
-        const oldProse = `Phase ${oldNum}:`;
-        if (fileContent.includes(oldProse)) {
-          crossRefEdits.push({ file: fileName, from: oldProse, to: newProse });
-        }
-      }
-    }
-  }
 
   return { alreadyMigrated: false, phases, roadmapEdits, crossRefEdits };
 }
