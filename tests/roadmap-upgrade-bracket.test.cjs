@@ -241,4 +241,92 @@ describe('PR3-A: migrator apply end-to-end (#612)', () => {
     const cfg = JSON.parse(fs.readFileSync(p(tmpDir, 'config.json'), 'utf8'));
     assert.equal(cfg.phase_id_convention, 'bracket', 'config convention set to bracket');
   });
+
+  test('--apply on a DIRTY tree refuses and mutates nothing', () => {
+    const { execSync } = require('node:child_process');
+    writeConfig(tmpDir, { project_code: 'GSD' });
+    writeRoadmap(tmpDir,
+`# Roadmap
+
+## v2.0 Foundation
+
+### Phase 1: Foo
+**Goal:** g
+`);
+    mkPhaseDir(tmpDir, '01-foo');
+    execSync('git add -A && git commit -m fixture -q', { cwd: tmpDir });
+    // Dirty the tree.
+    fs.writeFileSync(p(tmpDir, 'ROADMAP.md'), fs.readFileSync(p(tmpDir, 'ROADMAP.md'), 'utf8') + '\nuncommitted\n');
+
+    const r = runGsdTools(['roadmap', 'upgrade', '--apply'], tmpDir);
+    assert.ok(!r.success, `dirty tree must refuse; got success=${r.success}`);
+    assert.ok(/dirty|commit|stash/i.test(r.error), `should explain the dirty-tree refusal; got ${r.error}`);
+    assert.ok(fs.existsSync(p(tmpDir, 'phases', '01-foo')), 'no dir should be renamed on a dirty tree');
+  });
+
+  test('--apply rolls back on a mid-apply fault (target occupied)', () => {
+    const { execSync } = require('node:child_process');
+    writeConfig(tmpDir, { project_code: 'GSD' });
+    writeRoadmap(tmpDir,
+`# Roadmap
+
+## v2.0 Foundation
+
+### Phase 1: Foo
+**Goal:** g
+`);
+    mkPhaseDir(tmpDir, '01-foo');
+    fs.writeFileSync(p(tmpDir, 'phases', '01-foo', 'PLAN.md'), 'x'); // tracked content (git ignores empty dirs)
+    // Occupy the rename TARGET with a committed regular file so renameSync throws.
+    fs.writeFileSync(p(tmpDir, 'phases', 'GSD.02-01-foo'), 'occupied');
+    execSync('git add -A && git commit -m fixture -q', { cwd: tmpDir });
+
+    const r = runGsdTools(['roadmap', 'upgrade', '--apply'], tmpDir);
+    assert.ok(!r.success, `a mid-apply fault must fail (rolled back); got success=${r.success}`);
+    // Rollback (git reset --hard + clean) restores the original layout.
+    assert.ok(fs.existsSync(p(tmpDir, 'phases', '01-foo')), 'original dir must be restored after rollback');
+    const cfg = JSON.parse(fs.readFileSync(p(tmpDir, 'config.json'), 'utf8'));
+    assert.notEqual(cfg.phase_id_convention, 'bracket', 'config must not be flipped after a rolled-back apply');
+  });
+});
+
+describe('PR3-C: migrator sentinel + slug safety (#612)', () => {
+  let tmpDir;
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => cleanup(tmpDir));
+
+  test('sentinel milestone v999 migrates to [CODE.999] (not skipped/mangled)', () => {
+    writeConfig(tmpDir, { project_code: 'GSD' });
+    writeRoadmap(tmpDir,
+`# Roadmap
+
+## v999.0 Backlog
+
+### Phase 1: Someday
+**Goal:** g
+`);
+    const pl = plan(tmpDir);
+    const tos = pl.roadmapEdits.map((e) => e.to);
+    assert.ok(tos.some((t) => /\[GSD\.999\]\s*01\s*:\s*Someday/.test(t)),
+      `sentinel milestone should bracket-ify to [GSD.999] 01; got ${JSON.stringify(tos)}`);
+  });
+
+  test('a hostile slug in a phase dir is sanitized (no path traversal)', () => {
+    writeConfig(tmpDir, { project_code: 'GSD' });
+    writeRoadmap(tmpDir,
+`# Roadmap
+
+## v2.0 Foundation
+
+### Phase 1: Foo
+**Goal:** g
+`);
+    // A dir whose slug contains traversal characters.
+    mkPhaseDir(tmpDir, '01-..-..-etc');
+    const pl = plan(tmpDir);
+    const target = pl.phases.find((x) => x.oldDir === '01-..-..-etc');
+    assert.ok(target, `dir should be matched; got ${JSON.stringify(pl.phases)}`);
+    assert.ok(!target.newDir.includes('..'), `newDir must not contain '..'; got ${target.newDir}`);
+    assert.ok(!/[/\\]/.test(target.newDir.replace(/^[^/]*/, '')), `newDir must not introduce path separators; got ${target.newDir}`);
+  });
 });
