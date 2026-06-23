@@ -129,3 +129,41 @@ describe('bracket grammar: toDir slug guard', () => {
     assert.strictEqual(core.toDir(core.parsePhaseId('[GSD.02] 05.03-01'), 'feature'), 'GSD.02-05.03-feature');
   });
 });
+
+// The canonical reference doc IS the deployed grammar contract (#612 PR6). Lock its
+// worked examples to the code so the doc cannot silently drift from phase-id.cjs.
+describe('reference doc: phase-id-convention.md examples agree with the code', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const DOC = path.join(__dirname, '..', 'gsd-core', 'references', 'phase-id-convention.md');
+  const text = fs.readFileSync(DOC, 'utf8');
+  // Examples table rows: | `display` | `dir` | Milestone | Phase | Sub |
+  const rows = text.split('\n')
+    .map(l => l.match(/^\|\s*`([^`]+)`\s*\|\s*`([^`]+)`\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|\s*([0-9]+|—|-)\s*\|/))
+    .filter(Boolean)
+    .map(m => ({ display: m[1], dir: m[2], milestone: m[3], phase: m[4], sub: m[5] }));
+
+  test('the Examples table has at least 3 worked rows', () => {
+    assert.ok(rows.length >= 3, `expected >=3 example rows; found ${rows.length}`);
+  });
+
+  test('each documented display/dir example parses + renders as written', () => {
+    for (const r of rows) {
+      const fromDisplay = core.parsePhaseId(r.display);
+      const fromDir = core.parsePhaseId(r.dir);
+      assert.deepStrictEqual(fromDisplay, fromDir, `display "${r.display}" and dir "${r.dir}" must parse to the same tuple`);
+      assert.strictEqual(core.renderPhaseId(fromDisplay), r.display, `renderPhaseId must reproduce "${r.display}"`);
+      assert.strictEqual(parseInt(fromDisplay.milestone, 10), parseInt(r.milestone, 10), `Milestone column for "${r.display}"`);
+      assert.strictEqual(parseInt(fromDisplay.phase, 10), parseInt(r.phase, 10), `Phase column for "${r.display}"`);
+      if (/^\d+$/.test(r.sub)) {
+        assert.strictEqual(parseInt(fromDisplay.subphase, 10), parseInt(r.sub, 10), `Sub column for "${r.display}"`);
+      } else {
+        assert.strictEqual(fromDisplay.subphase, undefined, `"${r.display}" should have no subphase`);
+      }
+    }
+  });
+
+  test('READING-B claim holds: bracket milestone comes from the [CODE.MM] prefix', () => {
+    assert.strictEqual(core.getMilestoneFromPhaseId('CK.02-05.03', 'bracket'), 'v2.0');
+  });
+});
