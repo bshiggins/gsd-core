@@ -5384,3 +5384,81 @@ describe('PR4: bracket write-path emit — phase add (#612)', () => {
     assert.doesNotMatch(roadmap, /###\s*Phase\s+\d/, 'must not emit legacy Phase headings in a bracket repo');
   });
 });
+
+// ── PR4 (#612): bracket write-path emit — phase insert ───────────────────────
+// `phase insert <PP> <desc>` in a bracket repo inserts a sub-phase after the
+// `[CODE.MM] PP` phase, emitting `### [CODE.MM] PP.D` + `CODE.MM-PP.D-slug`,
+// gated on convention (legacy `### Phase N.D` path byte-untouched). MM comes
+// from the current milestone (same `bracketMilestoneInt` source as add); D is
+// the next free decimal under PP. Heading-style only — bracket roadmaps are
+// heading-style by construction (migrator + add + add-batch all emit `###`
+// headings, never bullet phase lists). Bullet-style bracket insert + full-token
+// (`CK.02-01`) after-phase args are conscious defers; the not-located refusal
+// test below pins that bracket insert refuses rather than corrupts.
+describe('PR4: bracket write-path emit — phase insert (#612)', () => {
+  let tmpDir;
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => cleanup(tmpDir));
+
+  const pp = (...r) => path.join(tmpDir, '.planning', ...r);
+  function seedBracketRepo() {
+    fs.writeFileSync(pp('config.json'), JSON.stringify({ project_code: 'CK', phase_id_convention: 'bracket' }, null, 2));
+    fs.writeFileSync(pp('STATE.md'), '---\nmilestone: v2.0\n---\n');
+    fs.writeFileSync(pp('ROADMAP.md'),
+`# Roadmap
+
+## v2.0 Foundation
+
+### [CK.02] 01: Foo
+**Goal:** g
+
+### [CK.02] 02: Bar
+**Goal:** g
+`);
+    fs.mkdirSync(pp('phases', 'CK.02-01-foo'), { recursive: true });
+    fs.mkdirSync(pp('phases', 'CK.02-02-bar'), { recursive: true });
+  }
+
+  test('bracket repo: phase insert 01 emits [CK.02] 01.01 heading + CK.02-01.01-slug dir, between Foo and Bar', () => {
+    seedBracketRepo();
+    const r = runGsdTools('phase insert 01 Hotfix', tmpDir);
+    assert.ok(r.success, `phase insert failed: ${r.error}`);
+    const roadmap = fs.readFileSync(pp('ROADMAP.md'), 'utf-8');
+    assert.match(roadmap, /###\s*\[CK\.02\]\s*01\.01:\s*Hotfix/, `expected bracket subphase heading; got:\n${roadmap}`);
+    assert.ok(fs.existsSync(pp('phases', 'CK.02-01.01-hotfix')),
+      `expected dir CK.02-01.01-hotfix; got ${fs.readdirSync(pp('phases'))}`);
+    assert.doesNotMatch(roadmap, /###\s*Phase\s+\d/, 'must not emit a legacy Phase heading in a bracket repo');
+    const iFoo = roadmap.indexOf('Foo'), iHot = roadmap.indexOf('Hotfix'), iBar = roadmap.indexOf('Bar');
+    assert.ok(iFoo < iHot && iHot < iBar, `Hotfix should sit between Foo and Bar; got:\n${roadmap}`);
+  });
+
+  test('bracket repo: a second insert after the same phase increments the decimal (01.02)', () => {
+    seedBracketRepo();
+    const r1 = runGsdTools('phase insert 01 First', tmpDir);
+    assert.ok(r1.success, `first insert failed: ${r1.error}`);
+    const r2 = runGsdTools('phase insert 01 Second', tmpDir);
+    assert.ok(r2.success, `second insert failed: ${r2.error}`);
+    const roadmap = fs.readFileSync(pp('ROADMAP.md'), 'utf-8');
+    assert.match(roadmap, /###\s*\[CK\.02\]\s*01\.01:\s*First/, 'first insert stays 01.01');
+    assert.match(roadmap, /###\s*\[CK\.02\]\s*01\.02:\s*Second/, `second insert should be 01.02; got:\n${roadmap}`);
+    assert.ok(fs.existsSync(pp('phases', 'CK.02-01.02-second')), 'dir CK.02-01.02-second');
+  });
+
+  test('bracket repo: insert after a non-existent phase refuses (heading not located) — pins the defer boundary', () => {
+    seedBracketRepo();
+    const r = runGsdTools('phase insert 99 Hotfix', tmpDir);
+    assert.ok(!r.success, 'expected refusal when the after-phase heading is absent');
+    assert.match(String(r.error) + String(r.output), /not found|99/i, `error should name the missing phase; got ${r.error}`);
+    assert.ok(!fs.existsSync(pp('phases', 'CK.02-99.01-hotfix')), 'must not create a dir for a non-located after-phase');
+  });
+
+  test('legacy repo (no convention): phase insert is unchanged — emits ### Phase N.D', () => {
+    fs.writeFileSync(pp('config.json'), JSON.stringify({ project_code: 'CK' }, null, 2));
+    fs.writeFileSync(pp('ROADMAP.md'), `# Roadmap v1.0\n\n### Phase 1: Foundation\n**Goal:** g\n\n### Phase 2: Next\n**Goal:** g\n`);
+    const r = runGsdTools('phase insert 1 Hotfix', tmpDir);
+    assert.ok(r.success, `legacy insert failed: ${r.error}`);
+    const roadmap = fs.readFileSync(pp('ROADMAP.md'), 'utf-8');
+    assert.match(roadmap, /###\s*Phase\s+01\.1:\s*Hotfix/, 'legacy repo must keep the Phase N.D form (normalized base)');
+    assert.doesNotMatch(roadmap, /\[CK\.\d/, 'legacy repo must not emit bracket');
+  });
+});

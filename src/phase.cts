@@ -707,6 +707,28 @@ function nextBracketSubIndex(roadmapContent: string, projectCode: string, milest
   return (used.size > 0 ? Math.max(...used) : 0) + 1;
 }
 
+/**
+ * #612 bracket write path — the next free decimal D under a given phase PP within
+ * a milestone. Sub-phases are `[CODE.MM] PP.D` / dir `CODE.MM-PP.D-slug`. Anchored
+ * to the specific PP (NOT the generic `nextBracketSubIndex`, whose `[CODE.MM] (\d+)`
+ * capture would grab the PP itself): scans bracket sub-phase tokens (heading OR
+ * bullet) + bracket sub-dirs on disk, returns max existing D + 1 (or 1).
+ */
+function nextBracketDecimal(roadmapContent: string, projectCode: string, milestoneInt: number, phaseInt: number, phasesDir: string): number {
+  const used = new Set<number>();
+  const tokenRe = new RegExp(`\\[${escapeRegex(projectCode)}\\.0*${milestoneInt}\\]\\s*0*${phaseInt}\\.(\\d+)`, 'gi');
+  let m: RegExpExecArray | null;
+  while ((m = tokenRe.exec(roadmapContent)) !== null) used.add(parseInt(m[1], 10));
+  const dirRe = new RegExp(`^${escapeRegex(projectCode)}\\.0*${milestoneInt}-0*${phaseInt}\\.(\\d+)-`, 'i');
+  try {
+    for (const d of fs.readdirSync(phasesDir)) {
+      const dm = d.match(dirRe);
+      if (dm) used.add(parseInt(dm[1], 10));
+    }
+  } catch { /* phases dir may not exist yet */ }
+  return (used.size > 0 ? Math.max(...used) : 0) + 1;
+}
+
 function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: string): void {
   if (!description) {
     error('description required for phase add');
@@ -959,6 +981,84 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
   output({ phases: results, count: results.length }, raw);
 }
 
+/**
+ * #612 bracket write path — `phase insert <PP> <desc>` inserts a sub-phase after
+ * the `[CODE.MM] PP` phase: emits `### [CODE.MM] PP.D` heading + `CODE.MM-PP.D-slug`
+ * dir, where MM = current milestone (`bracketMilestoneInt`, same source as add) and
+ * D = next free decimal under PP. Heading-style only — bracket roadmaps are
+ * heading-style by construction (migrator + add + add-batch all emit `###`
+ * headings, never bullet phase lists). Gated on the convention upstream, so the
+ * legacy dual-style path stays byte-untouched (§4 B6). Refuses (never corrupts)
+ * when the `### [CODE.MM] PP:` heading is absent or project_code is unset; the
+ * bare-PP after-phase grammar is the documented scope (full-token `CK.02-01` and
+ * bullet-style inserts are conscious defers).
+ */
+function insertBracketPhase(
+  cwd: string,
+  rawContent: string,
+  roadmapPath: string,
+  afterPhase: string,
+  description: string,
+  slug: string,
+  config: Record<string, unknown>,
+): { decimalPhase: string; dirName: string } {
+  const projectCode = (config.project_code as string) || '';
+  if (!projectCode) {
+    error('phase_id_convention is "bracket" but no project_code is set in .planning/config.json — bracket phase IDs are [CODE.MM] NN');
+  }
+  const mInt = bracketMilestoneInt(cwd);
+  const mm = String(mInt).padStart(2, '0');
+
+  // after-phase is the bare sub-index PP within the current milestone.
+  const ppInt = parseInt(String(afterPhase).trim(), 10);
+  if (!Number.isFinite(ppInt)) {
+    error(`phase insert: "${afterPhase}" is not a valid [${projectCode}.${mm}] phase sub-index`);
+  }
+  const pp = String(ppInt).padStart(2, '0');
+
+  // Locate the after-phase heading `### [CODE.MM] PP:` (zero-pad tolerant; the
+  // trailing `:` keeps it from matching an existing `PP.D` sub-phase heading).
+  const headingRe = new RegExp(
+    `(#{2,4}\\s*\\[${escapeRegex(projectCode)}\\.0*${mInt}\\]\\s*0*${ppInt}:[^\\n]*\\n)`,
+    'i',
+  );
+  const headingMatch = rawContent.match(headingRe);
+  if (!headingMatch) {
+    error(`Phase [${projectCode}.${mm}] ${pp} not found in ROADMAP.md`);
+  }
+
+  const phasesDir = path.join(planningDir(cwd), 'phases');
+  const d = nextBracketDecimal(rawContent, projectCode, mInt, ppInt, phasesDir);
+  const sub = String(d).padStart(2, '0');
+
+  const id = { project: projectCode, milestone: mm, phase: pp, subphase: sub };
+  const displayId = renderPhaseId(id);                                       // '[CK.02] 01.01'
+  const dirName = toDir(id, slug);                                           // 'CK.02-01.01-hotfix'
+  const decimalPhase = `${pp}.${sub}`;                                       // '01.01'
+  const afterDisplay = renderPhaseId({ project: projectCode, milestone: mm, phase: pp }); // '[CK.02] 01'
+
+  const dirPath = path.join(phasesDir, dirName);
+  platformEnsureDir(dirPath);
+  platformWriteSync(path.join(dirPath, '.gitkeep'), '');
+
+  const phaseEntry =
+    `\n### ${displayId}: ${description} (INSERTED)\n\n**Goal:** [Urgent work - to be planned]\n**Requirements**: TBD\n**Depends on:** ${afterDisplay}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${decimalPhase} to break down)\n`;
+
+  // Insert AFTER the after-phase heading section, BEFORE the next bracket phase
+  // heading (`### [CODE.MM] N…`), or at end-of-doc. (Mirrors the legacy
+  // next-phase insertion-point logic, with the bracket heading grammar.)
+  const headerIdx = rawContent.indexOf(headingMatch![0]);
+  const afterHeader = rawContent.slice(headerIdx + headingMatch![0].length);
+  const nextPhaseMatch = afterHeader.match(/\n#{2,4}\s+\[[A-Za-z][\w]*\.\d+\]\s*\d/);
+  const insertIdx = nextPhaseMatch
+    ? headerIdx + headingMatch![0].length + (nextPhaseMatch.index as number)
+    : rawContent.length;
+
+  const updatedContent = rawContent.slice(0, insertIdx) + phaseEntry + rawContent.slice(insertIdx);
+  platformWriteSync(roadmapPath, updatedContent);
+  return { decimalPhase, dirName };
+}
+
 function cmdPhaseInsert(cwd: string, afterPhase: string, description: string, raw: boolean): void {
   if (!afterPhase || !description) {
     error('after-phase and description required for phase insert');
@@ -974,6 +1074,13 @@ function cmdPhaseInsert(cwd: string, afterPhase: string, description: string, ra
   const { decimalPhase, dirName } = withPlanningLock(cwd, () => {
     const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
     const content = extractCurrentMilestone(rawContent, cwd);
+
+    // #612 bracket write path: gated on convention, the entire legacy dual-style
+    // body below is byte-untouched (§4 B6 by construction).
+    const insertCfg = loadConfig(cwd);
+    if ((insertCfg.phase_id_convention as string | undefined) === 'bracket') {
+      return insertBracketPhase(cwd, rawContent, roadmapPath, afterPhase, description, slug, insertCfg);
+    }
 
     const normalizedAfter = normalizePhaseName(afterPhase);
     const afterPhaseEscaped = phaseMarkdownRegexSource(normalizedAfter);
