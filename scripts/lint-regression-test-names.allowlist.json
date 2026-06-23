@@ -235,6 +235,7 @@
   "bug-570-codex-leak-scanner.test.cjs",
   "bug-571-doc-writer-fix-mode-edit-only.test.cjs",
   "bug-580-local-sh-hook-bash-wrapper.test.cjs",
+  "bug-612-multimilestone-resolution.test.cjs",
   "bug-619-codebase-drift-gate-shim.test.cjs",
   "bug-621-plan-phase-gap-analysis-gsd-run.test.cjs",
   "bug-622-graphify-optional-graph-html.test.cjs",
