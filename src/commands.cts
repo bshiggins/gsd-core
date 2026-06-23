@@ -1525,6 +1525,7 @@ function cmdStats(cwd: string, format: string | undefined, raw: boolean): void {
   // Phase & plan stats (reuse progress pattern)
   const phasesByNumber = new Map<string, {
     number: string;
+    display_id: string;   // #612: bracket [CODE.MM] PP render; equals number otherwise
     name: string;
     plans: number;
     summaries: number;
@@ -1545,6 +1546,7 @@ function cmdStats(cwd: string, format: string | undefined, raw: boolean): void {
       const key = normalizePhaseName(match[1]);
       phasesByNumber.set(key, {
         number: key,
+        display_id: key,   // roadmap-heading source is never bracket (no `Phase` word in bracket ids)
         name: match[2].replace(/\(INSERTED\)/i, '').trim(),
         plans: 0,
         summaries: 0,
@@ -1562,12 +1564,13 @@ function cmdStats(cwd: string, format: string | undefined, raw: boolean): void {
       .sort((a, b) => comparePhaseNum(a, b));
 
     for (const dir of dirs) {
-      // Use extractPhaseToken to correctly parse M-NN-style and code-prefixed dir names.
+      // #612 B-display: token-aware (M-NN/code-prefixed) + bracket-aware via
+      // renderPhaseDisplay — the bracket slug is not a token prefix, so the old
+      // dir.slice(token.length) name extraction mangled it (`.02 01 foo`).
       const phaseToken = extractPhaseToken(dir) as string | null;
       const phaseNum = phaseToken || dir;
-      // phaseName is everything after the token (strip leading '-')
-      const afterToken = dir.slice(phaseToken ? phaseToken.length : 0).replace(/^-/, '');
-      const phaseName = afterToken ? afterToken.replace(/-/g, ' ') : '';
+      const disp = renderPhaseDisplay(dir);
+      const phaseName = disp.name;
       const phaseFiles = fs.readdirSync(path.join(phasesDir, dir));
       const plans = phaseFiles.filter(f => f.endsWith('-PLAN.md') || f === 'PLAN.md').length;
       const summaries = phaseFiles.filter(f => f.endsWith('-SUMMARY.md') || f === 'SUMMARY.md').length;
@@ -1578,9 +1581,12 @@ function cmdStats(cwd: string, format: string | undefined, raw: boolean): void {
       const status = determinePhaseStatus(plans, summaries, path.join(phasesDir, dir), 'Not Started');
 
       const normalizedNum = normalizePhaseName(phaseNum);
+      // Bracket dirs render `[CODE.MM] PP`; everything else uses the comparable number.
+      const displayId = disp.number.startsWith('[') ? disp.number : normalizedNum;
       const existing = phasesByNumber.get(normalizedNum);
       phasesByNumber.set(normalizedNum, {
         number: normalizedNum,
+        display_id: existing?.display_id || displayId,
         name: existing?.name || phaseName,
         plans: (existing?.plans || 0) + plans,
         summaries: (existing?.summaries || 0) + summaries,

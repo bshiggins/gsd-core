@@ -2156,6 +2156,45 @@ describe('stats command', () => {
     assert.strictEqual(stats.phases_completed, 1);
     assert.strictEqual(stats.phases.length, 1);
   });
+
+  // ── #612 PR5: cmdStats adds a bracket display_id + fixes the bracket slug name ──
+  // `number` stays the comparable dedup key; the bracket render goes in a new
+  // `display_id` field. Before this, bracket dirs got a broken slug name
+  // (`.02 01 foo`, the token isn't a dir prefix) and no display_id at all.
+  function statsBracketPhases() {
+    const pp = (...r) => path.join(tmpDir, '.planning', ...r);
+    fs.writeFileSync(pp('config.json'), JSON.stringify({ project_code: 'CK', phase_id_convention: 'bracket' }));
+    fs.writeFileSync(pp('STATE.md'), '---\nmilestone: v2.0\n---\n');
+    fs.writeFileSync(pp('ROADMAP.md'), '# Roadmap\n\n## v2.0 Foundation\n\n### [CK.02] 01: Foo\n');
+    for (const d of ['CK.02-01-foo', 'CK.02-02.01-hotfix']) fs.mkdirSync(pp('phases', d), { recursive: true });
+    const r = runGsdTools('stats json', tmpDir);
+    assert.ok(r.success, `stats failed: ${r.error}`);
+    return JSON.parse(r.output).phases;
+  }
+
+  test('B-display: bracket dir gets display_id [CODE.MM] PP + a clean slug name (#612)', () => {
+    const p = statsBracketPhases().find(x => x.number === '01');
+    assert.ok(p, 'expected a phase with number "01"');
+    assert.strictEqual(p.display_id, '[CK.02] 01', 'bracket display_id');
+    assert.strictEqual(p.name, 'foo', 'bracket slug name must be clean, not ".02 01 foo"');
+  });
+
+  test('B-display: bracket sub-phase dir gets display_id [CODE.MM] PP.SS (#612)', () => {
+    const p = statsBracketPhases().find(x => x.number === '02.01');
+    assert.ok(p, 'expected a phase with number "02.01"');
+    assert.strictEqual(p.display_id, '[CK.02] 02.01', 'bracket sub-phase display_id');
+    assert.strictEqual(p.name, 'hotfix');
+  });
+
+  test('B-display: a non-bracket phase has display_id equal to its number (#612)', () => {
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-auth'), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), '# Roadmap v1.0\n');
+    const r = runGsdTools('stats json', tmpDir);
+    assert.ok(r.success, `stats failed: ${r.error}`);
+    const p = JSON.parse(r.output).phases.find(x => x.number === '01');
+    assert.ok(p, 'expected phase 01');
+    assert.strictEqual(p.display_id, '01', 'non-bracket display_id equals number');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
