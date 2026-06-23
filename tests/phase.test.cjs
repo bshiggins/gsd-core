@@ -5371,4 +5371,16 @@ describe('PR4: bracket write-path emit — phase add (#612)', () => {
     assert.ok(!r.success, 'expected refusal when bracket convention has no project_code');
     assert.match(String(r.error) + String(r.output), /project_code/i, `error should mention project_code; got ${r.error}`);
   });
+
+  test('bracket repo: phase add-batch emits sequential [CODE.MM] SS for each description', () => {
+    seedBracketRepo(); // [CK.02] 01 exists → next is 02
+    const r = runGsdTools(['phase', 'add-batch', '--descriptions', '["Alpha","Beta"]'], tmpDir);
+    assert.ok(r.success, `add-batch failed: ${r.error}`);
+    const roadmap = fs.readFileSync(pp('ROADMAP.md'), 'utf-8');
+    assert.match(roadmap, /###\s*\[CK\.02\]\s*02:\s*Alpha/, `expected [CK.02] 02 Alpha; got:\n${roadmap}`);
+    assert.match(roadmap, /###\s*\[CK\.02\]\s*03:\s*Beta/, 'expected [CK.02] 03 Beta');
+    assert.ok(fs.existsSync(pp('phases', 'CK.02-02-alpha')), 'dir CK.02-02-alpha');
+    assert.ok(fs.existsSync(pp('phases', 'CK.02-03-beta')), 'dir CK.02-03-beta');
+    assert.doesNotMatch(roadmap, /###\s*Phase\s+\d/, 'must not emit legacy Phase headings in a bracket repo');
+  });
 });

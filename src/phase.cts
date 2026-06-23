@@ -858,12 +858,25 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
   }
   const projectCode = (config.project_code as string) || '';
   const prefix = projectCode ? `${projectCode}-` : '';
+  const convention = config.phase_id_convention as string | undefined;
+  if (convention === 'bracket' && !projectCode) {
+    error('phase_id_convention is "bracket" but no project_code is set in .planning/config.json — bracket phase IDs are [CODE.MM] NN');
+  }
 
   const results = withPlanningLock(cwd, () => {
     let rawContent = fs.readFileSync(roadmapPath, 'utf-8');
     const content = extractCurrentMilestone(rawContent, cwd);
+    // #612 bracket batch state: MM is fixed for the milestone; SS increments per
+    // description starting from the next free sub-index.
+    let bracketMm = '';
+    let bracketNextSub = 0;
+    if (convention === 'bracket') {
+      const mInt = bracketMilestoneInt(cwd);
+      bracketMm = String(mInt).padStart(2, '0');
+      bracketNextSub = nextBracketSubIndex(rawContent, projectCode, mInt, path.join(planningDir(cwd), 'phases'));
+    }
     let maxPhase = 0;
-    if (config.phase_naming !== 'custom') {
+    if (convention !== 'bracket' && config.phase_naming !== 'custom') {
       const phasePattern = /#{2,4}\s*Phase\s+(\d+)[A-Z]?(?:\.\d+)*:/gi;
       let m: RegExpExecArray | null;
       while ((m = phasePattern.exec(content)) !== null) {
@@ -888,7 +901,14 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
       const slug = generateSlugInternal(description) || '';
       let newPhaseId: number | string;
       let dirName: string;
-      if (config.phase_naming === 'custom') {
+      let _batchBracketSub = 0;
+      if (convention === 'bracket') {
+        _batchBracketSub = bracketNextSub++;
+        const ss = String(_batchBracketSub).padStart(2, '0');
+        const id = { project: projectCode, milestone: bracketMm, phase: ss };
+        newPhaseId = renderPhaseId(id);   // '[CK.02] 02'
+        dirName = toDir(id, slug);         // 'CK.02-02-slug'
+      } else if (config.phase_naming === 'custom') {
         newPhaseId = slug.toUpperCase();
         dirName = `${prefix}${newPhaseId}-${slug}`;
       } else {
@@ -899,12 +919,23 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
       const dirPath = path.join(planningDir(cwd), 'phases', dirName);
       platformEnsureDir(dirPath);
       platformWriteSync(path.join(dirPath, '.gitkeep'), '');
-      const dependsOn =
-        config.phase_naming === 'custom'
-          ? ''
-          : `\n**Depends on:** Phase ${typeof newPhaseId === 'number' ? newPhaseId - 1 : 'TBD'}`;
-      const phaseEntry =
-        `\n### Phase ${newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${newPhaseId} to break down)\n`;
+      let phaseEntry: string;
+      if (convention === 'bracket') {
+        const dependsOnB =
+          _batchBracketSub > 1
+            ? `\n**Depends on:** [${projectCode}.${bracketMm}] ${String(_batchBracketSub - 1).padStart(2, '0')}`
+            : '';
+        const planHint = String(_batchBracketSub).padStart(2, '0');
+        phaseEntry =
+          `\n### ${newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOnB}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${planHint} to break down)\n`;
+      } else {
+        const dependsOn =
+          config.phase_naming === 'custom'
+            ? ''
+            : `\n**Depends on:** Phase ${typeof newPhaseId === 'number' ? newPhaseId - 1 : 'TBD'}`;
+        phaseEntry =
+          `\n### Phase ${newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${newPhaseId} to break down)\n`;
+      }
       const lastSeparator = rawContent.lastIndexOf('\n---');
       rawContent =
         lastSeparator > 0
