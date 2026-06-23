@@ -690,6 +690,66 @@ describe('config-new-project command', () => {
     assert.strictEqual(out.created, true);
     assert.strictEqual(out.path, '.planning/config.json');
   });
+
+  // ── #612 PR4: bracket is the new-project default + auto-supplied project_code ──
+  // A fresh project defaults to phase_id_convention 'bracket', which requires a
+  // project_code ([CODE.MM] NN). buildNewProjectConfig derives one from the project
+  // dir basename (GSD fallback) so the bracket write path never refuses. Auto-supply
+  // is SCOPED to the bracket convention — overriding the convention leaves
+  // project_code null (legacy behavior unchanged). HOME/USERPROFILE point at a clean
+  // dir so a real ~/.gsd/defaults.json can't perturb the derived defaults.
+  test('#612: new project defaults to the bracket convention + a derived project_code', () => {
+    const result = runGsdTools(['config-new-project', '{}'], tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.phase_id_convention, 'bracket', 'new projects should default to the bracket convention');
+    assert.strictEqual(typeof config.project_code, 'string', 'bracket default must auto-supply a project_code');
+    assert.match(config.project_code, /^[A-Z][A-Z0-9]*$/, `project_code must be a valid [A-Z][A-Z0-9]* code; got ${config.project_code}`);
+  });
+
+  // The controlled-basename dir needs a CLEAN parent (no ancestor `.planning`),
+  // else planningDir() walks up to tmpDir's project and the basename derivation
+  // keys off the wrong dir. mkdtemp gives an isolated parent; cleaned per-test.
+  function inNamedDir(name, fn) {
+    const parent = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'gsd-pc-'));
+    const dir = path.join(parent, name);
+    fs.mkdirSync(dir, { recursive: true });
+    try { fn(dir, parent); } finally { cleanup(parent); }
+  }
+
+  test('#612: project_code is derived as the initials of a multi-word dir basename', () => {
+    inNamedDir('my-cool-app', (dir, parent) => {
+      const result = runGsdTools(['config-new-project', '{}'], dir, { HOME: parent, USERPROFILE: parent });
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const config = JSON.parse(fs.readFileSync(path.join(dir, '.planning', 'config.json'), 'utf-8'));
+      assert.strictEqual(config.project_code, 'MCA', `expected initials MCA from my-cool-app; got ${config.project_code}`);
+    });
+  });
+
+  test('#612: project_code is derived as the first 3 chars of a single-word dir basename', () => {
+    inNamedDir('carekit', (dir, parent) => {
+      const result = runGsdTools(['config-new-project', '{}'], dir, { HOME: parent, USERPROFILE: parent });
+      assert.ok(result.success, `Command failed: ${result.error}`);
+      const config = JSON.parse(fs.readFileSync(path.join(dir, '.planning', 'config.json'), 'utf-8'));
+      assert.strictEqual(config.project_code, 'CAR', `expected CAR from carekit; got ${config.project_code}`);
+    });
+  });
+
+  test('#612: an explicit project_code choice is respected (not overridden by derivation)', () => {
+    const result = runGsdTools(['config-new-project', '{"project_code":"CK"}'], tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.project_code, 'CK', 'an explicit project_code must win over derivation');
+    assert.strictEqual(config.phase_id_convention, 'bracket');
+  });
+
+  test('#612: auto-supply is scoped to bracket — overriding the convention leaves project_code null (pin)', () => {
+    const result = runGsdTools(['config-new-project', '{"phase_id_convention":null}'], tmpDir, { HOME: tmpDir, USERPROFILE: tmpDir });
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const config = readConfig(tmpDir);
+    assert.strictEqual(config.phase_id_convention, null, 'explicit null convention should be honored');
+    assert.strictEqual(config.project_code, null, 'no auto-supply off the bracket path (legacy behavior unchanged)');
+  });
 });
 
 // ─── config-set (research_before_questions and discuss_mode) ──────────────────

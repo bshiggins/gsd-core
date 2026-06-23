@@ -168,7 +168,28 @@ function validateShipPrBodySections(value: unknown): void {
  *
  * Returns a plain object — does NOT write any files.
  */
-function buildNewProjectConfig(userChoices: Record<string, unknown>): Record<string, unknown> {
+/**
+ * #612 — derive a short project_code from a project dir basename, used when the
+ * bracket convention (the new-project default) is active and no code was chosen
+ * (bracket IDs are `[CODE.MM] NN`, so a code is required). Multi-word basenames →
+ * initials (`my-cool-app` → `MCA`); single-word → first 3 chars (`carekit` →
+ * `CAR`). Uppercased, alphanumeric, ≤4 chars, must start with a letter (the
+ * parsePhaseId grammar). Falls back to `GSD` for empty / non-alpha-leading names.
+ */
+function deriveProjectCode(projectDir?: string): string {
+  const base = path.basename(String(projectDir || '')).trim();
+  const segments = base.split(/[^A-Za-z0-9]+/).filter(Boolean);
+  let code = '';
+  if (segments.length >= 2) {
+    code = segments.map((s) => s[0]).join('');
+  } else if (segments.length === 1) {
+    code = segments[0].slice(0, 3);
+  }
+  code = code.replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 4);
+  return /^[A-Za-z]/.test(code) ? code : 'GSD';
+}
+
+function buildNewProjectConfig(userChoices: Record<string, unknown>, projectDir?: string): Record<string, unknown> {
   const choices = userChoices || {};
   const homedir = os.homedir();
 
@@ -264,6 +285,7 @@ function buildNewProjectConfig(userChoices: Record<string, unknown>): Record<str
       context_warnings: true,
     },
     project_code: null,
+    phase_id_convention: 'bracket',   // #612: bracket is the new-project default
     phase_naming: 'sequential',
     agent_skills: {},
     claude_md_path: './.claude/CLAUDE.md',
@@ -314,6 +336,14 @@ function buildNewProjectConfig(userChoices: Record<string, unknown>): Record<str
     },
   };
 
+  // #612: the bracket convention requires a project_code. When bracket is active
+  // (the default, unless the user overrode it) and no code was chosen, auto-supply
+  // one from the project dir so the write path never refuses. Scoped to bracket —
+  // legacy / milestone-prefixed new projects keep project_code null as before.
+  if (config['phase_id_convention'] === 'bracket' && !config['project_code']) {
+    config['project_code'] = deriveProjectCode(projectDir);
+  }
+
   validateShipPrBodySections((config['ship'] as Record<string, unknown>)['pr_body_sections']);
   return config;
 }
@@ -354,7 +384,7 @@ function cmdConfigNewProject(cwd: string, choicesJson: string | undefined, raw: 
     error('Failed to create .planning directory: ' + (err as Error).message);
   }
 
-  const config = buildNewProjectConfig(userChoices);
+  const config = buildNewProjectConfig(userChoices, cwd);
 
   try {
     platformWriteSync(configPath, JSON.stringify(config, null, 2));
@@ -386,7 +416,7 @@ function ensureConfigFile(cwd: string): { created: boolean; reason?: string; pat
     return { created: false, reason: 'already_exists' };
   }
 
-  const config = buildNewProjectConfig({});
+  const config = buildNewProjectConfig({}, cwd);
 
   try {
     platformWriteSync(configPath, JSON.stringify(config, null, 2));
