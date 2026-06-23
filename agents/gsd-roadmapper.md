@@ -216,19 +216,27 @@ checklist entries are formatted throughout the generated ROADMAP.md.
 
 | Convention | Summary checklist form | Detail header form |
 |---|---|---|
-| `sequential` (default) | `- [ ] **Phase 1: Name**` | `### Phase 1: Name` |
+| `sequential` (fallback when the key is absent) | `- [ ] **Phase 1: Name**` | `### Phase 1: Name` |
 | `milestone-prefixed` | `- [ ] **Phase 1-01: Name**` | `### Phase 1-01: Name` |
+| `bracket` (the new-project default) | `- [ ] **[CODE.MM] NN: Name**` | `### [CODE.MM] NN: Name` |
 
 When `phase_id_convention` is absent or set to `"sequential"`, use plain sequential phase IDs
 (e.g. `Phase 1`, `Phase 2`). When set to `"milestone-prefixed"`, prefix each phase ID with the
 current milestone number and a two-digit phase index within that milestone
-(e.g. `Phase 1-01`, `Phase 1-02`, `Phase 2-01`). The milestone number comes from the project's
-active milestone context (default: `1` for new projects). This ensures downstream tools that
-parse `### Phase N-NN:` headers for milestone-scoped workflows receive correctly prefixed IDs.
+(e.g. `Phase 1-01`, `Phase 1-02`, `Phase 2-01`). When set to **`"bracket"`** (the convention new
+projects are scaffolded with), write each phase ID as `[CODE.MM] NN`: the configured `project_code`,
+a dot, the two-digit milestone `MM`, a closing bracket, then the two-digit phase index `NN` within
+that milestone (e.g. `[PROJ.01] 01`, `[PROJ.01] 02`, `[PROJ.02] 01`); on-disk phase dirs are
+`CODE.MM-NN-slug`. The milestone number comes from the project's active milestone context
+(default: `1` for new projects). This ensures downstream tools that parse `### Phase N-NN:` or
+`### [CODE.MM] NN:` headers for milestone-scoped workflows receive correctly formatted IDs.
 
-`project_code` is only a phase-directory prefix. Never include `project_code` in ROADMAP phase
-checklist entries or detail headers. For example, even when `project_code: "PROJ"` is configured,
-write `Phase 7` for `sequential` and `Phase 1-07` for `milestone-prefixed`, not `Phase PROJ-7`.
+For `sequential` and `milestone-prefixed`, `project_code` is only a phase-directory prefix. Never
+include `project_code` in their ROADMAP phase checklist entries or detail headers — even when
+`project_code: "PROJ"` is configured, write `Phase 7` for `sequential` and `Phase 1-07` for
+`milestone-prefixed`, not `Phase PROJ-7`. **The `bracket` convention is the deliberate exception:**
+its phase ID *is* `[CODE.MM] NN`, so the milestone-qualified `project_code` appears in every bracket
+heading and checklist by design — that is the convention, not a leak.
 
 ## Granularity Calibration
 
@@ -332,9 +340,10 @@ After roadmap creation, REQUIREMENTS.md gets updated with phase mappings:
 ### 1. Summary Checklist (under `## Phases`)
 
 Use the form matching `phase_id_convention` from config.
-Do not include `project_code` in checklist phase IDs.
+Do not include `project_code` as a separate prefix for `sequential`/`milestone-prefixed` — but for
+`bracket` the `[CODE.MM]` token IS the phase ID, so it appears in every checklist entry by design.
 
-**Sequential (default — when absent or `"sequential"`):**
+**Sequential (fallback — when absent or `"sequential"`):**
 
 ```markdown
 - [ ] **Phase 1: Name** - One-line description
@@ -350,12 +359,21 @@ Do not include `project_code` in checklist phase IDs.
 - [ ] **Phase 1-03: Name** - One-line description
 ```
 
+**Bracket (when `phase_id_convention: "bracket"` — the new-project default):**
+
+```markdown
+- [ ] **[PROJ.01] 01: Name** - One-line description
+- [ ] **[PROJ.01] 02: Name** - One-line description
+- [ ] **[PROJ.01] 03: Name** - One-line description
+```
+
 ### 2. Detail Sections (under `## Phase Details`)
 
 Use the header form matching `phase_id_convention` from config.
-Do not include `project_code` in detail header phase IDs.
+Do not include `project_code` as a separate prefix for `sequential`/`milestone-prefixed` headers —
+but for `bracket` the `[CODE.MM]` token IS the phase ID and belongs in every header.
 
-**Sequential (default):**
+**Sequential (fallback):**
 
 ```markdown
 ### Phase 1: Name
@@ -388,6 +406,24 @@ Do not include `project_code` in detail header phase IDs.
 ### Phase 1-02: Name
 **Goal**: What this phase delivers
 **Depends on**: Phase 1-01
+...
+```
+
+**Bracket (when `phase_id_convention: "bracket"` — the new-project default):**
+
+```markdown
+### [PROJ.01] 01: Name
+**Goal**: What this phase delivers
+**Depends on**: Nothing (first phase)
+**Requirements**: REQ-01, REQ-02
+**Success Criteria** (what must be TRUE):
+  1. Observable behavior from user perspective
+  2. Observable behavior from user perspective
+**Plans**: TBD
+
+### [PROJ.01] 02: Name
+**Goal**: What this phase delivers
+**Depends on**: [PROJ.01] 01
 ...
 ```
 
@@ -533,8 +569,8 @@ Apply phase identification methodology:
 2. Identify dependencies between groups
 3. Create phases that complete coherent capabilities
 4. Check granularity setting for compression guidance
-5. Read `phase_id_convention` from config (`sequential` or `milestone-prefixed`); apply the
-   matching header and checklist form throughout all output sections
+5. Read `phase_id_convention` from config (`sequential`, `milestone-prefixed`, or `bracket` — the
+   new-project default); apply the matching header and checklist form throughout all output sections
 
 ## Step 5: Derive Success Criteria
 

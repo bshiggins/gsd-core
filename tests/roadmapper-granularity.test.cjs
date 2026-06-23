@@ -129,4 +129,44 @@ describe('gsd-roadmapper phase_id_convention support (#1205)', () => {
       'roadmapper must state that project_code is not part of phase headings/checklists'
     );
   });
+
+  // #612: bracket is the new-project default, so the roadmapper must emit a bracket
+  // ROADMAP for bracket repos (else fresh projects get a config/roadmap mismatch).
+  test('phase_identification documents the bracket convention with its [CODE.MM] NN form', () => {
+    const section = extractBlock(content, 'phase_identification');
+    assert.ok(section.includes('bracket'), 'phase_identification must document the bracket convention');
+    assert.ok(
+      /\[CODE\.MM\]\s+NN/.test(section),
+      'phase_identification must show the bracket id form "[CODE.MM] NN"'
+    );
+  });
+
+  test('output_formats documents the bracket convention', () => {
+    const section = extractBlock(content, 'output_formats');
+    assert.ok(section.includes('bracket'), 'output_formats must document the bracket convention');
+  });
+
+  test('output_formats shows a bracket detail header example (### [CODE.MM] NN:)', () => {
+    const section = extractBlock(content, 'output_formats');
+    assert.ok(
+      /###\s+\[[A-Z][A-Z0-9]*\.\d{2}\]\s+\d{2}:/.test(section),
+      'output_formats must show a bracket header example like "### [PROJ.01] 01: Name"'
+    );
+  });
+
+  test('output_formats shows the bracket summary checklist form (- [ ] **[CODE.MM] NN:)', () => {
+    const section = extractBlock(content, 'output_formats');
+    assert.ok(
+      /- \[ \] \*\*\[[A-Z][A-Z0-9]*\.\d{2}\]\s+\d{2}:/.test(section),
+      'output_formats must show a bracket checklist form like "- [ ] **[PROJ.01] 01: Name**"'
+    );
+  });
+
+  test('bracket is documented as the deliberate exception to the no-project_code-in-headings rule', () => {
+    const combined = `${extractBlock(content, 'phase_identification')}\n${extractBlock(content, 'output_formats')}`;
+    assert.ok(
+      /bracket[\s\S]{0,200}(exception|by design|\[CODE\.MM\])/i.test(combined),
+      'instructions must flag bracket as the exception where the milestone-qualified code IS the phase id'
+    );
+  });
 });
