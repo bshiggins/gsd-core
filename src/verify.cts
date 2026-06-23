@@ -1098,6 +1098,84 @@ function checkMilestonePrefixMismatches(
   return mismatches;
 }
 
+interface BracketIncoherence {
+  kind: 'mismatch' | 'missing-bracket';
+  phaseId: string;
+  foundInMilestone: string;
+  expectedMilestone: string;
+}
+
+/**
+ * Bracket-coherence check (#612 PR-2). Additive and only invoked under
+ * `phase_id_convention === 'bracket'` (the caller gates on that — the legacy
+ * `checkMilestonePrefixMismatches` above is left untouched for the
+ * milestone-prefixed path). Two sub-checks, both surfaced as W021:
+ *   (1) integer-coherence — a phase whose in-bracket milestone integer differs
+ *       from its enclosing `## [CODE.MM] Name` section integer.
+ *   (2) bracket-form-presence — a colon-terminated phase heading that is NOT in
+ *       bracket form (legacy `### Phase 5:` / bare `### 05:`) under a repo that
+ *       has opted into 'bracket'.
+ * Sentinel integers 0 and 999 are exempt. Comparison is intra-roadmap
+ * (phase-bracket-int vs enclosing section-bracket-int); STATE.md milestone
+ * authority is intentionally not consulted here (ADR Q7 deferred).
+ */
+function checkBracketCoherence(roadmapContent: string): BracketIncoherence[] {
+  // NOTE: both sub-checks are SECTION-SCOPED — they only run inside a detected
+  // `## [CODE.MM] Name` section. A flat/section-less bracket roadmap (e.g. an
+  // HQ-NN single-milestone project with no milestone heading) gets no
+  // presence/coherence checking. Conscious boundary, pinned by a test.
+  const incoherences: BracketIncoherence[] = [];
+  const isSentinel = (n: number) => n === 0 || n === 999;
+  const sections: { milestone: number; start: number; end: number }[] = [];
+  // A milestone SECTION is `## [CODE.MM] Name` — a bracket heading whose bracket
+  // is NOT immediately followed by a `<token>:` phase form. The negative
+  // lookahead is load-bearing: without it a `### [CODE.MM] 05:` PHASE heading
+  // (also `#{1,3}` + bracket) would be mis-read as its own milestone section and
+  // every phase would self-coherently match, defeating the mismatch sub-check.
+  const sectionRx = /^#{1,3}\s+\[[A-Za-z][\w]*\.(\d+)\](?!\s*\d+(?:\.\d+)?\s*:)/gim;
+  let m: RegExpExecArray | null;
+  while ((m = sectionRx.exec(roadmapContent)) !== null) {
+    if (sections.length > 0) sections[sections.length - 1].end = m.index;
+    sections.push({ milestone: parseInt(m[1], 10), start: m.index, end: roadmapContent.length });
+  }
+  for (const section of sections) {
+    if (isSentinel(section.milestone)) continue;
+    const content = roadmapContent.slice(section.start, section.end);
+    // Sub-check (1): bracketed phase heading carrying its own milestone integer.
+    const bracketPhaseRx = /#{2,4}\s*\[[A-Za-z][\w]*\.(\d+)\]\s*(\d+(?:\.\d+)?)\s*:/gi;
+    let pm: RegExpExecArray | null;
+    while ((pm = bracketPhaseRx.exec(content)) !== null) {
+      const phaseMilestone = parseInt(pm[1], 10);
+      const phaseToken = pm[2];
+      if (isSentinel(phaseMilestone)) continue;
+      if (phaseMilestone !== section.milestone) {
+        incoherences.push({
+          kind: 'mismatch',
+          phaseId: phaseToken,
+          foundInMilestone: String(section.milestone).padStart(2, '0'),
+          expectedMilestone: String(phaseMilestone).padStart(2, '0'),
+        });
+      }
+    }
+    // Sub-check (2): any colon-terminated phase heading NOT in bracket form.
+    const anyPhaseHeadingRx = /^(#{2,4})\s*(.*?)(\d+(?:\.\d+)?)\s*:/gim;
+    let am: RegExpExecArray | null;
+    while ((am = anyPhaseHeadingRx.exec(content)) !== null) {
+      const prefix = am[2];
+      const isBracket = /\[[A-Za-z][\w]*\.\d+\]\s*$/.test(prefix);
+      if (!isBracket) {
+        incoherences.push({
+          kind: 'missing-bracket',
+          phaseId: am[3],
+          foundInMilestone: String(section.milestone).padStart(2, '0'),
+          expectedMilestone: String(section.milestone).padStart(2, '0'),
+        });
+      }
+    }
+  }
+  return incoherences;
+}
+
 interface IssueEntry {
   code: string;
   message: string;
@@ -1739,6 +1817,27 @@ function cmdValidateHealth(
         }
       }
     }
+    // #612: bracket-coherence is a SEPARATE, additive branch — the
+    // milestone-prefixed branch above is left exactly as-is (invariant:
+    // null/milestone-prefixed paths untouched; reads stay tolerant regardless,
+    // but CHECKS that can fail a repo are gated on the active convention).
+    if (phaseConvention === 'bracket') {
+      if (fs.existsSync(roadmapPath)) {
+        const roadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
+        const incoherences = checkBracketCoherence(roadmapContent);
+        for (const mm of incoherences) {
+          const message = mm.kind === 'missing-bracket'
+            ? `Phase ${mm.phaseId}: heading is not in bracket form under the 'bracket' convention (expected \`[CODE.${mm.foundInMilestone}] ${mm.phaseId}:\`)`
+            : `Phase ${mm.phaseId}: bracket milestone ${mm.expectedMilestone} does not match its section milestone ${mm.foundInMilestone}`;
+          addIssue(
+            'warning',
+            'W021',
+            message,
+            'Run `gsd-tools roadmap upgrade --convention bracket` to migrate (dry-run by default)',
+          );
+        }
+      }
+    }
   } catch {
     /* W021 check is advisory — skip on error */
   }
@@ -1807,7 +1906,13 @@ function cmdValidateHealth(
       if (isMarkedComplete) {
         const roadmapRaw = fs.readFileSync(roadmapPath, 'utf-8');
         const scopedContent = extractCurrentMilestone(roadmapRaw, cwd);
-        const phasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:\s*([^\n]+)/gi;
+        // #612 (B6): this convention-agnostic check must SEE bracket headings
+        // (`### [GSD.02] 05:`) too, else it goes blind under the bracket convention
+        // and under-counts unstarted phases. Reads stay tolerant for all conventions.
+        const phasePattern = new RegExp(
+          `#{2,4}\\s*${phaseIdMod.PHASE_HEADING_PREFIX_SRC}(\\d+[A-Z]?(?:\\.\\d+)*)\\s*:\\s*([^\\n]+)`,
+          'gi',
+        );
         const unstarted: string[] = [];
         let pm: RegExpExecArray | null;
         // Non-hoisted: load-order matters (circular dep guard)
@@ -1833,6 +1938,11 @@ function cmdValidateHealth(
           }
         }
         if (unstarted.length > 0) {
+          // #612 (B5 DROPPED in re-port): the original PR2 renumbered this check
+          // W021 -> W022 to clear a code collision, but current upstream pins W021
+          // here (tests/bug-557). The renumber is out of scope for bracket, so the
+          // check keeps W021; bracket-coherence above also uses W021 (advisory,
+          // message-disambiguated) — consistent with the milestone-prefixed branch.
           addIssue(
             'warning',
             'W021',
