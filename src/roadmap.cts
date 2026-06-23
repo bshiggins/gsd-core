@@ -496,7 +496,9 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
 
     // Progress table row: update Plans/Status/Date columns (handles 4 or 5 column tables)
     const tableRowPattern = new RegExp(
-      `^(\\|\\s*${phasePattern}\\.?\\s[^|]*(?:\\|[^\\n]*))$`,
+      // #612: tolerate an optional [CODE.MM] bracket prefix on the phase cell
+      // (`| [CK.02] 01 Foo | …`); legacy cells (`| 1. Name | …`) have no prefix.
+      `^(\\|\\s*(?:\\[[^\\]]+\\]\\s*)?${phasePattern}\\.?\\s[^|]*(?:\\|[^\\n]*))$`,
       'im'
     );
     roadmapContent = roadmapContent.replace(tableRowPattern, (fullRow) => {
@@ -530,7 +532,9 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     //   `**Plans:** N plans`  — bold "Plans:" (colon inside bold)
     //   `Plans: N plans`      — plain text header
     const planCountPattern = new RegExp(
-      `(#{2,4}\\s*Phase\\s+${phasePattern}(?=[:\\s])[\\s\\S]*?(?:\\*\\*Plans\\*\\*:|\\*\\*Plans:\\*\\*|(?:^|\\n)Plans:)\\s*)[^\\n]+`,
+      // #612: PHASE_HEADING_PREFIX_SRC matches the bracket heading `### [CK.02] 01:`
+      // as well as the legacy `### Phase N:` (was hardcoded `Phase\s+`, bracket-blind).
+      `(#{2,4}\\s*${PHASE_HEADING_PREFIX_SRC}${phasePattern}(?=[:\\s])[\\s\\S]*?(?:\\*\\*Plans\\*\\*:|\\*\\*Plans:\\*\\*|(?:^|\\n)Plans:)\\s*)[^\\n]+`,
       'i'
     );
     const planCountText = isComplete
@@ -541,7 +545,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     // If complete: check checkbox
     if (isComplete) {
       const checkboxPattern = new RegExp(
-        `(-\\s*\\[)[ ](\\]\\s*.*Phase\\s+${phasePattern}[:\\s][^\\n]*)`,
+        `(-\\s*\\[)[ ](\\]\\s*.*${PHASE_HEADING_PREFIX_SRC}${phasePattern}[:\\s][^\\n]*)`,
         'i'
       );
       roadmapContent = replaceInCurrentMilestone(roadmapContent, checkboxPattern, `$1x$2 (completed ${today})`);
@@ -600,11 +604,11 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       // Pattern A: anchor to bare `Plans:` header (preferred).
       // Pattern B: fallback to bold summary when no bare header exists.
       const insertRowsPatternA = new RegExp(
-        `(#{2,4}\\s*Phase\\s+${phasePattern}(?=[:\\s])[\\s\\S]*?(?:^|\\n)(?:Plans:)[^\\n]*)`,
+        `(#{2,4}\\s*${PHASE_HEADING_PREFIX_SRC}${phasePattern}(?=[:\\s])[\\s\\S]*?(?:^|\\n)(?:Plans:)[^\\n]*)`,
         'i'
       );
       const insertRowsPatternB = new RegExp(
-        `(#{2,4}\\s*Phase\\s+${phasePattern}(?=[:\\s])[\\s\\S]*?(?:\\*\\*Plans\\*\\*:|\\*\\*Plans:\\*\\*)[^\\n]*)`,
+        `(#{2,4}\\s*${PHASE_HEADING_PREFIX_SRC}${phasePattern}(?=[:\\s])[\\s\\S]*?(?:\\*\\*Plans\\*\\*:|\\*\\*Plans:\\*\\*)[^\\n]*)`,
         'i'
       );
 

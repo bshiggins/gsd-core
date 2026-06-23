@@ -740,6 +740,42 @@ describe('roadmap update-plan-progress command', () => {
     assert.ok(roadmapContent.includes('1/2'), 'roadmap should contain updated plan count');
   });
 
+  test('#612 bracket: updates plan count + progress-table row in a bracket repo', () => {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ project_code: 'CK', phase_id_convention: 'bracket' }));
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+`# Roadmap
+
+## v2.0 Foundation
+
+### [CK.02] 01: Foo
+**Goal:** g
+**Plans:** TBD
+
+## Progress
+
+| Phase | Plans | Status | Completed |
+|-------|-------|--------|-----------|
+| [CK.02] 01 Foo | 0/0 | Planned | - |
+`
+    );
+    const p1 = path.join(tmpDir, '.planning', 'phases', 'CK.02-01-foo');
+    fs.mkdirSync(p1, { recursive: true });
+    fs.writeFileSync(path.join(p1, '01-01-PLAN.md'), '# Plan');
+    fs.writeFileSync(path.join(p1, '01-01-SUMMARY.md'), '# Done');
+
+    const result = runGsdTools('roadmap update-plan-progress 01', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    assert.strictEqual(JSON.parse(result.output).complete, true, 'phase should be complete');
+
+    const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
+    assert.match(roadmap, /1\/1 plans complete/, `bracket plan-count must update; got:\n${roadmap}`);
+    assert.match(roadmap, /\|\s*\[CK\.02\]\s*01[^\n|]*\|[^|]*1\/1[^|]*\|\s*Complete/,
+      `bracket progress-table row must update to 1/1 Complete; got:\n${roadmap}`);
+  });
+
   test('counts plans and summaries from plans/ subdirectory layout (#3053)', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'ROADMAP.md'),
