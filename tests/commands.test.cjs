@@ -601,6 +601,43 @@ describe('progress command', () => {
     const output = JSON.parse(jsonResult.output);
     assert.ok(output.percent <= 100, `percent should be <= 100 but got ${output.percent}`);
   });
+
+  // ── #612 PR5 B-display: cmdProgressRender is token-aware (M-NN) + bracket-aware ──
+  // The old naive `^(\d+(?:\.\d+)*)-?(.*)` regex rendered `02-03-setup` as `02` /
+  // `03 setup` and a bracket dir `CK.02-01-foo` as the whole dir / empty name.
+  // Display is driven by the on-disk dir form (not config), so each form is tested
+  // directly. Bracket renders as the full [CODE.MM] PP token (Brandon's call).
+  function progressPhases(dirs) {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), `# Roadmap v1.0\n`);
+    for (const d of dirs) fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', d), { recursive: true });
+    const r = runGsdTools('progress json', tmpDir);
+    assert.ok(r.success, `progress failed: ${r.error}`);
+    return JSON.parse(r.output).phases;
+  }
+
+  test('B-display: a milestone-prefixed dir renders the full M-NN token + clean name (#612)', () => {
+    const p = progressPhases(['02-03-setup']).find(x => x.name === 'setup');
+    assert.ok(p, 'expected a phase named "setup"');
+    assert.strictEqual(p.number, '02-03', 'M-NN phase number must be the full token, not just the milestone');
+  });
+
+  test('B-display: a bracket dir renders [CODE.MM] PP + clean name (#612)', () => {
+    const p = progressPhases(['CK.02-01-foo']).find(x => x.name === 'foo');
+    assert.ok(p, 'expected a phase named "foo"');
+    assert.strictEqual(p.number, '[CK.02] 01', 'bracket phase must render as the full [CODE.MM] PP token');
+  });
+
+  test('B-display: a bracket sub-phase dir renders [CODE.MM] PP.SS (#612)', () => {
+    const p = progressPhases(['CK.02-02.01-hotfix']).find(x => x.name === 'hotfix');
+    assert.ok(p, 'expected a phase named "hotfix"');
+    assert.strictEqual(p.number, '[CK.02] 02.01', 'bracket sub-phase must render as [CODE.MM] PP.SS');
+  });
+
+  test('B-display: a plain sequential dir is unchanged (regression) (#612)', () => {
+    const p = progressPhases(['05-bar']).find(x => x.name === 'bar');
+    assert.ok(p, 'expected a phase named "bar"');
+    assert.strictEqual(p.number, '05', 'sequential phase number unchanged');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

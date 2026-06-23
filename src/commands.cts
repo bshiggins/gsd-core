@@ -21,7 +21,7 @@ import coreUtilsMod = require('./core-utils.cjs');
 const { toPosixPath, generateSlugInternal, extractOneLinerFromBody } = coreUtilsMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { normalizePhaseName, comparePhaseNum, extractPhaseToken } = phaseIdMod;
+const { normalizePhaseName, comparePhaseNum, extractPhaseToken, parsePhaseId, renderPhaseId } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
 const { getArchivedPhaseDirs, findPhaseInternal } = phaseLocatorMod;
@@ -1201,6 +1201,33 @@ async function cmdWebsearch(query: string | undefined, options: WebsearchOptions
   }
 }
 
+/**
+ * #612 B-display — derive the display phase number + name from a phase dir,
+ * token-aware (M-NN, code-prefixed) and bracket-aware. Replaces the naive
+ * `^(\d+(?:\.\d+)*)-?(.*)` parse, which mis-split M-NN dirs (`02-03-setup` →
+ * `02` / `03 setup`) and could not parse bracket dirs (`CK.02-01-foo` → whole
+ * dir / empty name). Bracket dirs render as the canonical `[CODE.MM] PP[.SS]`
+ * token via the PR1 round-trip pair; non-bracket forms use extractPhaseToken.
+ */
+function renderPhaseDisplay(dir: string): { number: string; name: string } {
+  // Bracket dir form: {CODE}.{MM}-{PP}[.{SS}]-slug — the dotted {CODE}.{MM} prefix
+  // distinguishes it from hyphen-joined legacy/M-NN dirs.
+  const bracketDir = dir.match(/^[A-Za-z][\w]*\.\d+-\d+(?:\.\d+)?(?:-(.+))?$/);
+  if (bracketDir) {
+    try {
+      return {
+        number: renderPhaseId(parsePhaseId(dir)),
+        name: bracketDir[1] ? bracketDir[1].replace(/-/g, ' ') : '',
+      };
+    } catch { /* malformed bracket dir — fall through to token-aware path */ }
+  }
+  const token = extractPhaseToken(dir);
+  return {
+    number: token || dir,
+    name: dir.slice(token ? token.length : 0).replace(/^-/, '').replace(/-/g, ' '),
+  };
+}
+
 function cmdProgressRender(cwd: string, format: string | undefined, raw: boolean): void {
   const phasesDir = planningPaths(cwd).phases;
   const milestone = getMilestoneInfo(cwd);
@@ -1214,9 +1241,7 @@ function cmdProgressRender(cwd: string, format: string | undefined, raw: boolean
     const dirs = entries.filter(e => e.isDirectory()).map(e => e.name).sort((a, b) => comparePhaseNum(a, b));
 
     for (const dir of dirs) {
-      const dm = dir.match(/^(\d+(?:\.\d+)*)-?(.*)/);
-      const phaseNum = dm ? dm[1] : dir;
-      const phaseName = dm && dm[2] ? dm[2].replace(/-/g, ' ') : '';
+      const { number: phaseNum, name: phaseName } = renderPhaseDisplay(dir);
       const phaseFiles = fs.readdirSync(path.join(phasesDir, dir));
       const plans = phaseFiles.filter(f => f.endsWith('-PLAN.md') || f === 'PLAN.md').length;
       const summaries = phaseFiles.filter(f => f.endsWith('-SUMMARY.md') || f === 'SUMMARY.md').length;
