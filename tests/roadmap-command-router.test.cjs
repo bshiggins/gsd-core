@@ -128,14 +128,14 @@ describe('roadmap upgrade — hub contract + --convention parsing (#1538)', () =
   test('rejects an unsupported convention (space form) via error(), never process.exit', () => {
     const message = runUpgrade(['roadmap', 'upgrade', '--convention', 'sequential']);
     assert.equal(exitCalls.length, 0, 'a hub handler must not call process.exit');
-    assert.equal(message, 'Only --convention milestone-prefixed is supported');
+    assert.equal(message, 'Only --convention milestone-prefixed or bracket is supported');
     assert.equal(applyCalls.length, 0, 'must not run the migration for an unsupported convention');
   });
 
   test('rejects an unsupported convention in equals form — no silent fail-open', () => {
     const message = runUpgrade(['roadmap', 'upgrade', '--convention=sequential']);
     assert.equal(exitCalls.length, 0, 'a hub handler must not call process.exit');
-    assert.equal(message, 'Only --convention milestone-prefixed is supported');
+    assert.equal(message, 'Only --convention milestone-prefixed or bracket is supported');
     assert.equal(applyCalls.length, 0, '--convention=sequential must not silently run the milestone-prefixed migration');
   });
 
@@ -149,7 +149,7 @@ describe('roadmap upgrade — hub contract + --convention parsing (#1538)', () =
       const message = runUpgrade(args);
       assert.equal(
         message,
-        'Only --convention milestone-prefixed is supported',
+        'Only --convention milestone-prefixed or bracket is supported',
         `should reject ${JSON.stringify(args)}`,
       );
       assert.equal(exitCalls.length, 0, 'a hub handler must not call process.exit');
@@ -164,5 +164,12 @@ describe('roadmap upgrade — hub contract + --convention parsing (#1538)', () =
     assert.equal(exitCalls.length, 0);
     assert.equal(applyCalls.length, 3, 'all three supported invocations reach applyMigration');
     assert.ok(applyCalls.every((c) => c.opts.dryRun === true), 'no --apply ⇒ dryRun');
+  });
+
+  test('accepts --convention bracket (#612 additive) in both forms — reaches applyMigration', () => {
+    assert.equal(runUpgrade(['roadmap', 'upgrade', '--convention', 'bracket']), null);
+    assert.equal(runUpgrade(['roadmap', 'upgrade', '--convention=bracket']), null);
+    assert.equal(exitCalls.length, 0, 'a hub handler must not call process.exit');
+    assert.equal(applyCalls.length, 2, 'both bracket forms reach applyMigration (not rejected)');
   });
 });

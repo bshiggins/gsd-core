@@ -195,13 +195,14 @@ function routeRoadmapCommand({ roadmap, args, cwd, raw, error }: RouteRoadmapCom
             ? token.slice(token.indexOf('=') + 1)
             : (args[conventionFlagIdx + 1] ?? '');
         }
-        if (convention !== 'milestone-prefixed') {
+        const SUPPORTED_CONVENTIONS = ['milestone-prefixed', 'bracket'];
+        if (!SUPPORTED_CONVENTIONS.includes(convention)) {
           // No-throw hub contract (ADR-0012): a hub-dispatched handler must not call
           // process.exit. Throw instead — the hub converts this to HandlerFailure and
           // the adapter routes it through the injected error() boundary.
-          throw new Error('Only --convention milestone-prefixed is supported');
+          throw new Error('Only --convention milestone-prefixed or bracket is supported');
         }
-        const plan = roadmapUpgrade.computeMigrationPlan(cwd);
+        const plan = roadmapUpgrade.computeMigrationPlan(cwd, { convention });
         roadmapUpgrade.applyMigration(cwd, plan, { dryRun });
       },
     },
