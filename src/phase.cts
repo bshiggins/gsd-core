@@ -36,13 +36,15 @@ const {
   comparePhaseNum,
   phaseTokenMatches,
   OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
+  toDir,
+  renderPhaseId,
 } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-locator.cjs is an export= CommonJS module
 import phaseLocatorMod = require('./phase-locator.cjs');
 const { findPhaseInternal, getArchivedPhaseDirs } = phaseLocatorMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- roadmap-parser.cjs is an export= CommonJS module
 import roadmapParserMod = require('./roadmap-parser.cjs');
-const { stripShippedMilestones, extractCurrentMilestone, getMilestonePhaseFilter } = roadmapParserMod;
+const { stripShippedMilestones, extractCurrentMilestone, getMilestonePhaseFilter, getMilestoneInfo } = roadmapParserMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-workspace.cjs is an export= CommonJS module
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
@@ -671,6 +673,40 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
   output(result, raw);
 }
 
+/**
+ * #612 bracket write path — the current milestone integer (MM). Sourced from
+ * getMilestoneInfo (STATE.md `milestone:` first, then the ROADMAP `## vN.M`
+ * heading, both of which the PR-3 migrator leaves intact). Defaults to 1.
+ */
+function bracketMilestoneInt(cwd: string): number {
+  const ver = String((getMilestoneInfo(cwd) as { version?: string }).version || 'v1.0');
+  const m = ver.match(/v?(\d+)/);
+  return m ? parseInt(m[1], 10) : 1;
+}
+
+/**
+ * #612 bracket write path — the next free sub-index (SS) within a milestone.
+ * The bracket id token is `[CODE.MM] SS` / dir `CODE.MM-SS-slug`. SS is the max
+ * existing sub-index in this milestone + 1, scanning bracket phase tokens in the
+ * roadmap (heading OR bullet — both carry `[CODE.MM] SS`) and bracket dirs on
+ * disk. (The legacy `Phase N` scan cannot see bracket forms.) The leading SS
+ * integer is taken; a deep `SS.D` sub-decimal does not raise the base counter.
+ */
+function nextBracketSubIndex(roadmapContent: string, projectCode: string, milestoneInt: number, phasesDir: string): number {
+  const used = new Set<number>();
+  const tokenRe = new RegExp(`\\[${escapeRegex(projectCode)}\\.0*${milestoneInt}\\]\\s*(\\d+)`, 'gi');
+  let m: RegExpExecArray | null;
+  while ((m = tokenRe.exec(roadmapContent)) !== null) used.add(parseInt(m[1], 10));
+  const dirRe = new RegExp(`^${escapeRegex(projectCode)}\\.0*${milestoneInt}-(\\d+)`, 'i');
+  try {
+    for (const d of fs.readdirSync(phasesDir)) {
+      const dm = d.match(dirRe);
+      if (dm) used.add(parseInt(dm[1], 10));
+    }
+  } catch { /* phases dir may not exist yet */ }
+  return (used.size > 0 ? Math.max(...used) : 0) + 1;
+}
+
 function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: string): void {
   if (!description) {
     error('description required for phase add');
@@ -690,11 +726,26 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
 
     const projectCode = (config.project_code as string) || '';
     const prefix = projectCode ? `${projectCode}-` : '';
+    const convention = config.phase_id_convention as string | undefined;
 
     let _newPhaseId: number | string;
     let _dirName: string;
+    let _bracketSub = 0;       // #612: SS within the milestone (bracket only)
+    let _bracketMm = '';       // #612: zero-padded milestone MM (bracket only)
 
-    if (customId || config.phase_naming === 'custom') {
+    if (convention === 'bracket') {
+      // #612 bracket write path: emit `[CODE.MM] SS` heading + `CODE.MM-SS-slug`
+      // dir. Gated on the convention value, never on project_code presence (§4 B6).
+      if (!projectCode) {
+        error('phase_id_convention is "bracket" but no project_code is set in .planning/config.json — bracket phase IDs are [CODE.MM] NN');
+      }
+      const mInt = bracketMilestoneInt(cwd);
+      _bracketMm = String(mInt).padStart(2, '0');
+      _bracketSub = nextBracketSubIndex(rawContent, projectCode, mInt, path.join(planningDir(cwd), 'phases'));
+      const id = { project: projectCode, milestone: _bracketMm, phase: String(_bracketSub).padStart(2, '0') };
+      _newPhaseId = renderPhaseId(id);   // '[CK.02] 02' — display token
+      _dirName = toDir(id, slug);         // 'CK.02-02-slug'
+    } else if (customId || config.phase_naming === 'custom') {
       _newPhaseId = customId || slug.toUpperCase();
       if (!_newPhaseId) error('--id required when phase_naming is "custom"');
       _dirName = `${prefix}${_newPhaseId}-${slug}`;
@@ -750,12 +801,24 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
     platformEnsureDir(dirPath);
     platformWriteSync(path.join(dirPath, '.gitkeep'), '');
 
-    const dependsOn =
-      config.phase_naming === 'custom'
-        ? ''
-        : `\n**Depends on:** Phase ${typeof _newPhaseId === 'number' ? _newPhaseId - 1 : 'TBD'}`;
-    const phaseEntry =
-      `\n### Phase ${_newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${_newPhaseId} to break down)\n`;
+    let phaseEntry: string;
+    if (convention === 'bracket') {
+      // Bracket heading drops the `Phase` word — the [CODE.MM] SS token IS the id.
+      const dependsOnB =
+        _bracketSub > 1
+          ? `\n**Depends on:** [${projectCode}.${_bracketMm}] ${String(_bracketSub - 1).padStart(2, '0')}`
+          : '';
+      const planHint = String(_bracketSub).padStart(2, '0');
+      phaseEntry =
+        `\n### ${_newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOnB}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${planHint} to break down)\n`;
+    } else {
+      const dependsOn =
+        config.phase_naming === 'custom'
+          ? ''
+          : `\n**Depends on:** Phase ${typeof _newPhaseId === 'number' ? _newPhaseId - 1 : 'TBD'}`;
+      phaseEntry =
+        `\n### Phase ${_newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${_newPhaseId} to break down)\n`;
+    }
 
     let updatedContent: string;
     const lastSeparator = rawContent.lastIndexOf('\n---');

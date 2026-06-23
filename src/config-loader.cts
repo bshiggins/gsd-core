@@ -622,6 +622,7 @@ function loadConfigResolved(cwd: string, options: Record<string, unknown> = {}):
       resolve_model_ids: get('resolve_model_ids') ?? defaults.resolve_model_ids,
       context_window: get('context_window') ?? defaults.context_window,
       phase_naming: get('phase_naming') ?? defaults.phase_naming,
+      phase_id_convention: get('phase_id_convention') ?? null,
       project_code: get('project_code') ?? defaults.project_code,
       subagent_timeout: get('subagent_timeout', { section: 'workflow', field: 'subagent_timeout' }) ?? defaults.subagent_timeout,
       model_overrides: (parsed['model_overrides']) || null,

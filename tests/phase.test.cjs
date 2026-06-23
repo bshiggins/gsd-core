@@ -5315,3 +5315,60 @@ describe('bug #1229: phase.add must count bullet-only phases to avoid number col
     );
   });
 });
+
+// ── PR4 (#612): bracket write-path emit ─────────────────────────────────────────
+// `phase add` emits the bracket form ONLY when phase_id_convention === 'bracket'
+// (gated on convention, NEVER on project_code — §4 B6); null/milestone-prefixed
+// repos keep the legacy `Phase N` emit untouched. Fixture mirrors a real
+// post-PR3-migration repo: `## vN.M` milestone heading (the migrator leaves it),
+// bracket phase headings/dirs, STATE.md milestone, config { project_code, bracket }.
+describe('PR4: bracket write-path emit — phase add (#612)', () => {
+  let tmpDir;
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => cleanup(tmpDir));
+
+  const pp = (...r) => path.join(tmpDir, '.planning', ...r);
+  function seedBracketRepo() {
+    fs.writeFileSync(pp('config.json'), JSON.stringify({ project_code: 'CK', phase_id_convention: 'bracket' }, null, 2));
+    fs.writeFileSync(pp('STATE.md'), '---\nmilestone: v2.0\n---\n');
+    fs.writeFileSync(pp('ROADMAP.md'),
+`# Roadmap
+
+## v2.0 Foundation
+
+### [CK.02] 01: Foo
+**Goal:** g
+`);
+    fs.mkdirSync(pp('phases', 'CK.02-01-foo'), { recursive: true });
+  }
+
+  test('bracket repo: phase add emits [CODE.MM] SS heading + CODE.MM-SS-slug dir', () => {
+    seedBracketRepo();
+    const r = runGsdTools('phase add User Dashboard', tmpDir);
+    assert.ok(r.success, `phase add failed: ${r.error}`);
+    const roadmap = fs.readFileSync(pp('ROADMAP.md'), 'utf-8');
+    assert.match(roadmap, /###\s*\[CK\.02\]\s*02:\s*User Dashboard/, `expected bracket heading; got:\n${roadmap}`);
+    assert.ok(fs.existsSync(pp('phases', 'CK.02-02-user-dashboard')),
+      `expected dir CK.02-02-user-dashboard; got ${fs.readdirSync(pp('phases'))}`);
+    assert.doesNotMatch(roadmap, /###\s*Phase\s+\d/, 'must not emit a legacy Phase heading in a bracket repo');
+  });
+
+  test('legacy repo (no convention) is unchanged — emits ### Phase N', () => {
+    fs.writeFileSync(pp('config.json'), JSON.stringify({ project_code: 'CK' }, null, 2));
+    fs.writeFileSync(pp('ROADMAP.md'), `# Roadmap v1.0\n\n### Phase 1: Foundation\n**Goal:** g\n`);
+    const r = runGsdTools('phase add User Dashboard', tmpDir);
+    assert.ok(r.success, `phase add failed: ${r.error}`);
+    const roadmap = fs.readFileSync(pp('ROADMAP.md'), 'utf-8');
+    assert.match(roadmap, /###\s*Phase\s+2:\s*User Dashboard/, 'legacy repo must keep the Phase N form');
+    assert.doesNotMatch(roadmap, /\[CK\.\d/, 'legacy repo must not emit bracket');
+  });
+
+  test('bracket convention but no project_code → refuses (cannot emit [CODE.MM])', () => {
+    fs.writeFileSync(pp('config.json'), JSON.stringify({ phase_id_convention: 'bracket' }, null, 2));
+    fs.writeFileSync(pp('STATE.md'), '---\nmilestone: v2.0\n---\n');
+    fs.writeFileSync(pp('ROADMAP.md'), `# Roadmap\n\n## v2.0 Foundation\n`);
+    const r = runGsdTools('phase add User Dashboard', tmpDir);
+    assert.ok(!r.success, 'expected refusal when bracket convention has no project_code');
+    assert.match(String(r.error) + String(r.output), /project_code/i, `error should mention project_code; got ${r.error}`);
+  });
+});
