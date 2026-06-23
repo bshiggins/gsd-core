@@ -679,6 +679,15 @@ function cmdConfigSet(cwd: string, keyPath: string | undefined, value: string | 
     error(`Invalid plan_review.source_grounding_authority '${val}'. Valid values: ${VALID_SOURCE_GROUNDING_AUTHORITIES.join(', ')}`);
   }
 
+  // phase_id_convention (#612 B3) — enum. null/absent (the unset default) renders as
+  // sequential; `sequential` is also an accepted explicit synonym. Note this is the
+  // VALID set, distinct from the migrator's SUPPORTED_CONVENTIONS (you cannot migrate
+  // *to* sequential, so the router's accepted target set excludes it).
+  const VALID_PHASE_ID_CONVENTIONS = ['sequential', 'milestone-prefixed', 'bracket'];
+  if (kp === 'phase_id_convention' && !VALID_PHASE_ID_CONVENTIONS.includes(String(parsedValue))) {
+    error(`Invalid phase_id_convention '${val}'. Valid values: ${VALID_PHASE_ID_CONVENTIONS.join(', ')}`);
+  }
+
   if (kp === 'review.default_reviewers') {
     const normalized = normalizeConfiguredDefaultReviewers(parsedValue);
     if (normalized.errors.length > 0) {

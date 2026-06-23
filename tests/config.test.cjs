@@ -533,6 +533,35 @@ describe('config-get command', () => {
   });
 });
 
+// ─── #612 PR5 (B3): phase_id_convention is a validated enum ────────────────────
+// Before B3 any string was accepted for phase_id_convention. Valid set is
+// ['sequential','milestone-prefixed','bracket'] (null/absent = unset → sequential).
+describe('#612 config-set phase_id_convention validation (B3)', () => {
+  let tmpDir;
+  beforeEach(() => { tmpDir = createTempProject(); });
+  afterEach(() => cleanup(tmpDir));
+
+  for (const v of ['sequential', 'milestone-prefixed', 'bracket']) {
+    test(`config-set phase_id_convention ${v} is ACCEPTED`, () => {
+      const r = runGsdTools(['config-set', 'phase_id_convention', v], tmpDir);
+      assert.ok(r.success, `expected "${v}" to be accepted; got ${r.error}`);
+      assert.strictEqual(readConfig(tmpDir).phase_id_convention, v);
+    });
+  }
+
+  test('config-set phase_id_convention bogus is REJECTED with a helpful error', () => {
+    const r = runGsdTools(['config-set', 'phase_id_convention', 'bogus'], tmpDir);
+    assert.ok(!r.success, 'an invalid convention value must be rejected');
+    assert.match(String(r.error) + String(r.output), /phase_id_convention|valid values/i,
+      `error should name the key / valid values; got ${r.error}`);
+  });
+
+  test('config-set phase_id_convention is case-sensitive (Bracket REJECTED)', () => {
+    const r = runGsdTools(['config-set', 'phase_id_convention', 'Bracket'], tmpDir);
+    assert.ok(!r.success, 'wrong-case value must be rejected (values are case-sensitive)');
+  });
+});
+
 // ─── config-new-project ───────────────────────────────────────────────────────
 
 describe('config-new-project command', () => {
