@@ -33,20 +33,22 @@
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { OPTIONAL_PROJECT_CODE_PREFIX_SOURCE } = phaseIdMod;
+const { OPTIONAL_PROJECT_CODE_PREFIX_SOURCE, PHASE_HEADING_PREFIX_SRC } = phaseIdMod;
 
 // ── Issue #26: regex constants (W005, W006-archived) ────────────────────────
 // Matches legacy numeric dirs (01-setup), milestone-prefixed dirs (02-01-setup),
-// deep dirs (02-04-01-deep), and project-code-prefixed variants (GSD-02-01-setup).
+// deep dirs (02-04-01-deep), project-code-prefixed variants (GSD-02-01-setup),
+// and #612 bracket dirs (GSD.02-05-network, GSD.02-05.03-sub).
 export const phaseDirNameRe = new RegExp(
-  `^${OPTIONAL_PROJECT_CODE_PREFIX_SOURCE}\\d{2,}(?:-\\d+)*(?:\\.\\d+)*-[\\w-]+$`,
+  `^(?:[A-Z][A-Z0-9_]*\\.\\d{2,}-\\d+(?:\\.\\d+)*-[\\w-]+|${OPTIONAL_PROJECT_CODE_PREFIX_SOURCE}\\d{2,}(?:-\\d+)*(?:\\.\\d+)*-[\\w-]+)$`,
   'i',
 );
 // Extracts the full phase token from a directory name, including milestone-prefixed
-// multi-segment tokens like "02-01" from "02-01-setup" or "GSD-02-01-setup".
-// Greedily captures all leading all-digit segments before the first letter-start segment.
+// multi-segment tokens like "02-01" from "02-01-setup" or "GSD-02-01-setup", and the
+// #612 bracket dir form (token "05" from "GSD.02-05-network", "05.03" from "GSD.02-05.03-sub").
+// The token stays in capture group 1 for ALL forms (legacy + bracket).
 export const PHASE_TOKEN_FROM_DIR_RE = new RegExp(
-  `^${OPTIONAL_PROJECT_CODE_PREFIX_SOURCE}(\\d+(?:-\\d+)*[A-Z]?(?:\\.\\d+)*)(?:-[a-z]|$)`,
+  `^(?:[A-Z][A-Z0-9_]*\\.\\d{2,}-)?${OPTIONAL_PROJECT_CODE_PREFIX_SOURCE}(\\d+(?:-\\d+)*[A-Z]?(?:\\.\\d+)*)(?:-[a-z]|$)`,
   'i',
 );
 export const MILESTONE_ARCHIVE_DIR_RE = /^v\d+.*-phases$/i;
@@ -102,9 +104,11 @@ export function phaseVariants(phase: string): Set<string> {
 export function buildRoadmapPhaseVariants(roadmapContent: string): RoadmapPhaseVariantsResult {
   const roadmapPhases = new Set<string>();
   const roadmapPhaseVariants = new Set<string>();
-  // Matches both legacy numeric (Phase 1:), decimal (Phase 2.1:), milestone-prefixed (Phase 2-01:),
-  // and bracket-prefixed (### [GSD] Phase 2-01:) headings.
-  const phasePattern = /#{2,4}\s*(?:\[[^\]]+\]\s*)?Phase\s+([\w][\w.-]*)\s*:/gi;
+  // Matches legacy numeric (Phase 1:), decimal (Phase 2.1:), milestone-prefixed (Phase 2-01:),
+  // legacy bracket-prefixed (### [GSD] Phase 2-01:), and the #612 bracket form
+  // (### [GSD.02] 05: — no "Phase" word). Trailing colon excludes milestone
+  // boundary headings (## [GSD.02] Foundation, ## [GSD.02] 2024 Plan).
+  const phasePattern = new RegExp(`#{2,4}\\s*${PHASE_HEADING_PREFIX_SRC}([\\w][\\w.-]*)\\s*:`, 'gi');
   let m: RegExpExecArray | null;
   while ((m = phasePattern.exec(roadmapContent)) !== null) {
     roadmapPhases.add(m[1]);
@@ -113,7 +117,7 @@ export function buildRoadmapPhaseVariants(roadmapContent: string): RoadmapPhaseV
   // Also matches checklist-style entries (checked or unchecked):
   //   - [x] **Phase 01: name**   - [X] **Phase 2-01: name**   - [ ] **Phase 3: name**
   // This is a supported ROADMAP format (parallel to buildNotStartedPhaseVariants).
-  const checklistPattern = /-\s*\[[ xX]\]\s*\*{0,2}Phase\s+([\w][\w.-]*)\s*:/gi;
+  const checklistPattern = new RegExp(`-\\s*\\[[ xX]\\]\\s*\\*{0,2}${PHASE_HEADING_PREFIX_SRC}([\\w][\\w.-]*)\\s*:`, 'gi');
   let cm: RegExpExecArray | null;
   while ((cm = checklistPattern.exec(roadmapContent)) !== null) {
     roadmapPhases.add(cm[1]);
@@ -124,8 +128,9 @@ export function buildRoadmapPhaseVariants(roadmapContent: string): RoadmapPhaseV
 
 export function buildNotStartedPhaseVariants(roadmapContent: string): Set<string> {
   const notStartedPhases = new Set<string>();
-  // Also matches milestone-prefixed and bracket-prefixed checklist items.
-  const uncheckedPattern = /-\s*\[\s\]\s*\*{0,2}Phase\s+([\w][\w.-]*)[:\s*]/gi;
+  // Also matches milestone-prefixed and bracket-prefixed checklist items, including
+  // the #612 bracket bullet form (- [ ] **[GSD.02] 07: …**) via PHASE_HEADING_PREFIX_SRC.
+  const uncheckedPattern = new RegExp(`-\\s*\\[\\s\\]\\s*\\*{0,2}${PHASE_HEADING_PREFIX_SRC}([\\w][\\w.-]*)[:\\s*]`, 'gi');
   let um: RegExpExecArray | null;
   while ((um = uncheckedPattern.exec(roadmapContent)) !== null) {
     for (const variant of phaseVariants(um[1])) notStartedPhases.add(variant);
