@@ -241,12 +241,48 @@ function renderProgressBar(percent) {
  * Progress bar is opt-in: appended to the milestone segment only when
  * progress.percent is present in frontmatter; absent → empty string.
  */
-function formatGsdState(s) {
+/**
+ * #612 — render the bracket milestone label `[{code}.{MM}]` (e.g. `[GSD.02]`).
+ * The milestone integer is parsed from the STATE.md `milestone:` marker (`v2.0`→2,
+ * `02`/`2`→2) and zero-padded; missing/unparseable → `00`. Per the canonical
+ * convention the milestone label IS this bracket — no `vX.Y` literal on any surface.
+ */
+function milestoneBracket(milestone, projectCode) {
+  const mMatch = String(milestone == null ? '' : milestone).match(/(\d+)/);
+  const mm = mMatch ? mMatch[1].padStart(2, '0') : '00';
+  return `[${projectCode}.${mm}]`;
+}
+
+/**
+ * #612 — bracket-native phase identity for the statusline: `[{code}.{MM}] {phaseN}`
+ * (e.g. `[GSD.02] 05`). No project_code → bare `phaseN` (graceful degrade).
+ */
+function renderPhaseDisplay(milestone, phaseN, projectCode) {
+  const phase = String(phaseN == null ? '' : phaseN);
+  if (!projectCode) return phase;
+  return `${milestoneBracket(milestone, projectCode)} ${phase}`;
+}
+
+function formatGsdState(s, opts = {}) {
   const parts = [];
 
-  // Milestone segment: version + name + (opt-in) progress bar
+  // #612 — bracket-native phase identity is gated on the project's convention.
+  // Legacy repos (no `phase_id_convention: 'bracket'`) keep the literal "Phase"
+  // word + `vX.Y` so their status-line shape is byte-for-byte unchanged.
+  const bracket = opts.convention === 'bracket';
+  const projectCode = opts.projectCode || '';
+  const phaseLabel = (phaseN) =>
+    (bracket && projectCode)
+      ? renderPhaseDisplay(s.milestone, phaseN, projectCode)
+      : `Phase ${phaseN}`;
+
+  // Milestone segment: label + name + (opt-in) progress bar. Under bracket the
+  // label IS `[{code}.{MM}]` (the convention forbids a `vX.Y` literal); legacy
+  // repos keep their `vX.Y` marker byte-for-byte.
   if (s.milestone || s.milestoneName) {
-    const ver = s.milestone || '';
+    const ver = (bracket && projectCode)
+      ? milestoneBracket(s.milestone, projectCode)
+      : (s.milestone || '');
     const name = (s.milestoneName && s.milestoneName !== 'milestone') ? s.milestoneName : '';
     const bar = renderProgressBar(s.percent);
     const pieces = [ver, name, bar].filter(Boolean);
@@ -259,13 +295,10 @@ function formatGsdState(s) {
 
   if (s.activePhase) {
     // Scene 1: an orchestrator is mid-flight on this phase.
-    // stage = whichever lifecycle status was written by the orchestrator
-    //   (discussing / planning / executing / verifying)
     const stage = s.status || '';
-    parts.push(stage ? `Phase ${s.activePhase} ${stage}` : `Phase ${s.activePhase}`);
+    parts.push(stage ? `${phaseLabel(s.activePhase)} ${stage}` : phaseLabel(s.activePhase));
   } else if (s.nextAction && phasesStr) {
     // Scene 2: idle + a recommended next command is visible to the user.
-    // Surfaces "what to run next" without the user opening STATE.md.
     parts.push(`next ${s.nextAction} ${phasesStr}`);
   } else if (Number(s.percent) === 100 || (s.completedPhases && s.totalPhases && s.completedPhases === s.totalPhases)) {
     // Scene 3: milestone complete (every phase done).
@@ -276,9 +309,17 @@ function formatGsdState(s) {
     // earlier so no existing project's status-line changes shape.
     if (s.status) parts.push(s.status);
     if (s.phaseNum && s.phaseTotal) {
-      const phase = s.phaseName
-        ? `${s.phaseName} (${s.phaseNum}/${s.phaseTotal})`
-        : `ph ${s.phaseNum}/${s.phaseTotal}`;
+      const ident = (bracket && projectCode)
+        ? renderPhaseDisplay(s.milestone, s.phaseNum, projectCode)
+        : null;
+      let phase;
+      if (s.phaseName) {
+        phase = ident ? `${ident} ${s.phaseName} (${s.phaseNum}/${s.phaseTotal})`
+                      : `${s.phaseName} (${s.phaseNum}/${s.phaseTotal})`;
+      } else {
+        phase = ident ? `${ident} (${s.phaseNum}/${s.phaseTotal})`
+                      : `ph ${s.phaseNum}/${s.phaseTotal}`;
+      }
       parts.push(phase);
     }
   }
@@ -392,8 +433,14 @@ function runStatusline() {
       }
     }
 
-    // GSD state (milestone · status · phase) — shown when no todo task
-    const gsdStateStr = task ? '' : formatGsdState(readGsdState(dir) || {});
+    // GSD state (milestone · status · phase) — shown when no todo task.
+    // #612: pass the convention + project_code so bracket repos render the
+    // bracket-native phase identity; legacy repos keep "Phase N" + vX.Y.
+    const gsdCfg = readGsdConfig(dir) || {};
+    const gsdStateStr = task ? '' : formatGsdState(readGsdState(dir) || {}, {
+      convention: gsdCfg.phase_id_convention,
+      projectCode: gsdCfg.project_code,
+    });
 
     // GSD update available?
     // Read only the per-package shared cache file (#607). The legacy

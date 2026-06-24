@@ -206,6 +206,39 @@ describe('formatGsdState', () => {
     assert.equal(out, 'Foundations · planning');
   });
 
+  // #612 PR5 statusline: bracket-convention render, gated on convention + project_code.
+  // The bracket IS the phase identity, so the "Phase" word and the vX.Y milestone
+  // literal are dropped under bracket. Legacy/non-bracket output (every test above,
+  // and the gate-off tests here) stays byte-for-byte unchanged.
+  test('bracket: active phase renders [CODE.MM] NN (drops the "Phase" word + vX.Y)', () => {
+    const out = formatGsdState(
+      { milestone: 'v2.0', activePhase: '05', status: 'executing' },
+      { convention: 'bracket', projectCode: 'GSD' }
+    );
+    assert.equal(out, '[GSD.02] · [GSD.02] 05 executing');
+  });
+
+  test('bracket: default phase scene prefixes the bracket-native id', () => {
+    const out = formatGsdState(
+      { milestone: 'v2.0', status: 'executing', phaseNum: '3', phaseTotal: '7', phaseName: 'foo' },
+      { convention: 'bracket', projectCode: 'GSD' }
+    );
+    assert.equal(out, '[GSD.02] · executing · [GSD.02] 3 foo (3/7)');
+  });
+
+  test('bracket gate OFF (no opts): legacy "Phase" word + vX.Y kept byte-identical', () => {
+    const out = formatGsdState({ milestone: 'v2.0', activePhase: '05', status: 'executing' });
+    assert.equal(out, 'v2.0 · Phase 05 executing');
+  });
+
+  test('bracket convention but no project_code → degrades to bare legacy (no bracket)', () => {
+    const out = formatGsdState(
+      { milestone: 'v2.0', activePhase: '05', status: 'executing' },
+      { convention: 'bracket', projectCode: '' }
+    );
+    assert.equal(out, 'v2.0 · Phase 05 executing');
+  });
+
   test('treats numeric 100 percent as milestone complete (#3153)', () => {
     const out = formatGsdState({
       milestone: 'v2.0',
