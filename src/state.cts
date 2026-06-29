@@ -1579,7 +1579,11 @@ function buildStateFrontmatter(bodyContent: string, cwd: string | undefined): Re
           // truth for total_phases (#549).
           let roadmapPhaseCount = 0;
           if (roadmapScope !== null) {
-            const phaseHeadingPattern = /#{2,4}\s*Phase\s+([\w][\w.-]*)\s*:/gi;
+            // #612: bracket headings (`### [CK.03] NN:`) must count toward
+            // total_phases too. Route through the centralized bracket-OR-`Phase`
+            // prefix instead of a standalone `Phase\s+` parser — keeps legacy
+            // `### Phase NN:` working and clears one PR6 grep-gate site.
+            const phaseHeadingPattern = new RegExp(`#{2,4}\\s*${phaseIdMod.PHASE_HEADING_PREFIX_SRC}([\\w][\\w.-]*)\\s*:`, 'gi');
             let m: RegExpExecArray | null;
             while ((m = phaseHeadingPattern.exec(roadmapScope)) !== null) {
               // Only count tokens that contain at least one digit — excludes
