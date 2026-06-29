@@ -20,7 +20,7 @@ const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, createTempProject, createTempGitProject, cleanup } = require('./helpers.cjs');
 
 // ─── Helpers for setting up minimal valid projects ────────────────────────────
 
@@ -1158,5 +1158,96 @@ describe('validate health — #1454 W017 excludes active worktree', () => {
       !output.warnings.some(w => w.code === 'W017'),
       `W017 should not fire for a non-git project dir: ${JSON.stringify(output.warnings)}`
     );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// planning coherence axis (#612) — additive coherence field
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('validate health — planning coherence axis (#612)', () => {
+  const { execFileSync } = require('child_process');
+  let tmpDir;
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  test('no baseline → coherence unknown', () => {
+    tmpDir = createTempProject();
+    // Full valid project but STATE.md has no frontmatter → no last_reconciled_commit
+    writeMinimalProjectMd(tmpDir);
+    writeMinimalRoadmap(tmpDir, ['1']);
+    writeMinimalStateMd(tmpDir); // default: no frontmatter, no baseline
+    writeValidConfigJson(tmpDir);
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-setup'), { recursive: true });
+
+    const result = runGsdTools('validate health', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.strictEqual(out.coherence, 'unknown',
+      `expected coherence=unknown, got: ${out.coherence}; warnings=${JSON.stringify(out.warnings)}`);
+  });
+
+  test('W011 state/roadmap conflict → coherence drifted', () => {
+    tmpDir = createTempProject();
+    writeMinimalProjectMd(tmpDir);
+    // ROADMAP: Phase 1 marked complete with [x]
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n- [x] **Phase 1: Setup**\n'
+    );
+    // STATE.md: current phase = 1, status = in-progress → W011 fires
+    writeMinimalStateMd(tmpDir, '# Session State\n\n**Current Phase:** 1\n**Status:** in-progress\n');
+    writeValidConfigJson(tmpDir);
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-setup'), { recursive: true });
+
+    const result = runGsdTools('validate health', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    assert.ok(
+      out.warnings.some(w => w.code === 'W011'),
+      `Expected W011 in warnings: ${JSON.stringify(out.warnings)}`
+    );
+    assert.strictEqual(out.coherence, 'drifted',
+      `expected coherence=drifted, got: ${out.coherence}`);
+  });
+
+  test('status verdict unchanged: degraded+coherent (additivity guarantee)', () => {
+    tmpDir = createTempGitProject();
+    // Resolve actual HEAD SHA and branch — pin base_branch in config for determinism
+    const headSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: tmpDir, encoding: 'utf-8' }).trim();
+    const branchName = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: tmpDir, encoding: 'utf-8' }).trim();
+
+    // PROJECT.md missing "## Core Value" → W001 (benign, not coherence-bearing)
+    writeMinimalProjectMd(tmpDir, ['## What This Is', '## Requirements']);
+    writeMinimalRoadmap(tmpDir, ['1']);
+
+    // STATE.md with baseline frontmatter pointing at current HEAD (0 commits ahead → not drifted)
+    // reconciledAt is 1 day ago — well within the 7-day staleness window → not stale
+    const recentIso = new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString();
+    writeMinimalStateMd(tmpDir,
+      `---\nlast_reconciled_commit: ${headSha}\nlast_reconciled_at: ${recentIso}\n---\n` +
+      '# Session State\n\n**Current Phase:** 1\n**Status:** in-progress\n'
+    );
+
+    // Pin git.base_branch so resolveBaseRef(cwd) is deterministic regardless of git host config
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ model_profile: 'balanced', commit_docs: true, git: { base_branch: branchName } }, null, 2)
+    );
+
+    // Phase dir — avoid W006/W007
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-setup'), { recursive: true });
+
+    const result = runGsdTools('validate health', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+    // Axis 1: W001 (missing section) → degraded; must be unchanged by the coherence axis
+    assert.strictEqual(out.status, 'degraded',
+      `axis-1 status must be degraded (W001 fires); got: ${out.status}; warnings=${JSON.stringify(out.warnings)}`);
+    // Axis 2: 0 commits ahead, recent baseline, no coherence-bearing codes → coherent
+    assert.strictEqual(out.coherence, 'coherent',
+      `axis-2 coherence must be coherent; got: ${out.coherence}; warnings=${JSON.stringify(out.warnings)}`);
   });
 });

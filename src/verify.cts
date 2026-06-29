@@ -47,6 +47,10 @@ const { getMilestoneInfo, stripShippedMilestones, extractCurrentMilestone } = ro
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import worktreeSafetyMod = require('./worktree-safety.cjs');
 const { inspectWorktreeHealth } = worktreeSafetyMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planningDriftMod = require('./planning-drift.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import gitBaseBranchMod = require('./git-base-branch.cjs');
 
 const { planningDir, planningRoot } = planningWorkspace;
 const { extractFrontmatter, parseMustHavesBlock } = frontmatterMod;
@@ -56,6 +60,28 @@ const { MODEL_PROFILES } = modelProfilesMod;
 // Unused but imported for structural parity
 void stripShippedMilestones;
 void detectSchemaFiles;
+
+// ── Coherence axis config readers (Task 3 — planning↔reality coherence) ──────
+
+function coherenceThreshold(config: Record<string, unknown> | null): number {
+  if (!config || typeof config !== 'object') return planningDriftMod.PLANNING_DRIFT_THRESHOLD_DEFAULT;
+  const validate = config.validate;
+  if (!validate || typeof validate !== 'object') return planningDriftMod.PLANNING_DRIFT_THRESHOLD_DEFAULT;
+  const val = (validate as Record<string, unknown>).coherence_threshold;
+  return typeof val === 'number' && Number.isInteger(val) && val >= 1
+    ? val
+    : planningDriftMod.PLANNING_DRIFT_THRESHOLD_DEFAULT;
+}
+
+function coherenceStaleness(config: Record<string, unknown> | null): number {
+  if (!config || typeof config !== 'object') return planningDriftMod.PLANNING_DRIFT_STALENESS_DAYS_DEFAULT;
+  const validate = config.validate;
+  if (!validate || typeof validate !== 'object') return planningDriftMod.PLANNING_DRIFT_STALENESS_DAYS_DEFAULT;
+  const val = (validate as Record<string, unknown>).coherence_staleness_days;
+  return typeof val === 'number' && Number.isInteger(val) && val >= 0
+    ? val
+    : planningDriftMod.PLANNING_DRIFT_STALENESS_DAYS_DEFAULT;
+}
 
 function cmdVerifySummary(
   cwd: string,
@@ -2119,6 +2145,49 @@ function cmdValidateHealth(
   const repairableCount =
     errors.filter((e) => e.repairable).length + warnings.filter((w) => w.repairable).length;
 
+  // ── Axis 2: planning coherence (additive; status above is untouched) ─────────
+  const COHERENCE_BEARING = new Set(['W011', 'W021']);
+  let coherence: 'coherent' | 'drifted' | 'unknown' = 'coherent';
+  let coherenceDetail: string | undefined;
+  try {
+    let configParsedForCoherence: Record<string, unknown> | null = null;
+    try {
+      const rawCfg = fs.readFileSync(configPath, 'utf8');
+      configParsedForCoherence = JSON.parse(rawCfg) as Record<string, unknown>;
+    } catch { /* no config — use defaults */ }
+    const baselineCommit = planningDriftMod.readReconciledCommit(statePath);
+    const reconciledAt = planningDriftMod.readReconciledAt(statePath);
+    const baseRef = gitBaseBranchMod.resolveBaseRef(cwd);
+    let driftResult: { skipped: boolean; drifted: boolean; message: string; reason?: string } =
+      { skipped: true, drifted: false, message: '', reason: 'no-baseline' };
+    if (baselineCommit && baseRef) {
+      const log = gitBaseBranchMod.commitsSince(cwd, baselineCommit, baseRef);
+      driftResult = planningDriftMod.detectPlanningDrift({
+        baselineCommit,
+        baseRef,
+        baseCommits: log.commits,
+        baseMerges: log.merges,
+        reconciledAt,
+        nowIso: new Date().toISOString(),
+        threshold: coherenceThreshold(configParsedForCoherence),
+        stalenessWindowDays: coherenceStaleness(configParsedForCoherence),
+      });
+    }
+    const coherenceCodes = [...warnings, ...info].filter((i) => COHERENCE_BEARING.has(i.code));
+    if (driftResult.drifted || coherenceCodes.length > 0) {
+      coherence = 'drifted';
+      coherenceDetail = driftResult.drifted
+        ? driftResult.message
+        : `Planning/reality mismatch: ${coherenceCodes.map((c) => c.code).join(', ')}`;
+    } else if (
+      driftResult.skipped &&
+      (driftResult.reason === 'no-baseline' || driftResult.reason === 'no-base-branch')
+    ) {
+      coherence = 'unknown';
+      coherenceDetail = 'No reconcile baseline yet — run `state sync` to establish one.';
+    }
+  } catch { coherence = 'unknown'; }
+
   const result: Record<string, unknown> = {
     status,
     errors,
@@ -2126,6 +2195,8 @@ function cmdValidateHealth(
     info,
     repairable_count: repairableCount,
     repairs_performed: repairActions.length > 0 ? repairActions : undefined,
+    coherence,
+    coherence_detail: coherenceDetail,
   };
   output(result, raw);
   return result;
