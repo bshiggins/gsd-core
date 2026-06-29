@@ -30,7 +30,7 @@ import coreUtilsMod = require('./core-utils.cjs');
 const { extractOneLinerFromBody } = coreUtilsMod;
 const { planningPaths } = planningWorkspace;
 const { extractFrontmatter } = frontmatterMod;
-const { writeStateMd, stateReplaceFieldWithFallback } = stateMod;
+const { writeStateMd, stateReplaceFieldWithFallback, stampReconcileBaseline } = stateMod;
 
 interface MilestoneCompleteOptions {
   name?: string;
@@ -343,6 +343,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
     }
 
     writeStateMd(statePath, stateContent, cwd);
+    stampReconcileBaseline(cwd, statePath);
   }
 
   // Archive phase directories if requested

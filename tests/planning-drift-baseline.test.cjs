@@ -46,4 +46,17 @@ describe('baseline stamping', () => {
     assert.equal(readReconciledCommit(statePath), head, 'key must survive state update');
     cleanup(tmp);
   });
+
+  test('milestone complete stamps last_reconciled_commit', () => {
+    const tmp = createTempProject();
+    execSync('git init -q && git add -A && git commit -q -m init --allow-empty', { cwd: tmp, shell: true });
+    const head = execSync('git rev-parse HEAD', { cwd: tmp }).toString().trim();
+    const statePath = path.join(tmp, '.planning', 'STATE.md');
+    fs.writeFileSync(path.join(tmp, '.planning', 'ROADMAP.md'), '# Roadmap v1.0 MVP\n\n### Phase 1: Foundation\n**Goal:** Setup\n');
+    fs.writeFileSync(statePath, '# State\n\n**Status:** In progress\n**Last Activity:** 2025-01-01\n**Last Activity Description:** Working\n');
+    fs.mkdirSync(path.join(tmp, '.planning', 'phases', '01-foundation'), { recursive: true });
+    runGsdTools(['milestone', 'complete', 'v1.0', '--name', 'MVP Foundation'], tmp);
+    assert.equal(readReconciledCommit(statePath), head);
+    cleanup(tmp);
+  });
 });
