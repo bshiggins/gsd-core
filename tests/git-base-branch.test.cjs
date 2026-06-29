@@ -338,3 +338,107 @@ describe('#1406: setGsdConfig prototype-pollution guard', () => {
     assert.strictEqual(cfg.git.base_branch, 'develop');
   });
 });
+
+// ─── resolveBaseRef / baseTipSha / commitsSince (Task 2) ─────────────────────
+
+describe('resolveBaseRef / baseTipSha / commitsSince — dep-injected', () => {
+  const { resolveBaseRef, baseTipSha, commitsSince } = gitBaseBranch;
+
+  // Fake execGit factory: responds to each git invocation pattern
+  function fakeExec(responses) {
+    // responses: Map from first-arg string substring to { exitCode, stdout }
+    return (args) => {
+      const key = args.join(' ');
+      for (const [pattern, resp] of Object.entries(responses)) {
+        if (key.includes(pattern)) return { exitCode: resp.exitCode, stdout: resp.stdout || '', stderr: '', signal: null, error: null };
+      }
+      return { exitCode: 1, stdout: '', stderr: '', signal: null, error: null };
+    };
+  }
+
+  test('resolveBaseRef returns origin/<name> when remote-tracking ref verifies', () => {
+    const execGit = fakeExec({
+      // resolveBaseBranch → tryLocalBranch → branch --list main master
+      'branch --list main master': { exitCode: 0, stdout: '* main\n' },
+      // resolveBaseRef → rev-parse --verify --quiet origin/main
+      'origin/main': { exitCode: 0, stdout: 'abc123\n' },
+    });
+    const result = resolveBaseRef('/fake', { execGit });
+    assert.strictEqual(result, 'origin/main');
+  });
+
+  test('resolveBaseRef falls back to local <name> when origin/<name> does not verify', () => {
+    const execGit = fakeExec({
+      'branch --list main master': { exitCode: 0, stdout: '* main\n' },
+      // origin/main fails
+      '--verify --quiet origin/main': { exitCode: 1, stdout: '' },
+      // local main verifies
+      '--verify --quiet main': { exitCode: 0, stdout: 'def456\n' },
+    });
+    // origin/main fails, main succeeds
+    const calls = [];
+    const trackingExec = (args, opts) => {
+      calls.push(args.join(' '));
+      return execGit(args, opts);
+    };
+    const result = resolveBaseRef('/fake', { execGit: trackingExec });
+    assert.strictEqual(result, 'main');
+  });
+
+  test('resolveBaseRef returns null when neither remote nor local ref verifies', () => {
+    const execGit = fakeExec({
+      'branch --list main master': { exitCode: 0, stdout: '* main\n' },
+      '--verify': { exitCode: 1, stdout: '' },
+    });
+    const result = resolveBaseRef('/fake', { execGit });
+    assert.strictEqual(result, null);
+  });
+
+  test('baseTipSha returns trimmed SHA on success', () => {
+    const execGit = fakeExec({
+      'rev-parse': { exitCode: 0, stdout: 'aabbccdd1234\n' },
+    });
+    const sha = baseTipSha('/fake', 'main', { execGit });
+    assert.strictEqual(sha, 'aabbccdd1234');
+  });
+
+  test('baseTipSha returns null when git rev-parse fails', () => {
+    const execGit = fakeExec({
+      'rev-parse': { exitCode: 128, stdout: '' },
+    });
+    const sha = baseTipSha('/fake', 'origin/main', { execGit });
+    assert.strictEqual(sha, null);
+  });
+
+  test('commitsSince returns commits and merges parsed from git log output', () => {
+    let callCount = 0;
+    const execGit = (args) => {
+      callCount++;
+      const isMerges = args.includes('--merges');
+      if (isMerges) {
+        return { exitCode: 0, stdout: 'Merge PR #42\nMerge feat/xyz\n', stderr: '', signal: null, error: null };
+      }
+      return { exitCode: 0, stdout: 'chore: bump\nfeat: new thing\nMerge PR #42\n', stderr: '', signal: null, error: null };
+    };
+    const result = commitsSince('/fake', 'sha0', 'main', { execGit });
+    assert.strictEqual(callCount, 2);
+    assert.deepStrictEqual(result.commits, ['chore: bump', 'feat: new thing', 'Merge PR #42']);
+    assert.deepStrictEqual(result.merges, ['Merge PR #42', 'Merge feat/xyz']);
+  });
+
+  test('commitsSince returns empty arrays when git log fails (unreachable baseline)', () => {
+    const execGit = fakeExec({
+      'log': { exitCode: 128, stdout: '' },
+    });
+    const result = commitsSince('/fake', 'deadbeef', 'main', { execGit });
+    assert.deepStrictEqual(result, { commits: [], merges: [] });
+  });
+
+  test('commitsSince filters empty subjects', () => {
+    const execGit = (_args) => {
+      return { exitCode: 0, stdout: 'feat: real\n\n   \nfeat: also real\n', stderr: '', signal: null, error: null };
+    };
+    const result = commitsSince('/fake', 'sha1', 'main', { execGit });
+    assert.deepStrictEqual(result.commits, ['feat: real', 'feat: also real']);
+  });
+});

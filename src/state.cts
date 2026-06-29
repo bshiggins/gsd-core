@@ -42,6 +42,10 @@ import {
   stateReplaceFieldIfTemplate,
 } from './state-document.cjs';
 import { tokenizeHeadings } from './markdown-sectionizer.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planningDriftMod = require('./planning-drift.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import gitBaseBranchMod = require('./git-base-branch.cjs');
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -2170,6 +2174,26 @@ function cmdStateJson(cwd: string, raw: boolean): void {
   output(built, raw, JSON.stringify(built, null, 2));
 }
 
+// ─── Reconcile-baseline stamp (Task 2 — planning↔reality coherence) ──────────
+
+/**
+ * Stamp `last_reconciled_commit` and `last_reconciled_at` to the current base-branch tip.
+ *
+ * Called at loop-completion points (begin-phase, sync, validate health --repair,
+ * milestone-complete) so the drift discriminator can tell a healthy just-shipped
+ * phase (fresh baseline) from genuine drift (stale baseline + large gap).
+ *
+ * Detection aid only — never throws and never blocks a state write.
+ */
+function stampReconcileBaseline(cwd: string, statePath: string): void {
+  try {
+    const baseRef = gitBaseBranchMod.resolveBaseRef(cwd);
+    if (!baseRef) return;
+    const sha = gitBaseBranchMod.baseTipSha(cwd, baseRef);
+    if (sha) planningDriftMod.writeReconciledCommit(statePath, sha, new Date().toISOString().slice(0, 10));
+  } catch { /* detection aid only — never block a state write */ }
+}
+
 /**
  * Update STATE.md when a new phase begins execution.
  * Updates body text fields (Current focus, Status, Last Activity, Current Position)
@@ -2364,6 +2388,7 @@ function cmdStateBeginPhase(cwd: string, phaseNumber: string | number, phaseName
   }, cwd);
 
   output({ updated, phase: phaseNumber, phase_name: phaseName || null, plan_count: planCount || null }, raw, updated.length > 0 ? 'true' : 'false');
+  stampReconcileBaseline(cwd, statePath);
 }
 
 /**
@@ -2823,6 +2848,7 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
     writeStateMd(statePath, modified, cwd);
   }
 
+  stampReconcileBaseline(cwd, statePath);
   output({ synced: true, changes, dry_run: false }, raw, undefined);
 }
 
@@ -3157,6 +3183,7 @@ function cmdStateCompletePhase(cwd: string, raw: boolean, overridePhase?: string
     raw,
     updated.length > 0 ? 'true' : 'false',
   );
+  stampReconcileBaseline(cwd, statePath);
 }
 
 export = {
@@ -3193,6 +3220,7 @@ export = {
   cmdStateMilestoneSwitch,
   cmdSignalWaiting,
   cmdSignalResume,
+  stampReconcileBaseline,
   // Test seam (#1514): the pure retired/folded-phase parser, exposed so its
   // strikethrough-detection logic can be property-tested directly.
   _extractRetiredPhaseNumbers: extractRetiredPhaseNumbers,

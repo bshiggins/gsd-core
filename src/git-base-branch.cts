@@ -199,6 +199,86 @@ export function resolveBaseBranch(
   return 'main';
 }
 
+// ─── Ref / SHA / log helpers (Task 2 — planning↔reality coherence) ───────────
+
+/**
+ * Resolve the base ref as a full ref string (`origin/<name>` when a remote-tracking
+ * branch exists, `<name>` for local-only repos), or null if neither verifies.
+ *
+ * `origin/<name>` is preferred because it represents shipped reality in PR-flow
+ * repos. Falls back to `<name>` for bare / local-only repos.
+ *
+ * Never throws — on any git error returns null.
+ */
+export function resolveBaseRef(cwd: string, deps?: BaseBranchDeps): string | null {
+  const execGit: ExecGitFn = deps?.execGit ?? execGitSeam;
+  const name = resolveBaseBranch(cwd, deps);
+  // Try origin/<name> (remote-tracking = shipped reality for PR-flow repos)
+  try {
+    const r = execGit(['rev-parse', '--verify', '--quiet', `origin/${name}`], { cwd, timeout: 5_000 });
+    if (r.exitCode === 0 && r.stdout.trim()) return `origin/${name}`;
+  } catch { /* fall through */ }
+  // Try local <name>
+  try {
+    const r = execGit(['rev-parse', '--verify', '--quiet', name], { cwd, timeout: 5_000 });
+    if (r.exitCode === 0 && r.stdout.trim()) return name;
+  } catch { /* fall through */ }
+  return null;
+}
+
+/**
+ * Return the tip commit SHA for `ref` (e.g. `origin/main` or `main`).
+ * Runs `git rev-parse <ref>` and returns the trimmed output.
+ * Returns null on failure (unknown ref, not a git repo, timeout, etc.).
+ *
+ * Never throws.
+ */
+export function baseTipSha(cwd: string, ref: string, deps?: BaseBranchDeps): string | null {
+  const execGit: ExecGitFn = deps?.execGit ?? execGitSeam;
+  try {
+    const r = execGit(['rev-parse', ref], { cwd, timeout: 5_000 });
+    if (r.exitCode !== 0 || !r.stdout) return null;
+    return r.stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Return commit subjects and merge subjects between `baselineSha` and `ref`.
+ *
+ * Uses `git log <baselineSha>..<ref> --pretty=%s` for all commits and
+ * `git log <baselineSha>..<ref> --merges --pretty=%s` for merge commits.
+ * Empty subjects are filtered out.
+ *
+ * Returns `{ commits: [], merges: [] }` on any error (e.g. baseline SHA
+ * unreachable, not a git repo).
+ *
+ * Never throws.
+ */
+export function commitsSince(
+  cwd: string,
+  baselineSha: string,
+  ref: string,
+  deps?: BaseBranchDeps
+): { commits: string[]; merges: string[] } {
+  const execGit: ExecGitFn = deps?.execGit ?? execGitSeam;
+  try {
+    const range = `${baselineSha}..${ref}`;
+    const rCommits = execGit(['log', range, '--pretty=%s'], { cwd, timeout: 15_000 });
+    const commits = rCommits.exitCode === 0
+      ? rCommits.stdout.split('\n').map((l: string) => l.trim()).filter(Boolean)
+      : [];
+    const rMerges = execGit(['log', range, '--merges', '--pretty=%s'], { cwd, timeout: 15_000 });
+    const merges = rMerges.exitCode === 0
+      ? rMerges.stdout.split('\n').map((l: string) => l.trim()).filter(Boolean)
+      : [];
+    return { commits, merges };
+  } catch {
+    return { commits: [], merges: [] };
+  }
+}
+
 // ─── gitWorktreeInfoInternal (moved from core.cjs, ADR-857 T0 #1268) ─────────
 
 export interface GitWorktreeInfo {
