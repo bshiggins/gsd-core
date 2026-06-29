@@ -1745,6 +1745,14 @@ function syncStateFrontmatter(content: string, cwd: string | undefined): string 
   if (!derivedFm['progress'] && existingFm['progress']) {
     derivedFm['progress'] = normalizeProgressNumbers(existingFm['progress']);
   }
+  // Preserve planning↔reality baseline keys: never body-derived, so the
+  // !derivedFm guard is always true when present — safe across all callers.
+  if (!derivedFm['last_reconciled_commit'] && existingFm['last_reconciled_commit']) {
+    derivedFm['last_reconciled_commit'] = existingFm['last_reconciled_commit'];
+  }
+  if (!derivedFm['last_reconciled_at'] && existingFm['last_reconciled_at']) {
+    derivedFm['last_reconciled_at'] = existingFm['last_reconciled_at'];
+  }
 
   const yamlStr = reconstructFrontmatter(derivedFm as unknown as Frontmatter);
   return `---\n${yamlStr}\n---\n\n${body}`;
