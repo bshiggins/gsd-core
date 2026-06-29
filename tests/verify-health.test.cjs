@@ -1251,3 +1251,91 @@ describe('validate health — planning coherence axis (#612)', () => {
       `axis-2 coherence must be coherent; got: ${out.coherence}; warnings=${JSON.stringify(out.warnings)}`);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// W007 coherence-bearing / W006 advisory-only (Task 4)
+//
+// W007 (active disk phase not in ROADMAP) feeds the coherence axis.
+// W006 (roadmap phase not on disk) is advisory-only and must NOT.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('validate health — W007 coherence-bearing, W006 advisory (task-4)', () => {
+  const { execFileSync } = require('child_process');
+  let tmpDir;
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  // Test A — RED before task-4 (coherence='unknown'), GREEN after (coherence='drifted').
+  // Rationale: W007 is emitted for activeDiskPhases only (excludes archived), so every
+  // W007 is an active phase that shipped without being in the plan — genuine drift.
+  // With no baseline the drift check is skipped (reason='no-baseline'), so pre-task-4
+  // coherence defaults to 'unknown'. Post-task-4 W007's coherenceBearing flag fires
+  // the drifted branch before the unknown branch is reached.
+  test('W007 (active disk phase absent from ROADMAP) → coherence drifted', () => {
+    tmpDir = createTempProject();
+    writeMinimalProjectMd(tmpDir);
+    // ROADMAP with no phases — prevents W006 from firing
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\nNo phases listed.\n'
+    );
+    writeMinimalStateMd(tmpDir); // no frontmatter → no baseline → driftResult.reason='no-baseline'
+    writeValidConfigJson(tmpDir);
+    // Active disk phase not mentioned in ROADMAP → W007 (coherenceBearing=true after task-4)
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-active'), { recursive: true });
+
+    const result = runGsdTools('validate health', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+
+    assert.ok(
+      out.warnings.some(w => w.code === 'W007'),
+      `Expected W007 in warnings: ${JSON.stringify(out.warnings)}`
+    );
+    assert.strictEqual(out.coherence, 'drifted',
+      `W007 must flip coherence to drifted; got: ${out.coherence}; warnings=${JSON.stringify(out.warnings)}`);
+  });
+
+  // Test B — regression guard: W006 must never become coherence-bearing.
+  // Passes both before and after task-4. Uses a real git project with a pinned
+  // baseline so the drift check produces a clean 'coherent' (not 'unknown').
+  test('W006-only project keeps coherence coherent (W006 is advisory-only)', () => {
+    tmpDir = createTempGitProject();
+    const headSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: tmpDir, encoding: 'utf-8' }).trim();
+    const branchName = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: tmpDir, encoding: 'utf-8' }).trim();
+    const recentIso = new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString();
+
+    writeMinimalProjectMd(tmpDir); // all required sections → no W001
+    // ROADMAP with phase 1 (no checkbox = not "not-started") → W006 fires when no disk dir
+    writeMinimalRoadmap(tmpDir, ['1']);
+    // Baseline at HEAD, recent timestamp → drift check: 0 commits ahead, not stale → coherent
+    writeMinimalStateMd(tmpDir,
+      `---\nlast_reconciled_commit: ${headSha}\nlast_reconciled_at: ${recentIso}\n---\n` +
+      '# Session State\n\nNo phase refs.\n' // no **Current Phase:** → W011 safe
+    );
+    // Pin base_branch for determinism; no phase_id_convention → W021 safe
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ model_profile: 'balanced', commit_docs: true, git: { base_branch: branchName } }, null, 2)
+    );
+    // No disk phase dirs → activeDiskPhases empty → no W007
+    // ROADMAP has phase 1 with no disk dir → W006 fires
+
+    const result = runGsdTools('validate health', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+
+    assert.ok(
+      out.warnings.some(w => w.code === 'W006'),
+      `Expected W006 in warnings: ${JSON.stringify(out.warnings)}`
+    );
+    assert.ok(
+      !out.warnings.some(w => w.code === 'W007'),
+      `W007 must not fire when no orphan disk phases: ${JSON.stringify(out.warnings)}`
+    );
+    assert.strictEqual(out.coherence, 'coherent',
+      `W006 must NOT affect coherence; got: ${out.coherence}; warnings=${JSON.stringify(out.warnings)}`);
+  });
+});

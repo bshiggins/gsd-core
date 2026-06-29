@@ -1207,6 +1207,8 @@ interface IssueEntry {
   message: string;
   fix: string;
   repairable: boolean;
+  /** When true, this issue counts toward the planning↔reality coherence axis. */
+  coherenceBearing?: boolean;
 }
 
 function cmdValidateConsistency(cwd: string, raw: boolean): void {
@@ -1365,8 +1367,10 @@ function cmdValidateHealth(
     message: string,
     fix: string,
     repairable = false,
+    coherenceBearing = false,
   ) => {
     const issue: IssueEntry = { code, message, fix, repairable };
+    if (coherenceBearing) issue.coherenceBearing = true;
     if (severity === 'error') errors.push(issue);
     else if (severity === 'warning') warnings.push(issue);
     else info.push(issue);
@@ -1659,6 +1663,8 @@ function cmdValidateHealth(
           'W007',
           `Phase ${p} exists on disk but not in ROADMAP.md`,
           'Add to roadmap or remove directory',
+          false,  // not auto-repairable
+          true,   // coherenceBearing: active disk phase not in roadmap is a genuine drift signal
         );
       }
     }
@@ -2173,7 +2179,7 @@ function cmdValidateHealth(
         stalenessWindowDays: coherenceStaleness(configParsedForCoherence),
       });
     }
-    const coherenceCodes = [...warnings, ...info].filter((i) => COHERENCE_BEARING.has(i.code));
+    const coherenceCodes = [...warnings, ...info].filter((i) => COHERENCE_BEARING.has(i.code) || i.coherenceBearing === true);
     if (driftResult.drifted || coherenceCodes.length > 0) {
       coherence = 'drifted';
       coherenceDetail = driftResult.drifted
