@@ -30,12 +30,41 @@ if [ -f .planning/config.json ]; then
   CONFIG_MODE=$(node -e "try{const c=require('./.planning/config.json');process.stdout.write(String(c.mode||'unknown'))}catch{process.stdout.write('unknown')}" 2>/dev/null)
 fi
 
+# ── Axis 2: planning coherence drift surfacing ───────────────────────────────
+# Run `validate health --raw` in a sandboxed child process (5 s timeout via
+# spawnSync, portable across platforms — no dependency on the `timeout` binary).
+# On any failure — timeout, missing CLI, unparseable output, non-GSD dir,
+# or coherence ≠ 'drifted' — DRIFT_LINE stays empty and nothing is emitted.
+# This is intentional: absolute fail-safe for every session start. Read-only.
+HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
+GSD_TOOLS="$HOOK_DIR/../gsd-core/bin/gsd-tools.cjs"
+DRIFT_LINE=""
+if [ -f "$GSD_TOOLS" ]; then
+  DRIFT_LINE=$(node -e '
+    const { spawnSync } = require("child_process");
+    const gsdTools = process.argv[1];
+    const result = spawnSync(process.execPath, [gsdTools, "validate", "health", "--raw"], {
+      encoding: "utf-8",
+      timeout: 5000,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    if (!result.stdout || result.error || result.status !== 0) { process.exit(0); }
+    try {
+      const out = JSON.parse(result.stdout);
+      if (out.coherence === "drifted" && out.coherence_detail) {
+        process.stdout.write("⚠ Planning: DRIFTED — " + out.coherence_detail);
+      }
+    } catch {}
+    process.exit(0);
+  ' "$GSD_TOOLS" 2>/dev/null) || true
+fi
+
 # Use Node for JSON encoding so embedded newlines/quotes are escaped correctly.
 # additionalContext is the text Claude Code injects at session start; the
-# typed fields (state_present, config_mode) let tests assert on the
-# structured contract without grepping the prose.
+# typed fields (state_present, config_mode, coherence_drifted) let tests assert
+# on the structured contract without grepping the prose.
 node -e '
-  const [statePresent, stateHead, configMode] = process.argv.slice(1);
+  const [statePresent, stateHead, configMode, driftLine] = process.argv.slice(1);
   const headerLines = ["## Project State Reminder", ""];
   if (statePresent === "true") {
     headerLines.push("STATE.md exists - check for blockers and current phase.");
@@ -45,6 +74,10 @@ node -e '
   }
   headerLines.push("");
   headerLines.push("Config: \"mode\": \"" + configMode + "\"");
+  if (driftLine) {
+    headerLines.push("");
+    headerLines.push(driftLine);
+  }
   const additionalContext = headerLines.join("\n");
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
@@ -52,8 +85,9 @@ node -e '
       additionalContext,
       state_present: statePresent === "true",
       config_mode: configMode,
+      coherence_drifted: driftLine ? true : false,
     },
   }));
-' "$STATE_PRESENT" "$STATE_HEAD" "$CONFIG_MODE"
+' "$STATE_PRESENT" "$STATE_HEAD" "$CONFIG_MODE" "$DRIFT_LINE"
 
 exit 0
