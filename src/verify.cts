@@ -2167,17 +2167,32 @@ function cmdValidateHealth(
     let driftResult: { skipped: boolean; drifted: boolean; message: string; reason?: string } =
       { skipped: true, drifted: false, message: '', reason: 'no-baseline' };
     if (baselineCommit && baseRef) {
-      const log = gitBaseBranchMod.commitsSince(cwd, baselineCommit, baseRef);
-      driftResult = planningDriftMod.detectPlanningDrift({
-        baselineCommit,
-        baseRef,
-        baseCommits: log.commits,
-        baseMerges: log.merges,
-        reconciledAt,
-        nowIso: new Date().toISOString(),
-        threshold: coherenceThreshold(configParsedForCoherence),
-        stalenessWindowDays: coherenceStaleness(configParsedForCoherence),
-      });
+      // Minor fix: check if the baseline commit is still reachable before passing it
+      // to commitsSince. An unreachable baseline returns empty commits which are
+      // indistinguishable from a truly-zero-ahead project, silently producing
+      // coherence='coherent' when the actual state is indeterminate. Per spec error
+      // table, an unreachable baseline should yield coherence='unknown'.
+      let baselineReachable = true;
+      try {
+        const catResult = execGit(['cat-file', '-t', baselineCommit], { cwd, timeout: 5_000 }) as unknown as { exitCode: number };
+        if (catResult.exitCode !== 0) baselineReachable = false;
+      } catch { baselineReachable = false; }
+
+      if (!baselineReachable) {
+        driftResult = { skipped: true, reason: 'baseline-unreachable', drifted: false, message: '' };
+      } else {
+        const log = gitBaseBranchMod.commitsSince(cwd, baselineCommit, baseRef);
+        driftResult = planningDriftMod.detectPlanningDrift({
+          baselineCommit,
+          baseRef,
+          baseCommits: log.commits,
+          baseMerges: log.merges,
+          reconciledAt,
+          nowIso: new Date().toISOString(),
+          threshold: coherenceThreshold(configParsedForCoherence),
+          stalenessWindowDays: coherenceStaleness(configParsedForCoherence),
+        });
+      }
     }
     const coherenceCodes = [...warnings, ...info].filter((i) => COHERENCE_BEARING.has(i.code) || i.coherenceBearing === true);
     if (driftResult.drifted || coherenceCodes.length > 0) {
@@ -2187,12 +2202,23 @@ function cmdValidateHealth(
         : `Planning/reality mismatch: ${coherenceCodes.map((c) => c.code).join(', ')}`;
     } else if (
       driftResult.skipped &&
-      (driftResult.reason === 'no-baseline' || driftResult.reason === 'no-base-branch')
+      (driftResult.reason === 'no-baseline' ||
+        driftResult.reason === 'no-base-branch' ||
+        driftResult.reason === 'baseline-unreachable' ||
+        (typeof driftResult.reason === 'string' && driftResult.reason.startsWith('exception:')))
     ) {
       coherence = 'unknown';
-      coherenceDetail = 'No reconcile baseline yet — run `state sync` to establish one.';
+      coherenceDetail = (driftResult.reason === 'no-baseline' || driftResult.reason === 'no-base-branch')
+        ? 'No reconcile baseline yet — run `state sync` to establish one.'
+        : `Baseline check skipped (${driftResult.reason}) — coherence state is indeterminate.`;
     }
   } catch { coherence = 'unknown'; }
+
+  // I-3: strip internal coherenceBearing tag before serialization — it is a
+  // computation-only flag and must not appear in the public JSON output.
+  for (const issue of ([...errors, ...warnings, ...info] as IssueEntry[])) {
+    delete issue.coherenceBearing;
+  }
 
   const result: Record<string, unknown> = {
     status,

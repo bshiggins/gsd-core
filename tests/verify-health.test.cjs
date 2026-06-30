@@ -1339,3 +1339,82 @@ describe('validate health — W007 coherence-bearing, W006 advisory (task-4)', (
       `W006 must NOT affect coherence; got: ${out.coherence}; warnings=${JSON.stringify(out.warnings)}`);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// I-3: coherenceBearing must not appear in serialized warning objects
+// Minor: unreachable baseline / exception → coherence unknown
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('validate health — I-3 coherenceBearing stripped + minor unreachable-baseline', () => {
+  const { execFileSync } = require('child_process');
+  let tmpDir;
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  // I-3: coherenceBearing is an internal computation tag. It must not appear in
+  // the serialized warning objects in the public JSON output. W007 is the only
+  // warning that currently sets coherenceBearing, so we use the W007 fixture and
+  // assert the serialized warning object has no coherenceBearing key.
+  test('W007 serialized warning object does NOT contain coherenceBearing key (I-3)', () => {
+    tmpDir = createTempProject();
+    writeMinimalProjectMd(tmpDir);
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\nNo phases listed.\n'
+    );
+    writeMinimalStateMd(tmpDir);
+    writeValidConfigJson(tmpDir);
+    // Active disk phase not in ROADMAP → W007 emitted
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-active'), { recursive: true });
+
+    const result = runGsdTools('validate health', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+
+    const w007 = out.warnings.find(w => w.code === 'W007');
+    assert.ok(w007, `Expected W007 in warnings: ${JSON.stringify(out.warnings)}`);
+
+    // The coherence verdict must still compute correctly (coherenceBearing logic intact)
+    assert.strictEqual(out.coherence, 'drifted',
+      `W007 must still produce coherence=drifted; got: ${out.coherence}`);
+
+    // The serialized warning object must NOT carry the internal tag
+    assert.ok(!('coherenceBearing' in w007),
+      `W007 warning must not have coherenceBearing in output JSON; got: ${JSON.stringify(w007)}`);
+  });
+
+  // Minor fix: a garbage/unreachable last_reconciled_commit should produce
+  // coherence='unknown' rather than 'coherent'. Before the fix, commitsSince
+  // returned empty commits for an unreachable SHA (git log exits non-zero)
+  // which detectPlanningDrift treated as 0 commits ahead → coherent.
+  // After the fix, the reachability pre-check detects the unreachable SHA and
+  // sets driftResult.reason='baseline-unreachable' → coherence='unknown'.
+  test('unreachable last_reconciled_commit → coherence unknown (minor fix)', () => {
+    tmpDir = createTempGitProject();
+    const branchName = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: tmpDir, encoding: 'utf-8' }).trim();
+
+    writeMinimalProjectMd(tmpDir);
+    writeMinimalRoadmap(tmpDir, ['1']);
+    // Stamp a garbage SHA that doesn't exist in the repo
+    const garbageSha = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
+    const recentIso = new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString();
+    writeMinimalStateMd(tmpDir,
+      `---\nlast_reconciled_commit: ${garbageSha}\nlast_reconciled_at: ${recentIso}\n---\n` +
+      '# Session State\n\nNo phase refs.\n'
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, '.planning', 'config.json'),
+      JSON.stringify({ model_profile: 'balanced', commit_docs: true, git: { base_branch: branchName } }, null, 2)
+    );
+    fs.mkdirSync(path.join(tmpDir, '.planning', 'phases', '01-setup'), { recursive: true });
+
+    const result = runGsdTools('validate health', tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const out = JSON.parse(result.output);
+
+    assert.strictEqual(out.coherence, 'unknown',
+      `Unreachable baseline must yield coherence=unknown; got: ${out.coherence}; detail=${out.coherence_detail}`);
+  });
+});

@@ -2192,13 +2192,31 @@ function cmdStateJson(cwd: string, raw: boolean): void {
  * phase (fresh baseline) from genuine drift (stale baseline + large gap).
  *
  * Detection aid only — never throws and never blocks a state write.
+ *
+ * Fix (data loss): the prior implementation called writeReconciledCommit which used a
+ * flat-only regex parser (parseFm). That parser silently dropped every indented child
+ * line, collapsing the nested `progress:` block to an empty key on every stamp. This
+ * write happened AFTER the canonical writeStateMd call, so it was the one that landed —
+ * silently destroying the progress block on all 5 stamp-point commands (begin-phase,
+ * sync, complete-phase, milestone complete, validate health --repair). The fix routes
+ * through readModifyWriteStateMd (locked, canonical codec) with resync:false so the
+ * pre-stamp progress block is captured and restored after syncStateFrontmatter runs.
  */
 function stampReconcileBaseline(cwd: string, statePath: string): void {
   try {
+    if (!fs.existsSync(statePath)) return;
     const baseRef = gitBaseBranchMod.resolveBaseRef(cwd);
     if (!baseRef) return;
     const sha = gitBaseBranchMod.baseTipSha(cwd, baseRef);
-    if (sha) planningDriftMod.writeReconciledCommit(statePath, sha, new Date().toISOString().slice(0, 10));
+    if (!sha) return;
+    const isoDate = new Date().toISOString().slice(0, 10);
+    readModifyWriteStateMd(statePath, (content) => {
+      const fm = extractFrontmatter(content) as Record<string, unknown>;
+      fm['last_reconciled_commit'] = sha;
+      fm['last_reconciled_at'] = isoDate;
+      const body = stripFrontmatter(content);
+      return `---\n${reconstructFrontmatter(fm as unknown as Frontmatter)}\n---\n\n${body}`;
+    }, cwd, { resync: false });
   } catch { /* detection aid only — never block a state write */ }
 }
 
