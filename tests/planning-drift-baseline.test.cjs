@@ -1,5 +1,4 @@
 // tests/planning-drift-baseline.test.cjs
-// allow-test-rule: source-text-is-the-product
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');

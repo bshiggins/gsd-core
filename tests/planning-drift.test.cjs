@@ -1,5 +1,4 @@
 // tests/planning-drift.test.cjs
-// allow-test-rule: source-text-is-the-product
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const pd = require('../gsd-core/bin/lib/planning-drift.cjs');
