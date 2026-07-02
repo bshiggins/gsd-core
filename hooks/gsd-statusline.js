@@ -452,7 +452,10 @@ function runStatusline() {
       try {
         const cache = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
         const { showUpdate, staleWarning } = evaluateUpdateCache(cache);
-        if (showUpdate) {
+        // Fork-local: the update prompt is opt-in (statusline.show_update_prompt).
+        // This install runs ahead of upstream from reland/612-bracket — a stock
+        // update would wipe the bracket work, so don't advertise it by default.
+        if (showUpdate && getConfigValue(gsdCfg, 'statusline.show_update_prompt') === true) {
           gsdUpdate = '\x1b[33m⬆ /gsd:update\x1b[0m │ ';
         }
         if (staleWarning === 'dev') {
