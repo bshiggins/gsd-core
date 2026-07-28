@@ -39,6 +39,11 @@ const CANONICAL = [
   'phaseMarkdownRegexSourceExact', 'comparePhaseNum', 'extractPhaseToken',
   'phaseTokenMatches', 'parsePhaseFromProse', 'stripConfiguredProjectCodePrefix',
   'isForeignPrefixedPhaseQuery', 'roadmapPhaseLookupSources',
+  // #612 PR-2 read-path grammar sources + the milestone-qualified dir key.
+  'PHASE_HEADING_PREFIX_SRC', 'PHASE_HEADING_PREFIX_CAPTURING_SRC',
+  'BRACKET_ID_HEADING_PREFIX_SRC', 'BRACKET_ID_HEADING_PREFIX_CAPTURING_SRC',
+  'BRACKET_DIR_PREFIX_SRC', 'bracketQualifiedKey',
+  'BRACKET_OR_PHASE_LABEL_PREFIX_SRC', 'BRACKET_OR_PHASE_LABEL_PREFIX_CAPTURING_SRC',
 ];
 
 describe('#2128 phase-id drift scanner: findPhaseIdRegexDrift (pure)', () => {
