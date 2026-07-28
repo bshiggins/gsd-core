@@ -37,6 +37,8 @@ const {
   OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
   PHASE_NUMBER_TOKEN_SOURCE,
   PHASE_CONTINUATION_SEGMENT_SOURCE,
+  PHASE_HEADING_PREFIX_SRC,
+  BRACKET_OR_PHASE_LABEL_PREFIX_SRC,
 } = phaseIdMod;
 
 // ── Issue #26: regex constants (W005, W006-archived) ────────────────────────
@@ -124,7 +126,12 @@ export function buildRoadmapPhaseVariants(roadmapContent: string): RoadmapPhaseV
   // Matches both legacy numeric (Phase 1:), decimal (Phase 2.1:), milestone-prefixed (Phase 2-01:),
   // and bracket-prefixed (### [GSD] Phase 2-01:) headings.
   // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
-  const phasePattern = /#{2,4}\s*(?:\[[^\]]{1,200}\]\s*)?Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]{0,200}\))?\s*:/gi;
+  // #612: PHASE_HEADING_PREFIX_SRC additionally admits the label-less bracket
+  // form (`### [GSD.02] 05:`). This capture class is letter-tolerant, so it is
+  // the site the owner's digit-leading requirement protects: without it a
+  // legacy `## [v1.0] Overview:` would enter roadmapPhases as a phantom phase
+  // and drive a W007 "in ROADMAP but no directory on disk" false positive.
+  const phasePattern = new RegExp(`#{2,4}\\s*${PHASE_HEADING_PREFIX_SRC}([\\w][\\w.-]*)(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:`, 'gi');
   let m: RegExpExecArray | null;
   while ((m = phasePattern.exec(roadmapContent)) !== null) {
     roadmapPhases.add(m[1]);
@@ -133,7 +140,7 @@ export function buildRoadmapPhaseVariants(roadmapContent: string): RoadmapPhaseV
   // Also matches checklist-style entries (checked or unchecked):
   //   - [x] **Phase 01: name**   - [X] **Phase 2-01: name**   - [ ] **Phase 3: name**
   // This is a supported ROADMAP format (parallel to buildNotStartedPhaseVariants).
-  const checklistPattern = /-\s*\[[ xX]\]\s*\*{0,2}Phase\s+([\w][\w.-]*)\s*:/gi;
+  const checklistPattern = new RegExp(`-\\s*\\[[ xX]\\]\\s*\\*{0,2}${BRACKET_OR_PHASE_LABEL_PREFIX_SRC}([\\w][\\w.-]*)\\s*:`, 'gi');
   let cm: RegExpExecArray | null;
   while ((cm = checklistPattern.exec(roadmapContent)) !== null) {
     roadmapPhases.add(cm[1]);
@@ -145,7 +152,7 @@ export function buildRoadmapPhaseVariants(roadmapContent: string): RoadmapPhaseV
 export function buildNotStartedPhaseVariants(roadmapContent: string): Set<string> {
   const notStartedPhases = new Set<string>();
   // Also matches milestone-prefixed and bracket-prefixed checklist items.
-  const uncheckedPattern = /-\s*\[\s\]\s*\*{0,2}Phase\s+([\w][\w.-]*)[:\s*]/gi;
+  const uncheckedPattern = new RegExp(`-\\s*\\[\\s\\]\\s*\\*{0,2}${BRACKET_OR_PHASE_LABEL_PREFIX_SRC}([\\w][\\w.-]*)[:\\s*]`, 'gi');
   let um: RegExpExecArray | null;
   while ((um = uncheckedPattern.exec(roadmapContent)) !== null) {
     for (const variant of phaseVariants(um[1])) notStartedPhases.add(variant);

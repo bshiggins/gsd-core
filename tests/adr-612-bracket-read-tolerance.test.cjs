@@ -314,3 +314,84 @@ describe('#612 PR-2: a legacy ROADMAP reads exactly as before', () => {
     assert.deepEqual(out.phases.map(p => p.number), ['5'], 'no phantom phase');
   });
 });
+
+// ─── validate.cts heading + checklist variants (W006 / W007 feeders) ────────
+
+describe('#612 PR-2: buildRoadmapPhaseVariants reads bracket headings', () => {
+  // These helpers carry the LETTER-TOLERANT capture class `[\w][\w.-]*`. That is
+  // the only place a phantom phase is reachable at all — the roadmap.cts and
+  // state.cts scanners capture digit-leading tokens and cannot produce one no
+  // matter how loose the intro is. So the phantom negatives belong HERE, driven
+  // through the real helper, not through `roadmap analyze`.
+  const validate = require('../gsd-core/bin/lib/validate.cjs');
+
+  test('a bracket phase heading enters roadmapPhases', () => {
+    const { roadmapPhases } = validate.buildRoadmapPhaseVariants(
+      '### [GSD.02] 05: Real work\n### [GSD.02] 06: Follow-up\n',
+    );
+    assert.deepEqual([...roadmapPhases].sort(), ['05', '06']);
+  });
+
+  test('PHANTOM NEGATIVE: a CODE.MM-shaped bracket + WORD never enters roadmapPhases', () => {
+    // Without the owner's digit-leading requirement each of these lands in
+    // roadmapPhases and then drives a W007 "Phase X in ROADMAP.md but no
+    // directory on disk" warning on a repo that never opted into bracket.
+    const { roadmapPhases } = validate.buildRoadmapPhaseVariants(
+      [
+        '## [v1.0] Overview:',
+        '## [Cluster B] Overview:',
+        '## [RFC.7] Discussion:',
+        '## [GSD.02] Summary:',
+        '### Phase 5: Real work',
+      ].join('\n'),
+    );
+    assert.deepEqual([...roadmapPhases], ['5'], 'only the real legacy phase');
+  });
+
+  test('legacy headings and checklist bullets are byte-identical', () => {
+    const { roadmapPhases } = validate.buildRoadmapPhaseVariants(
+      [
+        '### Phase 1: Foundation',
+        '### Phase 2-01 (INSERTED): API',
+        '### Phase 12A: Hotfix',
+        '#### Phase Details:',
+        '- [x] **Phase 3: Done**',
+        '- [ ] **Phase 4: Todo**',
+      ].join('\n'),
+    );
+    assert.deepEqual(
+      [...roadmapPhases].sort(),
+      ['1', '12A', '2-01', '3', '4', 'Details'].sort(),
+      'including the pre-existing `Details` tolerance, which must not change',
+    );
+  });
+
+  test('MINIMAL-ADDITIVE: a bullet site does NOT gain any-bracket tolerance', () => {
+    // The checklist bullets spell a BARE `Phase\s+` today — no bracket tolerance
+    // at all. Handing them the full heading grammar would retro-grant
+    // `- [x] **[GSD] Phase 2-01: …**`, which does not match today. It must stay
+    // unmatched; only the bracket-ID form is newly admitted.
+    const { roadmapPhases } = validate.buildRoadmapPhaseVariants(
+      '- [x] **[GSD] Phase 2-01: Legacy**\n- [ ] **[GSD.02] 07: Bracket**\n',
+    );
+    assert.deepEqual([...roadmapPhases], ['07'], 'bracket ID yes, any-bracket no');
+  });
+
+  test('buildNotStartedPhaseVariants picks up unchecked bracket bullets', () => {
+    const notStarted = validate.buildNotStartedPhaseVariants(
+      '- [ ] **[GSD.02] 05: Real work**\n- [x] **[GSD.02] 01: Done**\n',
+    );
+    assert.ok(notStarted.has('05'), 'the unchecked bracket bullet is not-started');
+    assert.ok(!notStarted.has('01'), 'the checked one is not');
+  });
+
+  test('buildNotStartedPhaseVariants keeps legacy bullets byte-identical', () => {
+    const before = validate.buildNotStartedPhaseVariants(
+      '- [ ] **Phase 5: Name**\n- [ ] Phase 6 draft\n- [ ] **[GSD] Phase 2-01: Legacy**\n',
+    );
+    assert.deepEqual(
+      [...before].sort(), ['05', '5', '06', '6'].sort(),
+      'the any-bracket bullet stays unmatched, exactly as today',
+    );
+  });
+});
