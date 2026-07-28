@@ -1,0 +1,6 @@
+---
+type: Fixed
+pr: 2761
+---
+<!-- docs-exempt: read-tolerance only — the bracket convention's user-facing surface (emit, display, migration command) is documented with the slices that add it; this PR changes no command, flag, or config surface. -->
+**Roadmap readers now recognise bracket phase headings (`### [GSD.02] 05: Name`)** — `roadmap analyze`/`get-phase`, the W006/W007 phase-variant feeders, and both `total_phases` derivations previously matched only the `Phase N:` spelling, so on a project using the bracket phase-ID convention every phase was invisible: `phase_count` and `total_phases` fell back to the on-disk directory count, `get-phase` reported not-found, and `validate health` warned that a completed milestone had unstarted phases. The heading grammar is now single-sourced and admits exactly one shape it did not before — a `[CODE.MM]` bracket followed by a digit-leading token — so null and milestone-prefixed projects read byte-identically. Bracket sentinel milestones (`[GSD.999]` icebox, `[GSD.00]` pre-milestone) are excluded from every count, and `validate health` gains an advisory W021 for bracket phases whose milestone disagrees with their section, gated on projects that have opted into the convention. (#2761)
