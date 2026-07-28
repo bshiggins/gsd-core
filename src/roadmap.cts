@@ -14,7 +14,7 @@ import ioMod = require('./io.cjs');
 const { output, error } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { escapeRegex, normalizePhaseName, phaseMarkdownRegexSource, phaseTokenMatches, stripProjectCodePrefix, OPTIONAL_PHASE_TAG_SOURCE, roadmapPhaseLookupSources } = phaseIdMod;
+const { escapeRegex, normalizePhaseName, phaseMarkdownRegexSource, phaseTokenMatches, stripProjectCodePrefix, OPTIONAL_PHASE_TAG_SOURCE, roadmapPhaseLookupSources, PHASE_HEADING_PREFIX_SRC, PHASE_HEADING_PREFIX_CAPTURING_SRC, BRACKET_OR_PHASE_LABEL_PREFIX_SRC, BRACKET_OR_PHASE_LABEL_PREFIX_CAPTURING_SRC, isSentinelPhaseId } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
 const { findPhaseInternal } = phaseLocatorMod;
@@ -126,8 +126,11 @@ function countPhasePlansAndSummaries(phaseDir: string): PhasePlansAndSummaries {
  */
 function searchPhaseInContent(content: string, escapedPhase: string, phaseNum: string): PhaseSearchResult | null {
   // #1729: OPTIONAL_PHASE_TAG_SOURCE after the number tolerates a pre-colon ( ) tag.
+  // #612: PHASE_HEADING_PREFIX_SRC is the single-owner heading intro — a strict
+  // superset of the prefix spelled here before, adding only `[CODE.MM] <digits>`,
+  // so `### [GSD.02] 05:` resolves while every legacy heading reads identically.
   const headingPattern = new RegExp(
-    `^(?:\\[[^\\]]{1,200}\\]\\s*)?Phase\\s+${escapedPhase}${OPTIONAL_PHASE_TAG_SOURCE}:\\s*(.+)$`,
+    `^${PHASE_HEADING_PREFIX_SRC}${escapedPhase}${OPTIONAL_PHASE_TAG_SOURCE}:\\s*(.+)$`,
     'i'
   );
   const headings = tokenizeHeadings(content);
@@ -137,7 +140,7 @@ function searchPhaseInContent(content: string, escapedPhase: string, phaseNum: s
   if (!headerMatch) {
     // Fallback: check if phase exists in summary list but missing detail section
     const checklistPattern = new RegExp(
-      `-\\s*\\[[ x]\\]\\s*\\*\\*Phase\\s+${escapedPhase}${OPTIONAL_PHASE_TAG_SOURCE}:\\s*([^*]+)\\*\\*`,
+      `-\\s*\\[[ x]\\]\\s*\\*\\*${BRACKET_OR_PHASE_LABEL_PREFIX_SRC}${escapedPhase}${OPTIONAL_PHASE_TAG_SOURCE}:\\s*([^*]+)\\*\\*`,
       'i'
     );
     const checklistMatch = content.match(checklistPattern);
@@ -314,8 +317,12 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
 
   // Extract all phase headings: ## Phase N: Name or ### Phase N: Name
   // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
+  // #612: the CAPTURING heading intro — group 1 is the `[CODE.MM]` bracket id
+  // (undefined on the legacy alternatives), so the sentinel filter below can read
+  // the milestone from the BRACKET rather than from the phase token (READING-B).
+  // Group 2 is the phase token, group 3 the phase name.
   // phase-id-owner: uses the [.-] (dot-or-dash) separator variant, not the canonical dot-only token; a swap to PHASE_NUMBER_TOKEN_SOURCE would drop hyphenated phase-id matches.
-  const phasePattern = /#{2,4}\s*(?:\[[^\]]{1,200}\]\s*)?Phase\s+(\d+[A-Z]?(?:[.-]\d+)*)(?:\s*\([^)\n]{0,200}\))?\s*:\s*([^\n]+)/gi;
+  const phasePattern = new RegExp(`#{2,4}\\s*${PHASE_HEADING_PREFIX_CAPTURING_SRC}(\\d+[A-Z]?(?:[.-]\\d+)*)(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n]+)`, 'gi');
   const phases: Array<{
     number: string;
     name: string;
@@ -336,7 +343,15 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
   // current/next phase or counted in phase_count. Mirrors the engine-wide
   // sentinel convention (phase-id getMilestoneFromPhaseId, roadmap-command-router
   // SENTINELS, the #1445 /^999/ progress filters). (#1580)
-  const isSentinelPhase = (num: string): boolean => {
+  // #612 READING-B: under the bracket convention the sentinel milestone lives in
+  // the BRACKET (`### [GSD.999] 01:`), not in the phase token — so testing the
+  // token alone goes blind exactly when the widened heading read starts matching
+  // those headings, and an icebox item would be counted as a real phase (the
+  // #1445/#1580 bug class). When the heading carried a bracket id, route the
+  // fully-qualified id through the canonical sentinel predicate; otherwise keep
+  // the legacy leading-integer rule byte-for-byte.
+  const isSentinelPhase = (num: string, bracketId?: string): boolean => {
+    if (bracketId) return isSentinelPhaseId(`${bracketId}-${num}`, 'bracket');
     const major = parseInt(num, 10);
     return major === 0 || major === 999;
   };
@@ -351,16 +366,17 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
   })();
 
   while ((match = phasePattern.exec(content)) !== null) {
-    const phaseNum = match[1];
-    if (isSentinelPhase(phaseNum)) continue;
-    const phaseName = match[2].replace(/\(INSERTED\)/i, '').trim();
+    const bracketId = match[1];
+    const phaseNum = match[2];
+    if (isSentinelPhase(phaseNum, bracketId)) continue;
+    const phaseName = match[3].replace(/\(INSERTED\)/i, '').trim();
 
     // Extract goal from the section
     const sectionStart = match.index;
     const restOfContent = content.slice(sectionStart);
     // #3691: `\d` → `\d[\d.]*` so decimal phase headings (e.g. `### Phase 02.3:`) are
     // recognised as section boundaries.
-    const nextHeader = restOfContent.match(/\n#{2,4}\s+(?:\[[^\]]{1,200}\]\s*)?Phase\s+\d[\d.-]*/i);
+    const nextHeader = restOfContent.match(new RegExp(`\\n#{2,4}\\s+${PHASE_HEADING_PREFIX_SRC}\\d[\\d.-]*`, 'i'));
     const sectionEnd = nextHeader ? sectionStart + nextHeader.index! : content.length;
     const section = content.slice(sectionStart, sectionEnd);
 
@@ -408,7 +424,7 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
     // #3537: padding-tolerant fragment — the heading discovered above may use
     // a different padding than the summary-bullet checkbox below it (mixed
     // padding inside one ROADMAP is legal and seen in real projects).
-    const checkboxPattern = new RegExp(`-\\s*\\[(x| )\\]\\s*.*Phase\\s+${phaseMarkdownRegexSource(phaseNum)}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`, 'i');
+    const checkboxPattern = new RegExp(`-\\s*\\[(x| )\\]\\s*.*${BRACKET_OR_PHASE_LABEL_PREFIX_SRC}${phaseMarkdownRegexSource(phaseNum)}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`, 'i');
     const checkboxMatch = content.match(checkboxPattern);
     const roadmapComplete = checkboxMatch ? checkboxMatch[1] === 'x' : false;
 
@@ -458,15 +474,20 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
   // The char class must allow `-` (not just `.`) so dash-separated milestone-prefixed
   // IDs (e.g. `1-01`) match the detail-heading scanner above; otherwise they truncate
   // at the dash (`1-01` -> `1`) and every such phase reports a phantom missing detail.
+  // #612: CAPTURING intro — group 1 is the `[CODE.MM]` bracket id, group 2 the
+  // token. The bracket id is carried alongside so the sentinel filter below is
+  // not blind to `- [ ] **[GSD.999] 01: Icebox**`.
   // phase-id-owner: uses the [.-] (dot-or-dash) separator variant, not the canonical dot-only token; a swap to PHASE_NUMBER_TOKEN_SOURCE would drop hyphenated phase-id matches.
-  const checklistPattern = /-\s*\[[ x]\]\s*\*\*Phase\s+(\d+[A-Z]?(?:[.-]\d+)*)/gi;
-  const checklistPhases = new Set<string>();
+  const checklistPattern = new RegExp(`-\\s*\\[[ x]\\]\\s*\\*\\*${BRACKET_OR_PHASE_LABEL_PREFIX_CAPTURING_SRC}(\\d+[A-Z]?(?:[.-]\\d+)*)`, 'gi');
+  const checklistPhases = new Map<string, string | undefined>();
   let checklistMatch: RegExpExecArray | null;
   while ((checklistMatch = checklistPattern.exec(content)) !== null) {
-    checklistPhases.add(checklistMatch[1]);
+    if (!checklistPhases.has(checklistMatch[2])) checklistPhases.set(checklistMatch[2], checklistMatch[1]);
   }
   const detailPhases = new Set(phases.map(p => p.number));
-  const missingDetails = [...checklistPhases].filter(p => !detailPhases.has(p) && !isSentinelPhase(p));
+  const missingDetails = [...checklistPhases.keys()].filter(
+    p => !detailPhases.has(p) && !isSentinelPhase(p, checklistPhases.get(p)),
+  );
 
   const result = {
     milestones,
