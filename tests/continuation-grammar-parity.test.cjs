@@ -28,6 +28,9 @@
  *   5. roadmap-parser.cjs getMilestonePhaseFilter → isDirInMilestone (hyphenated mode)
  *   6. phase-id.cjs      BRACKET_PHASE_TOKEN_SOURCE (slug-adjacent position only —
  *                        see the divergence block at the foot of this file)
+ *   7. validate.cjs      buildRoadmapPhaseVariants / buildNotStartedPhaseVariants
+ *                        (#2761 bracket READ path — the heading + bullet matchers
+ *                        that consume PHASE_HEADING_PREFIX_SRC)
  */
 
 const { test, describe } = require('node:test');
@@ -125,6 +128,44 @@ describe('#2232 continuation-grammar parity — every consuming surface agrees',
         owner,
         `BRACKET_PHASE_TOKEN_SOURCE on ${JSON.stringify(bracketDir)} collected ` +
           `${JSON.stringify(bracketToken)} — diverged from the owner at the slug-adjacent position`,
+      );
+
+      // ── Surface 7: #2761 bracket READ path (validate heading matcher) ────
+      // The read surfaces recognise a phase HEADING, whose token grammar is the
+      // letter-tolerant `[\w][\w.-]*` — deliberately NOT the continuation
+      // grammar, because a heading token carries no slug to collide with. What
+      // must hold is that the heading read and the dir read agree on WHICH
+      // PHASE a `MM-<seg>` pair names: if the dir read absorbs `<seg>` as a
+      // continuation, the roadmap heading for that phase must be the absorbed
+      // form, and if it does not, it must be the leading component alone.
+      const headingToken = `14-${seg}`;
+      const { roadmapPhases } = validate.buildRoadmapPhaseVariants(`### Phase ${headingToken}: Photos`);
+      assert.ok(
+        roadmapPhases.has(headingToken),
+        `buildRoadmapPhaseVariants dropped the heading token ${JSON.stringify(headingToken)}`,
+      );
+      const dirToken = phaseId.extractPhaseToken(dir);
+      assert.strictEqual(
+        dirToken === headingToken,
+        owner,
+        `the heading read and the dir read disagree about ${JSON.stringify(headingToken)}: ` +
+          `dir gave ${JSON.stringify(dirToken)} — a phase named in the ROADMAP would resolve ` +
+          `to the wrong directory (or none)`,
+      );
+
+      // Same pairing on the BRACKET spelling of the identical phase. This is the
+      // #2761 addition proper: the widened heading intro must not change which
+      // token a heading yields, only which SPELLINGS of that heading are seen.
+      const bracketHeading = validate.buildRoadmapPhaseVariants(`### [GSD.01] ${headingToken}: Photos`);
+      assert.ok(
+        bracketHeading.roadmapPhases.has(headingToken),
+        `the bracket spelling of ${JSON.stringify(headingToken)} yielded a different token — ` +
+          `the heading intro must not alter the token grammar`,
+      );
+      assert.deepEqual(
+        [...bracketHeading.roadmapPhases],
+        [...roadmapPhases],
+        'bracket and legacy spellings of one heading must yield the same phase set',
       );
     });
   }
