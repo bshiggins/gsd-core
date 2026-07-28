@@ -395,3 +395,158 @@ describe('#612 PR-2: buildRoadmapPhaseVariants reads bracket headings', () => {
     );
   });
 });
+
+// ─── validate.cts DIRECTORY recognition (convention-gated) ─────────────────
+
+describe('#612 PR-2: bracket phase-directory recognition is convention-gated', () => {
+  const validate = require('../gsd-core/bin/lib/validate.cjs');
+
+  // The legacy corpus. Every one of these must answer identically through the
+  // new functions (any convention) and through the untouched constants — the
+  // functions delegate, so this is byte-identical by construction, and this
+  // probe is the assertion that keeps it that way.
+  const LEGACY_DIRS = [
+    '02-01-setup', '01-setup', 'GSD-02-01-setup', '999.1-backlog',
+    '14-2026-photos', '02-04-01-deep', '12A-hotfix', 'not-a-phase',
+    'P0.34-56-name', 'P0.12-34-name', 'P0.3-2-tenant', 'P0.16-gate',
+  ];
+
+  test('(c) legacy dirs answer identically to the untouched constants', () => {
+    for (const d of LEGACY_DIRS) {
+      assert.equal(
+        validate.isPhaseDirName(d), validate.phaseDirNameRe.test(d),
+        `isPhaseDirName diverged from phaseDirNameRe on ${d}`,
+      );
+      const viaConst = d.match(validate.PHASE_TOKEN_FROM_DIR_RE);
+      assert.equal(
+        validate.phaseTokenFromDir(d), viaConst ? viaConst[1] : null,
+        `phaseTokenFromDir diverged from PHASE_TOKEN_FROM_DIR_RE on ${d}`,
+      );
+    }
+  });
+
+  test('(c) a genuinely-legacy dir answers identically UNDER bracket too', () => {
+    // A bracket repo carries legacy directories mid-migration; they must keep
+    // resolving. Only the ambiguous `{CODE}.{DD,}-` family is expected to differ.
+    const unambiguous = LEGACY_DIRS.filter(d => !/^[A-Za-z][\w]*\.\d{2,}-/.test(d));
+    for (const d of unambiguous) {
+      assert.equal(validate.isPhaseDirName(d, 'bracket'), validate.phaseDirNameRe.test(d), d);
+      const viaConst = d.match(validate.PHASE_TOKEN_FROM_DIR_RE);
+      assert.equal(validate.phaseTokenFromDir(d, 'bracket'), viaConst ? viaConst[1] : null, d);
+    }
+  });
+
+  test('(e) the :202 default-off invariant, extended to the DIRECTORY side', () => {
+    // `P0.34-56-name` is the family upstream documents as ambiguous with a
+    // padded bracket dir. Without an explicit convention signal it must answer
+    // exactly as it does today — not-a-phase-dir, no token — and NOT be
+    // reinterpreted as bracket milestone 34 / phase 56.
+    for (const d of ['P0.34-56-name', 'P0.12-34-name']) {
+      assert.equal(validate.isPhaseDirName(d), false, `${d} unconventioned`);
+      assert.equal(validate.isPhaseDirName(d, null), false);
+      assert.equal(validate.isPhaseDirName(d, 'milestone-prefixed'), false);
+      assert.equal(validate.phaseTokenFromDir(d), null);
+      assert.equal(validate.phaseTokenFromDir(d, 'milestone-prefixed'), null);
+      // Opting in is what changes the reading — and only then.
+      assert.equal(validate.isPhaseDirName(d, 'bracket'), true, `${d} under bracket`);
+    }
+  });
+
+  test('bracket dirs are recognized under the bracket convention', () => {
+    for (const [dir, token] of [
+      ['GSD.02-05-feature', '05'],
+      ['GSD.02-05.03-feature', '05.03'],
+      ['GSD.02-05', '05'],
+      ['CK.01-12.04-feature', '12.04'],
+      ['GSD_X2.100-05-feature', '05'],
+    ]) {
+      assert.equal(validate.isPhaseDirName(dir, 'bracket'), true, dir);
+      assert.equal(validate.phaseTokenFromDir(dir, 'bracket'), token, dir);
+      assert.equal(validate.isPhaseDirName(dir), false, `${dir} stays unrecognized without the signal`);
+    }
+  });
+
+  test('a genuinely malformed dir is still malformed under bracket', () => {
+    for (const d of ['not-a-phase', 'GSD.02', 'GSD.2-05-x', 'random_dir']) {
+      assert.equal(validate.isPhaseDirName(d, 'bracket'), false, d);
+    }
+  });
+});
+
+describe('#612 PR-2: W005 and W006/W007 on a bracket repo', () => {
+  beforeEach(() => { tmpDir = createTempProject('adr-612-dirs-'); });
+  afterEach(() => { cleanup(tmpDir); });
+
+  const setup = ({ convention, dirs }) => {
+    const planning = path.join(tmpDir, '.planning');
+    fs.writeFileSync(path.join(planning, 'ROADMAP.md'), `# Roadmap
+
+## [GSD.02] v2.0
+
+### [GSD.02] 05: Real work
+**Goal:** a
+
+### [GSD.02] 06: Follow-up
+**Goal:** b
+`, 'utf-8');
+    fs.writeFileSync(path.join(planning, 'config.json'),
+      JSON.stringify(convention === undefined ? {} : { phase_id_convention: convention }), 'utf-8');
+    const phasesDir = path.join(planning, 'phases');
+    fs.mkdirSync(phasesDir, { recursive: true });
+    for (const d of dirs) fs.mkdirSync(path.join(phasesDir, d), { recursive: true });
+  };
+
+  const codes = () => {
+    const r = runGsdTools(['validate', 'health'], tmpDir);
+    const o = JSON.parse(r.output);
+    return [...(o.issues || []), ...(o.warnings || [])];
+  };
+
+  test('(a) W005 is SILENT on bracket phase dirs under the bracket convention', () => {
+    setup({ convention: 'bracket', dirs: ['GSD.02-05-real-work', 'GSD.02-06-follow-up'] });
+    const w005 = codes().filter(i => i.code === 'W005');
+    assert.deepEqual(w005.map(i => i.message), [], 'a bracket phase dir is well-formed');
+  });
+
+  test('(a) W005 still FIRES on a genuinely malformed dir under bracket', () => {
+    setup({ convention: 'bracket', dirs: ['GSD.02-05-real-work', 'totally bogus dir'] });
+    const w005 = codes().filter(i => i.code === 'W005');
+    assert.equal(w005.length, 1, JSON.stringify(w005.map(i => i.message)));
+    assert.match(w005[0].message, /totally bogus dir/);
+  });
+
+  test('(b) W007 does not report bracket phases as missing from disk', () => {
+    setup({ convention: 'bracket', dirs: ['GSD.02-05-real-work', 'GSD.02-06-follow-up'] });
+    const w007 = codes().filter(i => i.code === 'W007');
+    assert.deepEqual(w007.map(i => i.message), [], 'roadmap membership resolves both directions');
+  });
+
+  test('(b) a bracket dir with no ROADMAP entry is still surfaced', () => {
+    setup({ convention: 'bracket', dirs: ['GSD.02-05-real-work', 'GSD.02-06-follow-up', 'GSD.02-09-orphan'] });
+    const surfaced = codes().filter(i => /\b09\b/.test(i.message));
+    assert.ok(surfaced.length >= 1, 'an orphan bracket dir must not become invisible');
+  });
+
+  test('(e) the SAME repo without the convention set keeps todays behaviour', () => {
+    setup({ convention: undefined, dirs: ['GSD.02-05-real-work', 'GSD.02-06-follow-up'] });
+    const w005 = codes().filter(i => i.code === 'W005');
+    assert.equal(w005.length, 2, 'unconventioned, these dirs are still reported as malformed');
+  });
+
+  test('legacy repo is unaffected: no W005, no W007', () => {
+    const planning = path.join(tmpDir, '.planning');
+    fs.writeFileSync(path.join(planning, 'ROADMAP.md'), `# Roadmap
+
+## v2.0
+
+### Phase 5: Real work
+**Goal:** a
+`, 'utf-8');
+    fs.writeFileSync(path.join(planning, 'config.json'), '{}', 'utf-8');
+    const phasesDir = path.join(planning, 'phases');
+    fs.mkdirSync(phasesDir, { recursive: true });
+    fs.mkdirSync(path.join(phasesDir, '05-real-work'), { recursive: true });
+    const issues = codes().filter(i => ['W005', 'W007'].includes(i.code));
+    assert.deepEqual(issues.map(i => i.message), []);
+  });
+});

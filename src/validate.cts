@@ -39,6 +39,8 @@ const {
   PHASE_CONTINUATION_SEGMENT_SOURCE,
   PHASE_HEADING_PREFIX_SRC,
   BRACKET_OR_PHASE_LABEL_PREFIX_SRC,
+  BRACKET_DIR_PREFIX_SRC,
+  extractPhaseToken,
 } = phaseIdMod;
 
 // ── Issue #26: regex constants (W005, W006-archived) ────────────────────────
@@ -65,6 +67,75 @@ export const PHASE_TOKEN_FROM_DIR_RE = new RegExp(
   'i',
 );
 export const MILESTONE_ARCHIVE_DIR_RE = /^v\d+.*-phases$/i;
+
+// ── #612: bracket phase-directory recognition (convention-gated) ────────────
+// `{CODE}.{MM}-{PP}[.{SS}][-slug]` — the directory shape toDir emits. Built from
+// the single-owner prefix + token sources; nothing here is re-spelled.
+//
+// This lives BESIDE phaseDirNameRe / PHASE_TOKEN_FROM_DIR_RE rather than being
+// folded into them, and that is load-bearing rather than stylistic. Probed: the
+// `{CODE}.{MM}-` dir prefix is string-INDISTINGUISHABLE from the legacy
+// letter-prefixed-decimal family this repo already documents as "ambiguous with
+// a padded bracket dir" (tests/phase-id.test.cjs). Folding the bracket branch
+// into the exported constants changes their answers on exactly that family —
+// `PHASE_TOKEN_FROM_DIR_RE` on `P0.34-56-name` goes null -> "56", and
+// `phaseDirNameRe` goes false -> true, silencing a W005 that fires today. Since
+// a RegExp constant has nowhere to attach a convention gate, the gate goes on
+// the FUNCTIONS below and the constants stay byte-identical for every existing
+// consumer. This is the same reasoning that made extractPhaseToken and
+// isSentinelPhaseId convention-gated rather than auto-detecting.
+//
+// The numeric run mirrors the BRACKET EMIT grammar, not the general phase-token
+// grammar, and the two differ in ways that matter. `CANONICAL_NUMERIC_RE` — what
+// toDir enforces — is digits-only with at most one sub-phase, so a bracket dir
+// cannot carry a letter suffix (`GSD.02-12A-hotfix`) or a second decimal
+// (`GSD.02-05.03.07-x`). Admitting those here would make this recognizer
+// disagree with `extractPhaseToken(dir, 'bracket')`, which the W021
+// milestone-complete check resolves directories through — and a disagreement is
+// not cosmetic: W006/W007 would resolve `12A` to a directory while W021
+// simultaneously reported it unstarted, inside one `validate health` run. The
+// case flag is likewise omitted to match the owner, whose bracket branch is
+// case-sensitive. Pinned in tests/continuation-grammar-parity.test.cjs.
+export const BRACKET_PHASE_DIR_RE = new RegExp(
+  `^(?:${BRACKET_DIR_PREFIX_SRC})\\d+(?:\\.\\d+)?(?:-[\\w-]+)?$`,
+);
+
+/**
+ * True when `dirName` is a recognizable phase directory under `convention`.
+ *
+ * Under 'bracket' the `{CODE}.{MM}-{PP}` form is additionally accepted, so W005
+ * stops reporting every bracket phase directory as malformed. Under every other
+ * convention value — null, undefined, 'milestone-prefixed', anything unknown —
+ * this delegates to the unchanged `phaseDirNameRe`, so the answer is identical
+ * to the constant's by construction, not by coincidence.
+ */
+export function isPhaseDirName(dirName: string, convention?: string | null): boolean {
+  const name = String(dirName);
+  if (convention === 'bracket' && BRACKET_PHASE_DIR_RE.test(name)) return true;
+  return phaseDirNameRe.test(name);
+}
+
+/**
+ * Extract a phase token from a directory name under `convention`, or null when
+ * the name is not a phase directory. Mirrors `PHASE_TOKEN_FROM_DIR_RE.exec()[1]`
+ * with the same null-for-no-match contract.
+ *
+ * Under 'bracket' the token is the PHASE component (`GSD.02-05-slug` -> `05`),
+ * per READING-B: the milestone lives in the `{CODE}.{MM}` prefix, not in the
+ * token. The bracket branch is tried first and falls through on a miss, so a
+ * bracket repo still resolves the legacy directories it carries mid-migration.
+ */
+export function phaseTokenFromDir(dirName: string, convention?: string | null): string | null {
+  const name = String(dirName);
+  if (convention === 'bracket' && BRACKET_PHASE_DIR_RE.test(name)) {
+    // Shape recognized here, TOKEN taken from the canonical owner, so this and
+    // every other bracket directory reader (notably phaseTokenMatches, which the
+    // W021 milestone-complete check uses) cannot drift apart.
+    return extractPhaseToken(name, 'bracket');
+  }
+  const legacy = name.match(PHASE_TOKEN_FROM_DIR_RE);
+  return legacy ? legacy[1] : null;
+}
 
 // ── Issue #26: I001 canonicalization ────────────────────────────────────────
 export function canonicalPlanStem(stem: string): string {

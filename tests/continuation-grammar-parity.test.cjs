@@ -31,6 +31,9 @@
  *   7. validate.cjs      buildRoadmapPhaseVariants / buildNotStartedPhaseVariants
  *                        (#2761 bracket READ path — the heading + bullet matchers
  *                        that consume PHASE_HEADING_PREFIX_SRC)
+ *   8. validate.cjs      phaseTokenFromDir (#2761 bracket DIR path) vs
+ *                        phase-id.cjs extractPhaseToken — the two readers that
+ *                        resolve a bracket directory on the `validate health` path
  */
 
 const { test, describe } = require('node:test');
@@ -229,6 +232,49 @@ describe('#2232 continuation-grammar parity — roadmap isDirInMilestone (hyphen
 // dot no slug can contain), not heuristically recognized, so they carry the
 // canonical width toDir emits — while #2232's cap defends the one position that
 // sits against a slug.
+// ── Surface 8: the two bracket DIRECTORY readers must not drift ─────────────
+// `validate health` resolves a bracket phase directory twice in one run: W005 /
+// W006 / W007 go through validate.phaseTokenFromDir, and the W021
+// milestone-complete check goes through phaseTokenMatches -> extractPhaseToken.
+// If those disagree the run contradicts itself — W007 resolves a directory that
+// W021 simultaneously reports as an unstarted phase. They agree by construction
+// (phaseTokenFromDir recognizes the SHAPE and then delegates the TOKEN to the
+// owner); this gate fails if that delegation is ever replaced by a second regex.
+describe('#2761 bracket directory readers — one token rule, two call paths', () => {
+  const BRACKET_DIRS = [
+    'GSD.02-05-feature', 'GSD.02-05.03-feature', 'GSD.02-05', 'CK.01-12.04-feature',
+    'GSD_X2.100-05-feature', 'GSD.02-05-2026-photos', 'GSD.999-01-icebox',
+  ];
+  const NOT_BRACKET_DIRS = [
+    'GSD.02-12A-hotfix', 'GSD.02-05.03.07-x', 'gsd.02-05-x',
+    '02-01-setup', 'GSD-02-01-setup', 'not-a-phase',
+  ];
+
+  for (const dir of BRACKET_DIRS) {
+    test(`${dir}: the dir reader and the owner agree`, () => {
+      assert.ok(validate.BRACKET_PHASE_DIR_RE.test(dir), 'precondition: recognized as a bracket dir');
+      assert.strictEqual(
+        validate.phaseTokenFromDir(dir, 'bracket'),
+        phaseId.extractPhaseToken(dir, 'bracket'),
+        'W006/W007 and the W021 milestone-complete check must resolve the same token',
+      );
+    });
+  }
+
+  test('shapes outside the bracket EMIT grammar are not recognized as bracket dirs', () => {
+    // toDir enforces CANONICAL_NUMERIC_RE — digits only, at most one sub-phase —
+    // so a letter suffix or a second decimal is not a bracket directory. If the
+    // recognizer admitted them it would hand back a token the owner disagrees
+    // with, which is exactly the contradiction Surface 8 exists to prevent.
+    for (const dir of NOT_BRACKET_DIRS) {
+      assert.strictEqual(
+        validate.BRACKET_PHASE_DIR_RE.test(dir), false,
+        `${dir} must not be read as a bracket phase directory`,
+      );
+    }
+  });
+});
+
 describe('#612 bracket divergence — wider only where the delimiter disambiguates', () => {
   const tokenOf = (s) => s.match(new RegExp(phaseId.BRACKET_PHASE_TOKEN_SOURCE))?.[0];
 

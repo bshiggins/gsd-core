@@ -11,7 +11,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { phaseVariants, buildRoadmapPhaseVariants, buildNotStartedPhaseVariants } from './validate.cjs';
 import { realClock } from './clock.cjs';
-import { phaseDirNameRe, PHASE_TOKEN_FROM_DIR_RE, MILESTONE_ARCHIVE_DIR_RE, canonicalPlanStem } from './validate.cjs';
+import { phaseDirNameRe, PHASE_TOKEN_FROM_DIR_RE, MILESTONE_ARCHIVE_DIR_RE, canonicalPlanStem, isPhaseDirName, phaseTokenFromDir } from './validate.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-workspace.cjs is an export= CommonJS module
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
@@ -1161,14 +1161,36 @@ function listMilestoneArchiveDirs(planBase: string): string[] {
   }
 }
 
-function forEachArchivedPhaseToken(planBase: string, onPhase: (token: string) => void): void {
+/**
+ * Read `phase_id_convention` from a project config, or null when absent or
+ * unreadable. Extracted verbatim from the W021 gate's inline reader so the
+ * directory-recognition call sites can share ONE rule; the body — including the
+ * `|| null` coercion and the swallow-on-parse-error — is unchanged, so the
+ * existing gate answers exactly as it did before.
+ */
+function readPhaseIdConvention(configPath: string): string | null {
+  if (!fs.existsSync(configPath)) return null;
+  try {
+    const configRaw = fs.readFileSync(configPath, 'utf-8');
+    const configParsed = JSON.parse(configRaw) as Record<string, unknown>;
+    return (configParsed['phase_id_convention'] as string | undefined) || null;
+  } catch {
+    return null;
+  }
+}
+
+// #612: `convention` reaches these dir scanners so a bracket repo's
+// `{CODE}.{MM}-{PP}-slug` directories are recognized. Module-internal helpers,
+// so the parameter is additive with no cross-module signature change; a
+// convention-less call answers exactly as before.
+function forEachArchivedPhaseToken(planBase: string, onPhase: (token: string) => void, convention?: string | null): void {
   for (const archiveDir of listMilestoneArchiveDirs(planBase)) {
     try {
       const entries = fs.readdirSync(archiveDir, { withFileTypes: true });
       for (const e of entries) {
         if (!e.isDirectory()) continue;
-        const m = e.name.match(PHASE_TOKEN_FROM_DIR_RE);
-        if (m) onPhase(m[1]);
+        const token = phaseTokenFromDir(e.name, convention);
+        if (token) onPhase(token);
       }
     } catch {
       /* archive dir absent/unreadable */
@@ -1209,7 +1231,7 @@ function collectPhaseRoots(planBase: string): string[] {
   return roots;
 }
 
-function collectDiskPhases(planBase: string): Set<string> {
+function collectDiskPhases(planBase: string, convention?: string | null): Set<string> {
   const diskPhases = new Set<string>();
   const phaseRoots = collectPhaseRoots(planBase);
   const scanDir = (dir: string) => {
@@ -1217,8 +1239,8 @@ function collectDiskPhases(planBase: string): Set<string> {
       const entries = fs.readdirSync(dir, { withFileTypes: true });
       for (const e of entries) {
         if (e.isDirectory()) {
-          const m = e.name.match(PHASE_TOKEN_FROM_DIR_RE);
-          if (m) diskPhases.add(m[1]);
+          const token = phaseTokenFromDir(e.name, convention);
+          if (token) diskPhases.add(token);
         }
       }
     } catch {
@@ -1394,7 +1416,10 @@ function cmdValidateConsistency(cwd: string, raw: boolean): void {
   const { roadmapPhases } = buildRoadmapPhaseVariants(roadmapContent);
   const { roadmapPhaseVariants: fullRoadmapPhaseVariants } = buildRoadmapPhaseVariants(roadmapContentRaw);
 
-  const diskPhases = collectDiskPhases(planBase);
+  // #612: the ROADMAP read above already sees bracket headings, so the DISK read
+  // must too — otherwise every bracket phase reports as "in ROADMAP.md but no
+  // directory on disk".
+  const diskPhases = collectDiskPhases(planBase, readPhaseIdConvention(path.join(planBase, 'config.json')));
 
   for (const p of roadmapPhases) {
     if (!diskPhases.has(p) && !diskPhases.has(normalizePhaseName(p))) {
@@ -1518,6 +1543,10 @@ function cmdValidateHealth(
   const roadmapPath = path.join(wsBase, 'ROADMAP.md');
   const statePath = path.join(wsBase, 'STATE.md');
   const configPath = path.join(rootBase, 'config.json');
+  // #612: read once, near the top, so the directory scanners below share the
+  // same value the W021 gate uses further down. The reader swallows every error
+  // internally and returns null, so hoisting it cannot introduce a new throw.
+  const phaseConvention = readPhaseIdConvention(configPath);
   const phasesDir = path.join(wsBase, 'phases');
   const _slashRuntime = resolveRuntime(cwd);
   const slash = (name: string) => formatGsdSlash(name, _slashRuntime) as string;
@@ -1578,7 +1607,7 @@ function cmdValidateHealth(
     ].map(
       (m) => m[1],
     );
-    const validPhases = collectDiskPhases(planBase);
+    const validPhases = collectDiskPhases(planBase, phaseConvention);
     try {
       if (fs.existsSync(roadmapPath)) {
         const roadmapRaw = fs.readFileSync(roadmapPath, 'utf-8');
@@ -1590,7 +1619,7 @@ function cmdValidateHealth(
     } catch {
       /* intentionally empty */
     }
-    forEachArchivedPhaseToken(planBase, (token) => validPhases.add(token));
+    forEachArchivedPhaseToken(planBase, (token) => validPhases.add(token), phaseConvention);
     const normalizedValid = new Set<string>();
     for (const p of validPhases) {
       normalizedValid.add(p);
@@ -1727,7 +1756,7 @@ function cmdValidateHealth(
   }
 
   for (const e of phaseDirEntries) {
-    if (!e.name.match(phaseDirNameRe)) {
+    if (!isPhaseDirName(e.name, phaseConvention)) {
       addIssue(
         'warning',
         'W005',
@@ -1873,10 +1902,10 @@ function cmdValidateHealth(
     const { roadmapPhaseVariants: fullRoadmapPhaseVariants } =
       buildRoadmapPhaseVariants(roadmapContentRaw);
 
-    const diskPhases = collectDiskPhases(planBase);
-    forEachArchivedPhaseToken(planBase, (token) => diskPhases.add(token));
+    const diskPhases = collectDiskPhases(planBase, phaseConvention);
+    forEachArchivedPhaseToken(planBase, (token) => diskPhases.add(token), phaseConvention);
 
-    const activeDiskPhases = collectDiskPhases(planBase);
+    const activeDiskPhases = collectDiskPhases(planBase, phaseConvention);
 
     const notStartedPhases = buildNotStartedPhaseVariants(roadmapContent);
 
@@ -2061,16 +2090,6 @@ function cmdValidateHealth(
   }
 
   try {
-    const phaseConvention = (() => {
-      if (!fs.existsSync(configPath)) return null;
-      try {
-        const configRaw = fs.readFileSync(configPath, 'utf-8');
-        const configParsed = JSON.parse(configRaw) as Record<string, unknown>;
-        return (configParsed['phase_id_convention'] as string | undefined) || null;
-      } catch {
-        return null;
-      }
-    })();
     if (phaseConvention === 'milestone-prefixed') {
       if (fs.existsSync(roadmapPath)) {
         const roadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
