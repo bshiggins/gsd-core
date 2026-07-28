@@ -27,7 +27,7 @@ import { PACKAGE_NAME } from './package-identity.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { detectSchemaFiles, checkSchemaDrift } from './schema-detect.cjs';
 import { isCanonicalPlanningFile } from './artifacts.cjs';
-import { extractTaggedBlocks } from './markdown-sectionizer.cjs';
+import { extractTaggedBlocks, tokenizeHeadings } from './markdown-sectionizer.cjs';
 import { VALID_PROFILES, VALID_TIERS, VALID_PHASE_TYPES } from './model-catalog.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- agent-install-check.cjs is an export= CommonJS module
 import agentInstallCheck = require('./agent-install-check.cjs');
@@ -40,7 +40,7 @@ import configLoaderMod = require('./config-loader.cjs');
 const { loadConfig, CONFIG_DEFAULTS } = configLoaderMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { normalizePhaseName, phaseTokenMatches, escapeRegex, getMilestoneFromPhaseId, OPTIONAL_PHASE_TAG_SOURCE, PHASE_NUMBER_TOKEN_SOURCE, extractPhaseToken, comparePhaseNum } = phaseIdMod;
+const { normalizePhaseName, phaseTokenMatches, escapeRegex, getMilestoneFromPhaseId, OPTIONAL_PHASE_TAG_SOURCE, PHASE_NUMBER_TOKEN_SOURCE, extractPhaseToken, comparePhaseNum, isSentinelPhaseId, BRACKET_ID_HEADING_PREFIX_CAPTURING_SRC, BRACKET_OR_PHASE_LABEL_PREFIX_CAPTURING_SRC, SENTINEL_RANGES } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
 const { findPhaseInternal } = phaseLocatorMod;
@@ -1269,6 +1269,106 @@ function checkMilestonePrefixMismatches(
   return mismatches;
 }
 
+interface BracketIncoherence {
+  kind: 'mismatch' | 'missing-bracket';
+  phaseId: string;
+  foundInMilestone: string;
+  expectedMilestone: string;
+}
+
+/**
+ * Bracket-coherence check (#612). ADVISORY, and invoked ONLY under
+ * `phase_id_convention === 'bracket'` — the caller gates on that, and the legacy
+ * `checkMilestonePrefixMismatches` above is left untouched for the
+ * milestone-prefixed path. Two sub-checks, both surfaced as W021:
+ *
+ *   (1) integer-coherence — a phase whose in-bracket milestone integer differs
+ *       from its enclosing `## [CODE.MM] Name` section integer.
+ *   (2) bracket-form-presence — a phase heading that is NOT in bracket form
+ *       (legacy `### Phase 5:`) under a repo that has opted into 'bracket'.
+ *
+ * Sentinel milestones (0.x backlog / 999.x icebox) are exempt: they have no real
+ * milestone to be coherent with.
+ *
+ * Anchored to tokenizeHeadings() rather than scanning raw content, for three
+ * reasons that are all correctness rather than style: the tokenizer strips
+ * fenced code blocks (so a bracket in a ``` example cannot raise a warning), it
+ * yields the heading LEVEL directly (so section-vs-phase is a structural test,
+ * not a hash-counting regex), and it removes the ambiguity of a `(.*?)`-style
+ * prefix scan that could otherwise match a table row or a prose line that
+ * happens to contain `<digits>:`.
+ *
+ * Comparison is intra-roadmap (phase-bracket integer vs enclosing section
+ * integer); STATE.md milestone authority is deliberately not consulted.
+ *
+ * BOUNDARY, pinned by a test: both sub-checks are SECTION-SCOPED. A flat,
+ * section-less bracket roadmap — a single-milestone project with no milestone
+ * heading — gets no coherence or presence checking at all. Conscious.
+ */
+function checkBracketCoherence(roadmapContent: string): BracketIncoherence[] {
+  const incoherences: BracketIncoherence[] = [];
+  const isSentinel = (n: number) => SENTINEL_RANGES.includes(n);
+  const pad2 = (n: number) => String(n).padStart(2, '0');
+
+  // A bracket PHASE heading: `### [CODE.MM] 05:` (or `### [CODE.MM] Phase 5:`).
+  const bracketPhaseRx = new RegExp(`^${BRACKET_ID_HEADING_PREFIX_CAPTURING_SRC}(\\d+(?:\\.\\d+)?)\\s*:`, 'i');
+  // Any OTHER phase-shaped heading: the legacy `Phase 5:` form, or a bare
+  // `05:`. Bounded and anchored — no `(.*?)` prefix scan.
+  const legacyPhaseRx = /^(?:Phase\s+)?(\d+(?:\.\d+)?)\s*:/i;
+  // A milestone SECTION heading is a bracket heading that is NOT a phase
+  // heading. The distinction is load-bearing: without it a `### [CODE.MM] 05:`
+  // phase heading would be read as its own milestone section and every phase
+  // would self-coherently match, defeating sub-check (1) entirely.
+  const sectionRx = /^\[[A-Za-z][A-Za-z0-9_]*\.(\d+)\]/;
+
+  let sectionMilestone: number | null = null;
+  for (const heading of tokenizeHeadings(roadmapContent)) {
+    const bracketPhase = heading.text.match(bracketPhaseRx);
+    const legacyPhase = heading.text.match(legacyPhaseRx);
+    // A level-<=3 heading that is not PHASE-shaped is a section boundary. It
+    // either opens a bracket milestone section or CLOSES the previous one —
+    // the reset is load-bearing. Without it a legacy `## v3.0` heading after a
+    // `## [GSD.02] v2.0` section leaves milestone 02 in scope, and every phase
+    // under the legacy milestone is compared against — and reported against —
+    // a section it is not in. The phase-shaped exclusion is equally
+    // load-bearing in the other direction: `### [CODE.MM] 05:` must not be read
+    // as its own section, or every phase self-coherently matches and sub-check
+    // (1) can never fire.
+    if (heading.level <= 3 && !bracketPhase && !legacyPhase) {
+      const section = heading.text.match(sectionRx);
+      sectionMilestone = section ? parseInt(section[1], 10) : null;
+      continue;
+    }
+    // Outside a detected bracket section there is nothing to be coherent with.
+    if (sectionMilestone === null || isSentinel(sectionMilestone)) continue;
+    if (heading.level < 2 || heading.level > 4) continue;
+
+    if (bracketPhase) {
+      const phaseMilestone = parseInt(bracketPhase[1].split('.')[1], 10);
+      if (isSentinel(phaseMilestone)) continue;
+      if (phaseMilestone !== sectionMilestone) {
+        incoherences.push({
+          kind: 'mismatch',
+          phaseId: bracketPhase[2],
+          foundInMilestone: pad2(sectionMilestone),
+          expectedMilestone: pad2(phaseMilestone),
+        });
+      }
+      continue;
+    }
+
+    if (legacyPhase) {
+      incoherences.push({
+        kind: 'missing-bracket',
+        phaseId: legacyPhase[1],
+        foundInMilestone: pad2(sectionMilestone),
+        expectedMilestone: pad2(sectionMilestone),
+      });
+    }
+  }
+  return incoherences;
+}
+
 interface IssueEntry {
   code: string;
   message: string;
@@ -1987,6 +2087,28 @@ function cmdValidateHealth(
         }
       }
     }
+    // #612: bracket-coherence is a SEPARATE, additive sibling branch — the
+    // milestone-prefixed branch above is left exactly as-is. Gated strictly on
+    // the ACTIVE convention (never on project_code presence): reads stay
+    // tolerant of every form, but a CHECK that can fail a repo only runs for
+    // the convention that repo opted into. A null-convention repo falls through
+    // both branches and stays silent, as it does today.
+    if (phaseConvention === 'bracket') {
+      if (fs.existsSync(roadmapPath)) {
+        const roadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
+        for (const mm of checkBracketCoherence(roadmapContent)) {
+          const message = mm.kind === 'missing-bracket'
+            ? `Phase ${mm.phaseId}: heading is not in bracket form under the 'bracket' convention (expected \`[CODE.${mm.foundInMilestone}] ${mm.phaseId}:\`)`
+            : `Phase ${mm.phaseId}: bracket milestone ${mm.expectedMilestone} does not match its section milestone ${mm.foundInMilestone}`;
+          addIssue(
+            'warning',
+            'W021',
+            message,
+            'Run `gsd-tools roadmap upgrade --convention bracket` to migrate (dry-run by default)',
+          );
+        }
+      }
+    }
   } catch {
     /* W021 check is advisory — skip on error */
   }
@@ -2056,7 +2178,12 @@ function cmdValidateHealth(
         const roadmapRaw = fs.readFileSync(roadmapPath, 'utf-8');
         const scopedContent = extractCurrentMilestone(roadmapRaw, cwd);
         // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
-        const phasePattern = new RegExp(`#{2,4}\\s*Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n]+)`, 'gi');
+        // #612 (B6): this check is convention-AGNOSTIC by design — it must see
+        // bracket headings too, or it goes blind and under-counts unstarted
+        // phases on a bracket repo. Minimal-additive intro: this site spelled a
+        // BARE `Phase\\s+`, so it gains the bracket-ID form and nothing else.
+        // CAPTURING, because the bracket id is needed twice below.
+        const phasePattern = new RegExp(`#{2,4}\\s*${BRACKET_OR_PHASE_LABEL_PREFIX_CAPTURING_SRC}(${PHASE_NUMBER_TOKEN_SOURCE})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n]+)`, 'gi');
         const unstarted: string[] = [];
         let pm: RegExpExecArray | null;
         // Non-hoisted: load-order matters (circular dep guard)
@@ -2074,9 +2201,22 @@ function cmdValidateHealth(
           }
         })();
         while ((pm = phasePattern.exec(scopedContent)) !== null) {
-          const phaseNum = pm[1];
+          const bracketId = pm[1];
+          const phaseNum = pm[2];
+          // A bracket sentinel (`### [GSD.999] 01:`) is an icebox item, not an
+          // unstarted phase. Before the widening these headings were invisible
+          // here; without this they would each raise the warning below.
+          if (bracketId && isSentinelPhaseId(`${bracketId}-${phaseNum}`, 'bracket')) continue;
           const normalizedPh = normalizePhaseName(phaseNum);
-          const hasDirectory = phaseDirNames2.some((d) => phaseTokenMatches(d, normalizedPh));
+          // The DIR read must widen with the HEADING read or every bracket phase
+          // resolves to no directory, reads as unstarted, and this UNGATED
+          // warning false-fires on any bracket repo whose STATE says the
+          // milestone is complete. The convention signal comes from the heading
+          // that produced this token — a `[CODE.MM]` bracket cannot occur in a
+          // legacy ROADMAP — rather than from config, so a mid-migration repo
+          // whose config is not yet set resolves its bracket dirs too.
+          const headingConvention = bracketId ? 'bracket' : undefined;
+          const hasDirectory = phaseDirNames2.some((d) => phaseTokenMatches(d, normalizedPh, headingConvention));
           if (!hasDirectory) {
             unstarted.push(phaseNum);
           }
