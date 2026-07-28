@@ -16,7 +16,7 @@ import configLoaderMod = require('./config-loader.cjs');
 const { loadConfig } = configLoaderMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { escapeRegex, normalizePhaseName, extractPhaseToken, parsePhaseFromProse, PHASE_NUMBER_TOKEN_SOURCE } = phaseIdMod;
+const { escapeRegex, normalizePhaseName, extractPhaseToken, parsePhaseFromProse, PHASE_NUMBER_TOKEN_SOURCE, PHASE_HEADING_PREFIX_CAPTURING_SRC, isSentinelPhaseId } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
 const { getMilestoneInfo, getMilestonePhaseFilter, extractCurrentMilestone } = roadmapParserMod;
@@ -1666,17 +1666,25 @@ function buildStateFrontmatter(bodyContent: string, cwd: string | undefined): Re
           let roadmapPhaseCount = 0;
           if (roadmapScope !== null) {
             // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
-            const phaseHeadingPattern = /#{2,4}\s*Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]{0,200}\))?\s*:/gi;
+            // #612: the CAPTURING heading intro — group 1 is the `[CODE.MM]`
+            // bracket id (undefined for legacy headings), group 2 the token. The
+            // bracket form must be counted, and its sentinel must be read from
+            // the BRACKET (READING-B), not from the token.
+            const phaseHeadingPattern = new RegExp(`#{2,4}\\s*${PHASE_HEADING_PREFIX_CAPTURING_SRC}([\\w][\\w.-]*)(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:`, 'gi');
             let m: RegExpExecArray | null;
             while ((m = phaseHeadingPattern.exec(roadmapScope)) !== null) {
               // Only count tokens that contain at least one digit — excludes
               // pure-word section headings (Overview, Details) while keeping
               // numeric phases (01, 05.1) and project-code IDs (PROJ-42).
               // Also exclude 999.x backlog phases. Mirrors init.cts filter.
-              if (!/\d/.test(m[1]) || /^999\b/.test(m[1])) continue;
+              if (!/\d/.test(m[2])) continue;
+              // #612: a bracket heading carries its sentinel in the bracket, so
+              // `### [GSD.999] 01:` is an icebox item even though its token is
+              // `01`. Legacy headings keep the /^999\b/ token rule byte-for-byte.
+              if (m[1] ? isSentinelPhaseId(`${m[1]}-${m[2]}`, 'bracket') : /^999\b/.test(m[2])) continue;
               // #1514: retired/folded phases are struck through in the ROADMAP;
               // exclude them from the denominator (they can never be completed).
-              if (retiredPhaseNums.has(phaseKeyFromToken(m[1]))) continue;
+              if (retiredPhaseNums.has(phaseKeyFromToken(m[2]))) continue;
               roadmapPhaseCount++;
             }
           }
@@ -2798,15 +2806,23 @@ function cmdStateSync(cwd: string, options: StateSyncOptions | undefined, raw: b
   let roadmapPhaseCount = 0;
   if (syncRoadmapScope !== null) {
     // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
-    const phaseHeadingPattern = /#{2,4}\s*Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]{0,200}\))?\s*:/gi;
+    // #612: same CAPTURING intro as buildStateFrontmatter — the two counters
+    // must see the same phases or `state json` and `state sync` report different
+    // totals for one repo (#3242 Bug B).
+    const phaseHeadingPattern = new RegExp(`#{2,4}\\s*${PHASE_HEADING_PREFIX_CAPTURING_SRC}([\\w][\\w.-]*)(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:`, 'gi');
     let m: RegExpExecArray | null;
     while ((m = phaseHeadingPattern.exec(syncRoadmapScope)) !== null) {
       // Only count tokens that contain at least one digit — excludes
       // pure-word section headings (Overview, Details) while keeping
       // numeric phases (01, 05.1) and project-code IDs (PROJ-42).
-      if (!/\d/.test(m[1])) continue;
+      if (!/\d/.test(m[2])) continue;
+      // #612: bracket sentinel lives in the bracket (READING-B). This counter has
+      // never carried the legacy /^999\b/ token filter its twin has; that
+      // pre-existing divergence is left exactly as-is so legacy totals are
+      // byte-identical, and only the bracket form is newly excluded here.
+      if (m[1] && isSentinelPhaseId(`${m[1]}-${m[2]}`, 'bracket')) continue;
       // #1514: retired/folded phases are struck through; exclude from total.
-      if (syncRetiredPhaseNums.has(phaseKeyFromToken(m[1]))) continue;
+      if (syncRetiredPhaseNums.has(phaseKeyFromToken(m[2]))) continue;
       roadmapPhaseCount++;
     }
   }
