@@ -15,7 +15,13 @@ import { retryRenameSync } from './shell-command-projection.cjs';
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseLocatorMod = require('./phase-locator.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planningScopeMod = require('./planning-scope.cjs');
 const { planningDir } = planningWorkspace;
+const { listAllPhaseDirs } = phaseLocatorMod;
+const { SCOPE } = planningScopeMod;
 const {
   BRACKET_ID_SRC,
   BRACKET_PROJECT_CODE_SRC,
@@ -488,16 +494,11 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     );
   }
 
-  let existingDirs: string[] = [];
-  try {
-    existingDirs = fs.readdirSync(phasesDir).filter((dirName) => {
-      try {
-        return fs.statSync(path.join(phasesDir, dirName)).isDirectory();
-      } catch {
-        return false;
-      }
-    });
-  } catch { /* phases dir may not exist */ }
+  const phaseDirListing = listAllPhaseDirs(phasesDir, { includeSentinels: true });
+  if (phaseDirListing.scope === SCOPE.UNREADABLE) {
+    throw new Error(`Cannot read phase directories at ${phasesDir}`);
+  }
+  const existingDirs = phaseDirListing.value;
 
   const orderedMappings = [...idMapping.values()].map((mapping) => ({ mapping, used: false }));
   const phases: PhaseRename[] = [];
