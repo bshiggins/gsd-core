@@ -1,6 +1,6 @@
 /**
  * Roadmap Upgrade — Migration tool for converting legacy 'Phase N' phase IDs
- * to milestone-prefixed 'Phase M-NN' form.
+ * to milestone-prefixed 'Phase M-NN', or legacy/M-NN IDs to bracket form.
  *
  * ADR-457 build-at-publish: the hand-written bin/lib/roadmap-upgrade.cjs collapsed
  * to a TypeScript source of truth. Behaviour is preserved byte-for-behaviour

@@ -189,6 +189,57 @@ describe('roadmap upgrade --convention bracket', () => {
     assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'refusal must write nothing');
   });
 
+  test('hard-refuses a non-canonical project_code before planning any writes', () => {
+    const cwd = materializeFixture('legacy-multi-milestone');
+    const configPath = path.join(cwd, '.planning', 'config.json');
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    config.project_code = 'bad-code';
+    fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+    const before = snapshotTree(cwd, { skipGit: true });
+
+    const result = runBracketUpgrade(cwd);
+
+    assertExited(result, 1, 'invalid project_code');
+    assert.match(result.stderr, /invalid project_code/);
+    assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'refusal must write nothing');
+  });
+
+  test('preserves the v999 sentinel milestone in the bracket identity', () => {
+    const cwd = materializeFixture('legacy-multi-milestone');
+    fs.writeFileSync(
+      path.join(cwd, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n## v999.0 — Backlog\n\n### Phase 1: Someday\n',
+      'utf8',
+    );
+
+    const plan = parseDryRun(runBracketUpgrade(cwd), 'sentinel milestone dry-run');
+
+    assert.ok(
+      plan.roadmapEdits.some(({ to }) => to === '### [GSD.999] 01: Someday'),
+      'v999 must remain milestone 999 rather than being skipped or truncated',
+    );
+    assert.ok(
+      plan.phases.some(({ oldDir, newDir }) => oldDir === '01-alpha' && newDir === 'GSD.999-01-alpha'),
+      'the directory prefix must carry the same sentinel milestone',
+    );
+  });
+
+  test('sanitizes a hostile legacy directory slug through the canonical emitter', () => {
+    const cwd = materializeFixture('legacy-multi-milestone');
+    const phasesPath = path.join(cwd, '.planning', 'phases');
+    fs.renameSync(
+      path.join(phasesPath, '01-alpha'),
+      path.join(phasesPath, '01-..-..-etc'),
+    );
+
+    const plan = parseDryRun(runBracketUpgrade(cwd), 'hostile slug dry-run');
+    const rename = plan.phases.find(({ oldDir }) => oldDir === '01-..-..-etc');
+
+    assert.ok(rename, 'the hostile source directory must still be matched');
+    assert.equal(rename.newDir, path.basename(rename.newDir), 'the target must remain one path segment');
+    assert.doesNotMatch(rename.newDir, /\.\./, 'the target must not retain traversal tokens');
+  });
+
   test('apply refuses a dirty tracked working tree before mutating the ignored planning tree', () => {
     const cwd = materializeFixture('legacy-multi-milestone');
     fs.appendFileSync(path.join(cwd, 'README.md'), '\ndirty\n', 'utf8');

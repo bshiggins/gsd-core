@@ -1,9 +1,10 @@
 /**
- * Canonical bracket convention card (ADR-612).
+ * Canonical bracket convention card (#3638 / ADR-612 PR-5).
  *
- * PR-5 owns the wider display rollout. PR-3 needs the same single-source card
- * at the migration boundary so dry-runs and applies explain the target grammar
- * before doing any work.
+ * This module is the sole editable source of the compact grammar diagram.
+ * Render sites import phaseIdCard(); generated documentation is held to the
+ * same bytes by tests/phase-id-card.test.cjs. PR-6 can therefore inject the
+ * card broadly without inventing another copy.
  */
 
 const PHASE_ID_CARD = [
