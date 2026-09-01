@@ -456,6 +456,7 @@
       "pattern.cjs",
       "phase-command-router.cjs",
       "phase-estimation.cjs",
+      "phase-id-card.cjs",
       "phase-id.cjs",
       "phase-lifecycle.cjs",
       "phase-locator.cjs",
