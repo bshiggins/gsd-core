@@ -162,6 +162,18 @@ describe('roadmap upgrade --convention bracket', () => {
     );
   });
 
+  test('refuses a legacy tree whose milestone cannot be derived instead of marking it bracket', () => {
+    const cwd = materializeFixture('project-prefixed-single-milestone');
+    fs.unlinkSync(path.join(cwd, '.planning', 'STATE.md'));
+    const before = snapshotTree(cwd, { skipGit: true });
+
+    const result = runBracketUpgrade(cwd);
+
+    assertExited(result, 1, 'missing milestone source');
+    assert.match(result.stderr, /Cannot determine a milestone/);
+    assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'refusal must write nothing');
+  });
+
   test('hard-refuses a bracket migration without project_code and writes zero bytes', () => {
     const cwd = materializeFixture('legacy-multi-milestone');
     const configPath = path.join(cwd, '.planning', 'config.json');
@@ -204,7 +216,7 @@ describe('roadmap upgrade --convention bracket', () => {
     );
 
     const roadmap = fs.readFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), 'utf8');
-    const headingIds = [...roadmap.matchAll(/^### \[([^\]]+)\] ([^:]+):/gm)]
+    const headingIds = [...roadmap.matchAll(/^### \[([^\]\r\n]{1,200})\] ([^:\r\n]{1,200}):/gm)]
       .map((match) => `${match[1]}-${match[2]}`);
     assert.deepEqual(headingIds, expectedIds);
     assert.ok(
