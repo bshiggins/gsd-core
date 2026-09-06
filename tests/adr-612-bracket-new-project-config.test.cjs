@@ -1,7 +1,5 @@
 'use strict';
 
-// docs-guard-exempt: no docs/ file is read; ADR-612 Decision 2 is referenced only in comments.
-
 const { test, describe, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
