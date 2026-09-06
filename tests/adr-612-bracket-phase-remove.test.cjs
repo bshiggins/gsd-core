@@ -1,7 +1,7 @@
 'use strict';
 
 // docs-guard-exempt: no docs/ file is read; ADR-612 is referenced only in comments.
-// allow-test-rule: source-text-is-the-product
+// allow-test-rule: source-text-is-the-product — see #4304
 // ROADMAP.md and phase artifact names are the phase-remove output contract.
 
 const { test, describe, beforeEach, afterEach } = require('node:test');
