@@ -97,7 +97,7 @@ const {
   extractCurrentMilestone,
 } = roadmapParser;
 const { pathExistsInternal, generateSlugInternal, toPosixPath } = coreUtils;
-const { comparePhaseNum, normalizePhaseName, matchPhaseDirs, stripProjectCodePrefix, PHASE_NUMBER_TOKEN_SOURCE, isForeignPrefixedPhaseQuery, isSentinelPhaseId, extractPhaseToken, scopeToPhase } = phaseId;
+const { comparePhaseNum, normalizePhaseName, matchPhaseDirs, stripProjectCodePrefix, PHASE_NUMBER_TOKEN_SOURCE, isForeignPrefixedPhaseQuery, isSentinelPhaseId, extractPhaseToken, scopeToPhase, renderPhaseBranchName } = phaseId;
 const { pruneOrphanedWorktrees } = worktreeSafety;
 
 const {
@@ -344,7 +344,15 @@ function withProjectRoot(cwd: string, result: Record<string, unknown>): Record<s
   if (config.project_code) {
     result['project_code'] = config.project_code;
   }
-  const projectMdPath = path.join(planningDir(cwd), 'PROJECT.md');
+  // #4455 follow-up (self-discovered): PROJECT.md is shared across a
+  // project's own workstreams (never cloned per workstream) but DOES
+  // respect the separate GSD_PROJECT multi-project namespace (#3749) — see
+  // cmdInitCompleteMilestone's projectPath comment for the full evidence.
+  // `ws` explicitly nulled, `project` left to default from GSD_PROJECT.
+  // Reading via the workstream-aware planningDir(cwd) meant every init.*
+  // call's project_title silently vanished whenever a workstream was
+  // active, since no PROJECT.md ever exists at the workstream path.
+  const projectMdPath = path.join(planningDir(cwd, null), 'PROJECT.md');
   const content = platformReadSync(projectMdPath);
   if (content) {
     const h1Match = content.match(/^#\s+(.+)$/m);
@@ -568,6 +576,16 @@ function readConfigJsonBoolean(cwd: string, keyPath: readonly string[]): boolean
     return cursor === true;
   } catch {
     return false;
+  }
+}
+
+/** Reads `filePath`; returns its content, or `null` when missing/unreadable/empty. */
+function readNonEmptyFileOrNull(filePath: string): string | null {
+  try {
+    const content = platformReadSync(filePath);
+    return content && content.length > 0 ? content : null;
+  } catch {
+    return null;
   }
 }
 
@@ -971,10 +989,11 @@ function cmdInitExecutePhase(
 
     branch_name:
       config.branching_strategy === 'phase' && phaseInfo
-        ? (config.phase_branch_template as string)
-            .replace('{project}', (config.project_code as string) || '')
-            .replace('{phase}', normalizePhaseName(phaseInfo['phase_number']))
-            .replace('{slug}', (phaseInfo['phase_slug'] as string) || 'phase')
+        ? renderPhaseBranchName(
+            (config.phase_branch_template as string).replace('{project}', (config.project_code as string) || ''),
+            phaseInfo['phase_number'],
+            phaseInfo['phase_slug'],
+          )
         : config.branching_strategy === 'milestone'
           ? (config.milestone_branch_template as string)
               .replace('{milestone}', (milestone['version'] as string | undefined) ?? '')
@@ -995,6 +1014,17 @@ function cmdInitExecutePhase(
     // #3188: null when the file is absent (parity with patterns_path/context_path).
     state_path: fs.existsSync(statePath) ? toPosixPath(statePath) : null,
     roadmap_path: fs.existsSync(roadmapPath) ? toPosixPath(roadmapPath) : null,
+    // #4456 correction: an isolated review pass initially "fixed" this to
+    // planningDir(cwd, null) on the assumption that config.json is shared
+    // like PROJECT.md (workstream-flag.md's directory diagram marks it
+    // `# Shared`) — but ADR-0006's own tests (tests/init.test.cjs, "init
+    // handlers honor GSD_WORKSTREAM") assert config_path IS workstream-scoped
+    // for execute-phase/new-project/new-milestone/progress, and gsd-test
+    // caught the regression immediately. The diagram is stale for
+    // config.json specifically (same class of staleness already found for
+    // `milestones/` during the #4455 follow-up) — reverted to the
+    // workstream-aware planningDir(cwd), matching the established,
+    // ADR-governed, tested contract.
     config_path: toPosixPath(path.join(planningDir(cwd), 'config.json')),
     // #2376: execute-phase.md's verify_phase_goal step reads this instead of
     // hardcoding '.planning/REQUIREMENTS.md' into the gsd-verifier spawn prompt.
@@ -1318,8 +1348,14 @@ function buildInitCompletenessFields(cwd: string): Record<string, boolean> {
   const planningExists = fs.existsSync(dir);
   const requirementsExists = fs.existsSync(path.join(dir, 'REQUIREMENTS.md'));
   const milestonesExists = fs.existsSync(path.join(dir, 'MILESTONES.md'));
+  // #4455 follow-up (code-review finding): PROJECT.md is shared across
+  // workstreams (see cmdInitCompleteMilestone's projectPath comment for the
+  // full evidence) — checked at planningRoot(cwd), never the workstream-scoped
+  // `dir`, so a workstream whose own REQUIREMENTS/ROADMAP/STATE are all
+  // present isn't wrongly reported incomplete just because the shared
+  // PROJECT.md isn't ALSO duplicated under its own directory.
   const coreComplete =
-    fs.existsSync(path.join(dir, 'PROJECT.md')) &&
+    fs.existsSync(path.join(planningDir(cwd, null), 'PROJECT.md')) &&
     requirementsExists &&
     fs.existsSync(path.join(dir, 'ROADMAP.md')) &&
     fs.existsSync(path.join(dir, 'STATE.md'));
@@ -1363,13 +1399,24 @@ function cmdInitNewProject(cwd: string, raw: boolean, options: Record<string, un
     // one key stay byte-identical for existing consumers.
     ...buildInitCompletenessFields(cwd),
 
-    project_exists: pathExistsInternal(cwd, toPosixPath(path.relative(cwd, path.join(planningDir(cwd), 'PROJECT.md')))),
+    // #4455 follow-up (code-review finding): PROJECT.md is shared across
+    // workstreams — see cmdInitCompleteMilestone's projectPath comment for
+    // the full evidence.
+    project_exists: pathExistsInternal(cwd, toPosixPath(path.relative(cwd, path.join(planningDir(cwd, null), 'PROJECT.md')))),
     has_codebase_map: hasCodebaseMap,
     planning_exists: pathExistsInternal(cwd, '.planning'),
 
     has_existing_code: hasCode,
     has_package_file: hasPackageFile,
     is_brownfield: isBrownfield,
+    // #4458: new-project.md's Step 5.1 (Sub-Repo Detection) used to run its own
+    // narrower `find ... -exec test -d "{}/.git"` predicate, which requires
+    // .git to be a DIRECTORY and so silently excluded linked git worktree
+    // children (.git is a FILE there). detectSubRepos already handled this
+    // correctly (fs.existsSync, not isDirectory) but had zero callers anywhere
+    // in the codebase — reused here instead of leaving the workflow to
+    // maintain its own duplicate, narrower detection logic.
+    sub_repos_detected: coreUtils.detectSubRepos(cwd),
     needs_codebase_map: isBrownfield && !hasCodebaseMap,
 
     ...getInitGitState(cwd),
@@ -1379,11 +1426,23 @@ function cmdInitNewProject(cwd: string, raw: boolean, options: Record<string, un
     exa_search_available: hasExaSearch,
 
     // #2376: absolute — see comment on phase_dir in cmdInitExecutePhase.
-    project_path: toPosixPath(path.join(planningDir(cwd), 'PROJECT.md')),
+    // #4455 follow-up: PROJECT.md is shared across workstreams.
+    project_path: toPosixPath(path.join(planningDir(cwd, null), 'PROJECT.md')),
     // #2376: new-project.md's research-synthesizer/roadmapper spawn prompts
     // read these instead of hardcoding '.planning/...' literals.
     requirements_path: toPosixPath(path.join(planningDir(cwd), 'REQUIREMENTS.md')),
     roadmap_path: toPosixPath(path.join(planningDir(cwd), 'ROADMAP.md')),
+    // #4456 correction: an isolated review pass initially "fixed" this to
+    // planningDir(cwd, null) on the assumption that config.json is shared
+    // like PROJECT.md (workstream-flag.md's directory diagram marks it
+    // `# Shared`) — but ADR-0006's own tests (tests/init.test.cjs, "init
+    // handlers honor GSD_WORKSTREAM") assert config_path IS workstream-scoped
+    // for execute-phase/new-project/new-milestone/progress, and gsd-test
+    // caught the regression immediately. The diagram is stale for
+    // config.json specifically (same class of staleness already found for
+    // `milestones/` during the #4455 follow-up) — reverted to the
+    // workstream-aware planningDir(cwd), matching the established,
+    // ADR-governed, tested contract.
     config_path: toPosixPath(path.join(planningDir(cwd), 'config.json')),
     research_dir: toPosixPath(path.join(planningRoot(cwd), 'research')),
   };
@@ -1434,19 +1493,42 @@ function cmdInitNewMilestone(cwd: string, raw: boolean, options: Record<string, 
         )
       : null,
 
-    project_exists: pathExistsInternal(cwd, toPosixPath(path.relative(cwd, path.join(planningDir(cwd), 'PROJECT.md')))),
+    // #4455 follow-up (code-review finding): PROJECT.md is shared across
+    // workstreams — see cmdInitCompleteMilestone's projectPath comment for
+    // the full evidence.
+    project_exists: pathExistsInternal(cwd, toPosixPath(path.relative(cwd, path.join(planningDir(cwd, null), 'PROJECT.md')))),
     roadmap_exists: fs.existsSync(path.join(planningDir(cwd), 'ROADMAP.md')),
     state_exists: fs.existsSync(path.join(planningDir(cwd), 'STATE.md')),
 
-    project_path: toPosixPath(path.join(planningDir(cwd), 'PROJECT.md')),
+    // #4455 follow-up: PROJECT.md is shared across workstreams.
+    project_path: toPosixPath(path.join(planningDir(cwd, null), 'PROJECT.md')),
     roadmap_path: toPosixPath(path.join(planningDir(cwd), 'ROADMAP.md')),
     state_path: toPosixPath(path.join(planningDir(cwd), 'STATE.md')),
     // #2376: new-milestone.md's research-synthesizer/roadmapper spawn prompts
     // read these instead of hardcoding '.planning/...' literals.
     requirements_path: toPosixPath(path.join(planningDir(cwd), 'REQUIREMENTS.md')),
+    // #4456 correction: an isolated review pass initially "fixed" this to
+    // planningDir(cwd, null) on the assumption that config.json is shared
+    // like PROJECT.md (workstream-flag.md's directory diagram marks it
+    // `# Shared`) — but ADR-0006's own tests (tests/init.test.cjs, "init
+    // handlers honor GSD_WORKSTREAM") assert config_path IS workstream-scoped
+    // for execute-phase/new-project/new-milestone/progress, and gsd-test
+    // caught the regression immediately. The diagram is stale for
+    // config.json specifically (same class of staleness already found for
+    // `milestones/` during the #4455 follow-up) — reverted to the
+    // workstream-aware planningDir(cwd), matching the established,
+    // ADR-governed, tested contract.
     config_path: toPosixPath(path.join(planningDir(cwd), 'config.json')),
     research_dir: toPosixPath(path.join(planningRoot(cwd), 'research')),
     milestones_path: toPosixPath(path.join(planningDir(cwd), 'MILESTONES.md')),
+    // #4456: new-milestone.md's Step 6 stages the phase-archive move
+    // (`git add .planning/milestones/ .planning/phases/`) — both
+    // workstream-scoped (phases_dir mirrors the phasesDir local above;
+    // archive_dir mirrors cmdInitCompleteMilestone's own field of the same
+    // name), so a literal root `git add` misses the actual files
+    // phases.clear just moved under an active workstream.
+    phases_dir: toPosixPath(phasesDir),
+    archive_dir: toPosixPath(path.join(planningDir(cwd), 'milestones')),
   };
 
   // `state:flat-mode` (#2994): whether NO workstream is active — the inverse
@@ -1616,7 +1698,10 @@ function cmdInitQuickBatch(
 function cmdInitIngestDocs(cwd: string, raw: boolean): void {
   const config = loadConfig(cwd);
   const result: Record<string, unknown> = {
-    project_exists: pathExistsInternal(cwd, toPosixPath(path.relative(cwd, path.join(planningDir(cwd), 'PROJECT.md')))),
+    // #4455 follow-up (code-review finding): PROJECT.md is shared across
+    // workstreams — see cmdInitCompleteMilestone's projectPath comment for
+    // the full evidence.
+    project_exists: pathExistsInternal(cwd, toPosixPath(path.relative(cwd, path.join(planningDir(cwd, null), 'PROJECT.md')))),
     planning_exists: fs.existsSync(planningRoot(cwd)),
     ...getInitGitState(cwd),
     // #2376: absolute — see comment on phase_dir in cmdInitExecutePhase. The
@@ -1625,7 +1710,8 @@ function cmdInitIngestDocs(cwd: string, raw: boolean): void {
     // hardcoded bare '.planning/intel/...', '.planning/PROJECT.md', etc.
     // literals into their Agent(prompt=...) blocks; those now interpolate
     // these fields instead.
-    project_path: toPosixPath(path.join(planningDir(cwd), 'PROJECT.md')),
+    // #4455 follow-up: PROJECT.md is shared across workstreams.
+    project_path: toPosixPath(path.join(planningDir(cwd, null), 'PROJECT.md')),
     requirements_path: toPosixPath(path.join(planningDir(cwd), 'REQUIREMENTS.md')),
     roadmap_path: toPosixPath(path.join(planningDir(cwd), 'ROADMAP.md')),
     state_path: toPosixPath(path.join(planningDir(cwd), 'STATE.md')),
@@ -1672,13 +1758,17 @@ function cmdInitResume(cwd: string, raw: boolean): void {
 
     state_exists: fs.existsSync(path.join(planningDir(cwd), 'STATE.md')),
     roadmap_exists: fs.existsSync(path.join(planningDir(cwd), 'ROADMAP.md')),
-    project_exists: pathExistsInternal(cwd, toPosixPath(path.relative(cwd, path.join(planningDir(cwd), 'PROJECT.md')))),
+    // #4455 follow-up (code-review finding): PROJECT.md is shared across
+    // workstreams — see cmdInitCompleteMilestone's projectPath comment for
+    // the full evidence.
+    project_exists: pathExistsInternal(cwd, toPosixPath(path.relative(cwd, path.join(planningDir(cwd, null), 'PROJECT.md')))),
     planning_exists: fs.existsSync(planningRoot(cwd)),
 
     // #2376: absolute — see comment on phase_dir in cmdInitExecutePhase.
     state_path: toPosixPath(path.join(planningDir(cwd), 'STATE.md')),
     roadmap_path: toPosixPath(path.join(planningDir(cwd), 'ROADMAP.md')),
-    project_path: toPosixPath(path.join(planningDir(cwd), 'PROJECT.md')),
+    // #4455 follow-up: PROJECT.md is shared across workstreams.
+    project_path: toPosixPath(path.join(planningDir(cwd, null), 'PROJECT.md')),
 
     has_interrupted_agent: !!interruptedAgentId,
     interrupted_agent_id: interruptedAgentId,
@@ -2308,8 +2398,24 @@ function pendingTodoLinkTarget(todo: Record<string, unknown>, projectRoot: strin
   return rel;
 }
 
+/**
+ * #4439: the stored `created:` frontmatter (and the JSON `todos[].created`
+ * field it round-trips through) is always a full ISO-8601 timestamp, by
+ * design — this is the display-only seam that reformats it to the
+ * date-only `[date]` bullet documented in docs/reference/state-md.md and
+ * docs/COMMANDS.md. A value that doesn't start with a well-formed
+ * `YYYY-MM-DD` (the 'unknown' fallback, or any other non-conforming
+ * string) passes through unchanged rather than being mangled.
+ */
+function pendingTodoDateOnly(value: string): string {
+  const match = value.match(/^\d{4}-\d{2}-\d{2}/);
+  return match ? match[0] : value;
+}
+
 function renderPendingTodoBullet(todo: Record<string, unknown>, projectRoot?: string): string {
-  const date = sanitizePendingTodoInline(pendingTodoFieldAsString(todo['created'], 'unknown'));
+  const date = pendingTodoDateOnly(
+    sanitizePendingTodoInline(pendingTodoFieldAsString(todo['created'], 'unknown')),
+  );
   let area = sanitizePendingTodoInline(pendingTodoFieldAsString(todo['area'], 'general'));
   let title = sanitizePendingTodoInline(pendingTodoFieldAsString(todo['title'], 'Untitled'));
   // Strip trailing "." so the fixed "Needs ....` template below never
@@ -2578,7 +2684,10 @@ function cmdInitMilestoneOp(cwd: string, raw: boolean): void {
     archived_milestones: archivedMilestones,
     archive_count: archivedMilestones.length,
 
-    project_exists: pathExistsInternal(cwd, toPosixPath(path.relative(cwd, path.join(planningDir(cwd), 'PROJECT.md')))),
+    // #4455 follow-up (code-review finding): PROJECT.md is shared across
+    // workstreams — see cmdInitCompleteMilestone's projectPath comment for
+    // the full evidence.
+    project_exists: pathExistsInternal(cwd, toPosixPath(path.relative(cwd, path.join(planningDir(cwd, null), 'PROJECT.md')))),
     roadmap_exists: fs.existsSync(path.join(planningDir(cwd), 'ROADMAP.md')),
     state_exists: fs.existsSync(path.join(planningDir(cwd), 'STATE.md')),
     archive_exists: fs.existsSync(path.join(planningRoot(cwd), 'archive')),
@@ -3023,10 +3132,23 @@ function cmdInitManager(cwd: string, raw: boolean): void {
     waiting_signal: waitingSignal,
     all_complete:
       completedCount === nonBacklogPhases.length && nonBacklogPhases.length > 0,
-    project_exists: pathExistsInternal(cwd, toPosixPath(path.relative(cwd, path.join(planningDir(cwd), 'PROJECT.md')))),
+    // #4455 follow-up (code-review finding): PROJECT.md is shared across
+    // workstreams — see cmdInitCompleteMilestone's projectPath comment for
+    // the full evidence.
+    project_exists: pathExistsInternal(cwd, toPosixPath(path.relative(cwd, path.join(planningDir(cwd, null), 'PROJECT.md')))),
     roadmap_exists: true,
     state_exists: true,
     manager_flags: managerFlags,
+    // #4455: workstream-scoped STATE/ROADMAP/milestone-archive paths — same
+    // pattern cmdInitPlanPhase already uses (existence-checked, toPosixPath'd,
+    // null when absent) plus the archive dir composition milestone.cts's
+    // `cmdMilestoneComplete` uses (#1911: planningPaths(cwd).planning +
+    // 'milestones', workstream-aware). autonomous.md's discover_phases/
+    // iterate/lifecycle steps consume these instead of hardcoding
+    // `.planning/STATE.md` / `.planning/milestones/...`.
+    state_path: fs.existsSync(paths.state) ? toPosixPath(paths.state) : null,
+    roadmap_path: fs.existsSync(paths.roadmap) ? toPosixPath(paths.roadmap) : null,
+    archive_dir: toPosixPath(path.join(paths.planning, 'milestones')),
   };
 
   output(withProjectRoot(cwd, result), raw);
@@ -3052,10 +3174,58 @@ function cmdInitCompleteMilestone(
 ): void {
   const gitCreateTag = detectGitCreateTag(cwd);
 
+  // #4455: workstream-scoped STATE/ROADMAP/milestone-archive paths for
+  // complete-milestone.md's reorganize_roadmap_and_delete_originals step —
+  // same pattern cmdInitPlanPhase already uses, mirrored here since this is
+  // that workflow's own dedicated init entry point.
+  const planningBase = planningDir(cwd);
+  const statePath = path.join(planningBase, 'STATE.md');
+  const roadmapPath = path.join(planningBase, 'ROADMAP.md');
+  const archiveDir = path.join(planningBase, 'milestones');
+  // #4455 follow-up (code-review finding): MILESTONES.md is workstream-scoped
+  // too — cmdMilestoneComplete (src/milestone.cts) writes it via
+  // planningPaths(cwd).planning (the workstream base, not root; #1911). It is
+  // not the deliberately-root-scoped exception `todos` is (#4256) — an
+  // earlier version of this fix wrongly treated it as a shared root file,
+  // which would have made the safety commit below silently miss the actual
+  // file milestone.complete just wrote under an active workstream.
+  const milestonesPath = path.join(planningBase, 'MILESTONES.md');
+  // #4455 follow-up round 2 (self-discovered regression): PROJECT.md, unlike
+  // MILESTONES.md, is genuinely SHARED across a project's own workstreams —
+  // never cloned per workstream. gsd-core/references/workstream-flag.md's
+  // directory diagram marks it `# Shared`; new-milestone.md states it
+  // outright ("PROJECT.md is shared across workstreams") and explicitly
+  // SKIPS writing its `## Current Milestone` heading under an active
+  // workstream specifically to avoid clobbering the one shared file (#2308);
+  // cmdWorkstreamCreate (src/workstream.cts) never creates a PROJECT.md
+  // under a workstream directory. The first version of this #4455 follow-up
+  // wrongly generalized from planningPaths()'s structural shape (which
+  // composes `project` under the workstream base) without checking an
+  // actual PROJECT.md write path — resolved against planningRoot(cwd)
+  // (round 2), but that ALSO ignores the separate GSD_PROJECT dimension
+  // (multi-project namespacing, #3749: PROJECT.md legitimately lives at
+  // `.planning/<project>/PROJECT.md` when GSD_PROJECT is set — a real,
+  // tested, pre-existing feature planningRoot's blanket root-only read
+  // broke), caught by gsd-test on this fix's own first push. `planningDir`
+  // with `ws` explicitly nulled (never read from GSD_WORKSTREAM) but
+  // `project` left to default from GSD_PROJECT is the correct middle
+  // ground: respects project-namespacing, ignores workstream-namespacing.
+  const projectPath = path.join(planningDir(cwd, null), 'PROJECT.md');
+  // REQUIREMENTS.md is workstream-scoped the same way (planningPaths(cwd).requirements,
+  // src/planning-workspace.cts) — the git-rm-after-archive step needs the
+  // resolved path too, not the literal root file.
+  const requirementsPath = path.join(planningBase, 'REQUIREMENTS.md');
+
   const result: Record<string, unknown> = {
     // #2994: hoisted from complete-milestone.md's git_tag step
     // <config-check> resolver (git.create_tag, fail-open default true).
     git_create_tag: gitCreateTag,
+    state_path: fs.existsSync(statePath) ? toPosixPath(statePath) : null,
+    roadmap_path: fs.existsSync(roadmapPath) ? toPosixPath(roadmapPath) : null,
+    archive_dir: toPosixPath(archiveDir),
+    milestones_path: fs.existsSync(milestonesPath) ? toPosixPath(milestonesPath) : null,
+    project_path: fs.existsSync(projectPath) ? toPosixPath(projectPath) : null,
+    requirements_path: fs.existsSync(requirementsPath) ? toPosixPath(requirementsPath) : null,
   };
 
   result['section_manifest'] = buildSectionManifestField(cwd, null, options, 'complete-milestone', {
@@ -3540,7 +3710,10 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
     has_work_in_progress: !!currentPhase,
     phase_mvp_mode: phaseMvpMode,
 
-    project_exists: pathExistsInternal(cwd, toPosixPath(path.relative(cwd, path.join(planningDir(cwd), 'PROJECT.md')))),
+    // #4455 follow-up (code-review finding): PROJECT.md is shared across
+    // workstreams — see cmdInitCompleteMilestone's projectPath comment for
+    // the full evidence.
+    project_exists: pathExistsInternal(cwd, toPosixPath(path.relative(cwd, path.join(planningDir(cwd, null), 'PROJECT.md')))),
     roadmap_exists: fs.existsSync(path.join(planningDir(cwd), 'ROADMAP.md')),
     state_exists: fs.existsSync(path.join(planningDir(cwd), 'STATE.md')),
     // #4040: partial-init discriminator (see buildInitCompletenessFields) —
@@ -3550,7 +3723,19 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
     // #2376: absolute — see comment on phase_dir in cmdInitExecutePhase.
     state_path: toPosixPath(path.join(planningDir(cwd), 'STATE.md')),
     roadmap_path: toPosixPath(path.join(planningDir(cwd), 'ROADMAP.md')),
-    project_path: toPosixPath(path.join(planningDir(cwd), 'PROJECT.md')),
+    // #4455 follow-up: PROJECT.md is shared across workstreams.
+    project_path: toPosixPath(path.join(planningDir(cwd, null), 'PROJECT.md')),
+    // #4456 correction: an isolated review pass initially "fixed" this to
+    // planningDir(cwd, null) on the assumption that config.json is shared
+    // like PROJECT.md (workstream-flag.md's directory diagram marks it
+    // `# Shared`) — but ADR-0006's own tests (tests/init.test.cjs, "init
+    // handlers honor GSD_WORKSTREAM") assert config_path IS workstream-scoped
+    // for execute-phase/new-project/new-milestone/progress, and gsd-test
+    // caught the regression immediately. The diagram is stale for
+    // config.json specifically (same class of staleness already found for
+    // `milestones/` during the #4455 follow-up) — reverted to the
+    // workstream-aware planningDir(cwd), matching the established,
+    // ADR-governed, tested contract.
     config_path: toPosixPath(path.join(planningDir(cwd), 'config.json')),
   };
 
@@ -3937,19 +4122,36 @@ function cmdAgentSkills(
   // persona fallback. Triggering the fallback for claude would change the
   // documented "unconfigured → empty block" contract that agent-skills tests
   // pin.
+  //
+  // #4407 (ADR-4139 stream 2): this is the one place GSD's own agent-persona
+  // content is served through a real code seam rather than an eagerly
+  // @-included file, so the compact/canonical choice is made here in code
+  // (a real exit code) instead of a prose config-get gate. Compact is tried
+  // first when requested; a missing compact sibling falls back to canonical
+  // with the fallback disclosed in the payload itself, never a silent switch.
+  let agentPayloadVariant: 'compact' | 'canonical' | null = null;
   if (!block) {
     const runtime = (config && (config['runtime'] as string)) || process.env['GSD_RUNTIME'] || 'claude';
     if (runtime !== 'claude') {
       const agentCheck = checkAgentsInstalled(runtime, projectRoot) as unknown as { agents_dir?: string } | null;
       const agentsDir = agentCheck?.agents_dir;
       if (typeof agentsDir === 'string' && agentsDir.length > 0) {
-        const agentFile = path.join(agentsDir, `${agentType}.md`);
-        try {
-          const content = platformReadSync(agentFile);
-          if (content && content.length > 0) {
-            block = content;
+        const compactRequested = readConfigJsonBoolean(projectRoot, ['workflow', 'compact_content']);
+        const compactContent = compactRequested
+          ? readNonEmptyFileOrNull(path.join(agentsDir, `${agentType}.compact.md`))
+          : null;
+        if (compactContent !== null) {
+          block = compactContent;
+          agentPayloadVariant = 'compact';
+        } else {
+          const canonicalContent = readNonEmptyFileOrNull(path.join(agentsDir, `${agentType}.md`));
+          if (canonicalContent !== null) {
+            block = compactRequested
+              ? `<!-- gsd: no compact payload registered for ${agentType}; serving canonical -->\n\n${canonicalContent}`
+              : canonicalContent;
+            agentPayloadVariant = 'canonical';
           }
-        } catch { /* agent file not found — fall through to empty block */ }
+        }
       }
     }
   }
@@ -3996,8 +4198,8 @@ function cmdAgentSkills(
   if (jsonMode) {
     // Build the Resolution<AgentSkillsValue> envelope and embed .value additively.
     // Flat fields are retained unchanged for back-compat; value formalises the
-    // Resolution convention (ADR-1411 P3, #1416). source/degraded remain
-    // config-provenance extras, outside the Resolution<T> envelope.
+    // Resolution convention (ADR-1411 P3, #1416). source/degraded/agent_payload_variant
+    // remain config-provenance extras, outside the Resolution<T> envelope.
     const resolution = makeResolution(
       { block: block || '', skills_count: normalizedPaths.length },
       { configured, reason, warnings: diagnostics.warnings },
@@ -4011,6 +4213,7 @@ function cmdAgentSkills(
       reason,
       source,
       degraded,
+      agent_payload_variant: agentPayloadVariant,
       value: resolution.value,
     }, raw);
     return;
