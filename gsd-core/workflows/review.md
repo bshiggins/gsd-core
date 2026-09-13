@@ -1,3 +1,5 @@
+@~/.claude/gsd-core/references/response-language-directive.md
+
 <purpose>
 Cross-AI peer review — invoke external AI CLIs to independently review phase plans.
 Each CLI gets the same prompt (PROJECT.md context, phase plans, requirements) and
@@ -208,7 +210,8 @@ Provide structured feedback on plan quality, completeness, and risks.
 {research if present}
 
 ### Plans to Review
-{all PLAN.md contents}
+For each `*-PLAN.md` in the phase directory, in glob order, include its full content preceded by a `####` header carrying the plan's **repo-relative path** (e.g. `#### .planning/phases/<phase>/<NN>-PLAN.md`). The path header is the citable anchor for findings about the plan itself — cite it as `<repo-relative plan path>:<line>` (name the heading in prose beside the citation if it helps the reader); reserve `path:line` for repo files the plan references.
+{per-plan: `#### <repo-relative plan path>` + full plan contents}
 
 ## Review Instructions
 
@@ -261,12 +264,15 @@ RUN_DIR="{run_dir}"   # from gather_context
 cp "$INSTRUCTIONS_BLOCK_FILE" "${RUN_DIR}/gsd-review-instructions.md"
 cp "$ROADMAP_SECTION_FILE" "${RUN_DIR}/gsd-review-roadmap.md"
 
-# Plan files: copy each PLAN.md to a predictable numbered path
-PLAN_INDEX=0
+# Plan files: copy each PLAN.md to a predictable path named after its source
+# plan id (#3959: a bare padded index discards provenance — the budget tool's
+# per-plan `### <file>` header then renders a run-dir artifact name no reviewer
+# or consensus step can resolve. The plan id keeps the gsd-review-plan-*.md glob
+# prepare_trimmed_prompt_for_reviewer consumes.)
 for PLAN_FILE in "${PHASE_DIR}"/*-PLAN.md; do
-  PADDED_IDX=$(printf '%02d' "$PLAN_INDEX")
-  cp "$PLAN_FILE" "${RUN_DIR}/gsd-review-plan-${PADDED_IDX}.md"
-  PLAN_INDEX=$((PLAN_INDEX + 1))
+  PLAN_BASENAME=$(basename "$PLAN_FILE")
+  PLAN_ID="${PLAN_BASENAME%-PLAN.md}"
+  cp "$PLAN_FILE" "${RUN_DIR}/gsd-review-plan-${PLAN_ID}.md"
 done
 
 # #3301: plan coverage manifest — tell reviewers exactly which plan ids exist and
@@ -347,6 +353,20 @@ FAILS the parity gate (`checkReviewerLaneParity` → `bespoke_leg_present`). Lan
 declared in the manifest — timeout floor, probe, prompt/output channel, empty-output policy — and
 behaviour that data genuinely cannot express is a named first-party `handler` (ADR-2782 D6), never
 a bespoke block here.
+
+**Effort and model resolution (#4255).** A lane's reasoning effort and model each resolve through
+their own declared key, and the resolution order is inspectable rather than implicit:
+
+| piece | order, highest first |
+|---|---|
+| model | pinned reviewer-instance `--model` → the lane's `modelConfigKey` (`review.models.<slug>`) → the CLI's own default |
+| effort | the lane's `effortConfigKey` (`review.effort.<slug>`) → the lane's declared `defaultEffort` → **nothing emitted**, so the CLI's own configuration applies |
+
+Both come from the LANE. Effort in particular is never read from an agent's execution settings:
+until #4255 it was resolved by querying `gsd-plan-checker`, so every prompt-fed lane ran at that
+verifier's `low` and, because the rendered argument is a CLI config override, it silently beat the
+effort the operator had configured for the reviewer CLI itself. A lane that declares no effort
+emits no argument at all — a value borrowed from an unrelated agent is worse than no value.
 
 **Timeout guidance (#2194):** prompt-fed source-grounded reviews are slow — measured ~570 s for
 Codex at `xhigh` effort and ~525 s for headless Claude on a large plan set. Each lane declares its
@@ -682,6 +702,12 @@ plan_coverage:        # only present if at least one graded lane is incomplete
 
 Combine all review responses into `{phase_dir}/{padded_phase}-REVIEWS.md`:
 
+Capture only the existing conflict entry bytes after the exact `## Plan-Revision Conflicts`
+heading and before the end of the first exact `<!-- gsd:plan-revision-conflicts:begin -->` /
+`<!-- gsd:plan-revision-conflicts:end -->` pair immediately after the artifact title, if present,
+as `{preserved_plan_revision_conflict_entries}`. Ignore identical headings or delimiters in reviewer
+output: reviewers do not own blocking state. Restore the captured bytes at the explicit slot below.
+
 After all reviewers complete, collect trim metadata files written during the run. For each reviewer that was trimmed (i.e. a `.metadata.json` file exists and `hardFailed` or `omitted` is non-empty, or `projectMdShrunk` is true, or `planTruncationPct > 0`), include a `trimmed_reviewers` block in the frontmatter. Omit the key entirely if no reviewer was trimmed.
 
 **Reviewer instances (#1517, optional):** when instances ran, frontmatter records their
@@ -731,6 +757,11 @@ plan_coverage:            # only present if at least one graded lane is incomple
 ---
 
 # Cross-AI Plan Review — Phase {N}
+
+<!-- gsd:plan-revision-conflicts:begin -->
+## Plan-Revision Conflicts
+{preserved_plan_revision_conflict_entries}
+<!-- gsd:plan-revision-conflicts:end -->
 
 <!-- Sections are RENDERED from each lane's declared `reviewsSection`, in descriptor order.
      There is deliberately no hardcoded per-reviewer heading list here any more: a hand-maintained
@@ -814,6 +845,19 @@ NOT a preservation failure. This copy is deliberately NOT part of the commit abo
 step names only `{padded_phase}-REVIEWS.md` explicitly, never a directory glob, so
 `.review-diagnostics/` is never swept into it.
 
+**#4097: preserve lane OUTPUT, never the run's own input copies.** `RUN_DIR` holds not only
+lane outputs — prompt assembly (the `gather_context`/section-copy step above) also writes the
+run's assembled INPUTS there under the same `gsd-review-` prefix: the combined prompt, the
+instructions/roadmap sections, a copy of every plan under review, the project/context/research/
+requirements sections, and the per-lane trimmed prompts. Those are byte-identical duplicates of
+files already committed under `.planning/`; sweeping them into `.review-diagnostics/` buries
+the actual evidence under plan duplicates and grows the phase directory on every run. The
+exclusion list below is CLOSED and owned here: this workflow itself writes every input
+basename at prompt-assembly time, so a future input file CANNOT silently join the evidence
+set — adding one means adding its stem to this list consciously. Lane slugs never begin with
+any excluded stem (`prompt`, `instructions`, `plan-`, `project`, `roadmap`, `context`,
+`research`, `requirements`), so a lane report can never be excluded by accident.
+
 Preservation and cleanup MUST run in the same fenced block below (a shell variable cannot
 survive across separate fences — each is its own process). `mkdir -p` and every `cp` are
 exit-status checked; `rm -rf "$RUN_DIR"` runs ONLY if nothing was preserved (nothing to
@@ -827,7 +871,20 @@ shopt -s nullglob 2>/dev/null; setopt NULL_GLOB 2>/dev/null
 RUN_DIR="{run_dir}"
 DIAG_DIR="{phase_dir}/.review-diagnostics"
 
-_DIAG_MD=( "$RUN_DIR"/gsd-review-*.md )
+# #4097: `gsd-review-*.md` matches BOTH lane outputs (reports, diagnostic stubs) and the
+# run's own assembled input copies (see the #4097 note above). Filter by basename against
+# the closed input set this workflow itself writes — direct glob iteration with a `case`
+# filter, no string accumulator, identical under bash and zsh (#4099/#4109), and the
+# `nullglob` set at the top of this fence keeps an empty RUN_DIR an empty array (#2962).
+# `gsd-review-prompt*` deliberately covers BOTH the combined prompt (`gsd-review-prompt.md`)
+# and the per-lane trimmed prompts (`gsd-review-prompt-<slug>.md`).
+_DIAG_MD=()
+for f in "$RUN_DIR"/gsd-review-*.md; do
+  case "$(basename "$f")" in
+    gsd-review-prompt*|gsd-review-instructions*|gsd-review-plan-*|gsd-review-project*|gsd-review-roadmap*|gsd-review-context*|gsd-review-research*|gsd-review-requirements*) ;;
+    *) _DIAG_MD+=("$f") ;;
+  esac
+done
 _DIAG_ERR=()
 for f in "$RUN_DIR"/gsd-review-*.err; do
   [ -s "$f" ] && _DIAG_ERR+=("$f")

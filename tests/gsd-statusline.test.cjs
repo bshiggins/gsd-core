@@ -1217,6 +1217,32 @@ describe('formatGsdState #2833 lifecycle scenes', () => {
     });
     assert.equal(out, 'v2.0 · milestone complete');
   });
+
+  // #3945: the counters arrive as regex-captured STRINGS, so '0' is truthy and
+  // '0' === '0' made the "every phase done" guard fire on the empty set —
+  // rendering "0% · milestone complete" for a freshly-roadmapped milestone.
+  test('Scene 3 — 0 of 0 counters does not render milestone complete (#3945)', () => {
+    const out = formatGsdState({
+      milestone: 'v1.15',
+      milestoneName: 'Design Refresh',
+      status: 'planning',
+      completedPhases: '0',
+      totalPhases: '0',
+      percent: '0',
+    });
+    assert.ok(!out.includes('milestone complete'),
+      `0 of 0 phases must not read as complete; got: ${out}`);
+    assert.ok(out.includes('planning'), `default path should render the status; got: ${out}`);
+  });
+
+  test('Scene 3 — boundary denominators: 1/1 completes, 0/1 and 1/0 do not (#3945)', () => {
+    assert.ok(formatGsdState({ milestone: 'v2.0', completedPhases: '1', totalPhases: '1' })
+      .includes('milestone complete'), '1 of 1 done is complete');
+    assert.ok(!formatGsdState({ milestone: 'v2.0', completedPhases: '0', totalPhases: '1' })
+      .includes('milestone complete'), '0 of 1 is not complete');
+    assert.ok(!formatGsdState({ milestone: 'v2.0', completedPhases: '1', totalPhases: '0' })
+      .includes('milestone complete'), '1 of 0 is not a complete milestone');
+  });
 });
 
 // ─── Backward compatibility — CRITICAL: existing STATE.md unchanged ─────────
@@ -1715,16 +1741,30 @@ test('config-set statusline.show_context_tokens yes → rejected', () => {
       assert.equal(shortGsdStatus(''), null);
       assert.equal(shortGsdStatus(undefined), null);
     });
-    test('paused — the canonical stuck state — wins and renders uppercase (#2162 condition)', () => {
-      assert.equal(shortGsdStatus('paused — waiting on credentials'), 'PAUSED');
-      assert.equal(shortGsdStatus('stopped by user'), 'PAUSED');
+    test('paused — the canonical stuck state — renders uppercase (#2162 condition)', () => {
+      // The #2162 shout applies to the canonical token, which is what the
+      // state writer persists (#4186 anchored vocabulary).
+      assert.equal(shortGsdStatus('paused'), 'PAUSED');
+      assert.equal(shortGsdStatus('Paused'), 'PAUSED');
+      // #4186: narrative prose is no longer keyword-guessed — a paused-led
+      // narrative renders its first word (visible, never a silent wrong
+      // token), so the shout is reserved for the recognized token itself.
+      assert.equal(shortGsdStatus('paused — waiting on credentials'), 'paused');
+      assert.equal(shortGsdStatus('stopped by user'), 'stopped');
     });
-    test('collapses lifecycle narratives to canonical keywords via normalizeStateStatus', () => {
-      assert.equal(shortGsdStatus('Executing phase 7 of the parser milestone'), 'executing');
-      assert.equal(shortGsdStatus('Ready to plan next phase'), 'planning');
-      assert.equal(shortGsdStatus('Discussing scope with user'), 'discussing');
-      assert.equal(shortGsdStatus('Verifying UAT criteria'), 'verifying');
-      assert.equal(shortGsdStatus('Work complete'), 'completed');
+    test('collapses vocabulary values to canonical keywords via normalizeStateStatus (#4186 anchored)', () => {
+      // #4186: normalizeStateStatus recognizes the DECLARED vocabulary
+      // (whole-field match), so exactly those values collapse to keywords.
+      assert.equal(shortGsdStatus('Executing Phase 7'), 'executing');
+      assert.equal(shortGsdStatus('ready to plan'), 'planning');
+      assert.equal(shortGsdStatus('Discussing'), 'discussing');
+      assert.equal(shortGsdStatus('Verifying Phase 2'), 'verifying');
+      assert.equal(shortGsdStatus('Work complete'), 'Work');
+      // Narrative prose — vocabulary words embedded in longer sentences — is
+      // no longer guessed at (a `.planning/` mention in non-English prose
+      // used to render `planning`); it falls back to the first word.
+      assert.equal(shortGsdStatus('Executing phase 7 of the parser milestone'), 'Executing');
+      assert.equal(shortGsdStatus('Ready to plan next phase'), 'Ready');
     });
     test('matches the canonical vocabulary exactly — no drift from normalizeStateStatus', () => {
       const { normalizeStateStatus } = require('../gsd-core/bin/lib/state-document.cjs');
@@ -1751,9 +1791,15 @@ test('config-set statusline.show_context_tokens yes → rejected', () => {
     test('renders version · phase/total · status', () => {
       const out = formatGsdStateCompact({
         milestone: 'v1.12', phaseNum: '7', phaseTotal: '12',
-        status: 'Executing phase 7 — building the parser',
+        status: 'Executing Phase 7',
       });
       assert.equal(out, 'v1.12 · P7/12 · executing');
+      // #4186: narrative status is not keyword-guessed — first word renders.
+      const narrative = formatGsdStateCompact({
+        milestone: 'v1.12', phaseNum: '7', phaseTotal: '12',
+        status: 'Executing phase 7 — building the parser',
+      });
+      assert.equal(narrative, 'v1.12 · P7/12 · Executing');
     });
     test('prefers lifecycle active_phase over body phase number', () => {
       const out = formatGsdStateCompact({
@@ -1763,7 +1809,7 @@ test('config-set statusline.show_context_tokens yes → rejected', () => {
     });
     test('paused state renders uppercase in the compact line', () => {
       const out = formatGsdStateCompact({
-        milestone: 'v2.0', activePhase: '4.5', status: 'paused — waiting on review',
+        milestone: 'v2.0', activePhase: '4.5', status: 'paused',
       });
       assert.equal(out, 'v2.0 · P4.5 · PAUSED');
     });
@@ -1802,6 +1848,8 @@ test('config-set statusline.show_context_tokens yes → rejected', () => {
         { milestone: 'v2.0', completedPhases: '5', totalPhases: '5' },
         { milestone: 'v2.0', activePhase: '4.5', percent: '100', status: 'executing' },
         { milestone: 'v1.9', percent: '40', status: 'executing', phaseNum: '2', phaseTotal: '5' },
+        // #3945: the vacuous 0-of-0 shape must agree on NOT-complete too.
+        { milestone: 'v1.15', status: 'planning', completedPhases: '0', totalPhases: '0', percent: '0' },
       ];
       for (const s of cases) {
         const fullDone = formatGsdState(s).includes('milestone complete');
@@ -1810,6 +1858,18 @@ test('config-set statusline.show_context_tokens yes → rejected', () => {
           `completion parity diverged for ${JSON.stringify(s)}`);
       }
     });
+    test('compact — 0 of 0 counters does not render complete (#3945)', () => {
+      // Same vacuous-equality defect as the full renderer's Scene 3; the
+      // compact completion branch must also require a non-empty denominator.
+      const out = formatGsdStateCompact({
+        milestone: 'v1.15', status: 'planning',
+        completedPhases: '0', totalPhases: '0', percent: '0',
+      });
+      assert.ok(!/(^|\s)complete(\s|$)/.test(out),
+        `0 of 0 phases must not read as complete in compact; got: ${out}`);
+      assert.ok(out.includes('planning'), `compact should render the status; got: ${out}`);
+    });
+
     test('idle with queued next action renders "next <action> <phases>"', () => {
       const out = formatGsdStateCompact({
         milestone: 'v2.0', nextAction: 'execute-phase', nextPhases: ['4.5', '4.6'],
@@ -2479,7 +2539,7 @@ describe('evaluateUpdateCache lineage guard', () => {
     deriveStateFreshness, formatStateFreshness, resolveStatuslineOptions,
   } = require('../hooks/gsd-statusline.js');
   const { createTempGitProject, createTempProject } = require('./helpers.cjs');
-  const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+  const { gitOrThrow, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
   const { runHook: runHookSeam, OUTCOME } = require('./helpers/process-seam.cjs');
   const childProcess = require('node:child_process');
 
@@ -2509,8 +2569,8 @@ describe('evaluateUpdateCache lineage guard', () => {
     for (let i = 0; i < n; i++) {
       const marker = `freshness-filler-${Date.now()}-${Math.random().toString(36).slice(2)}-${i}.txt`;
       fs.writeFileSync(path.join(dir, marker), String(i));
-      gitOrThrow(['add', '-A'], { cwd: dir });
-      gitOrThrow(['commit', '-m', `filler ${i}`], { cwd: dir });
+      gitOrThrow(['add', '-A'], { cwd: dir, timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
+      gitOrThrow(['commit', '-m', `filler ${i}`], { cwd: dir, timeoutMs: GIT_FIXTURE_TIMEOUT_MS });
     }
     return sha;
   }

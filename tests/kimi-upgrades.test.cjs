@@ -40,6 +40,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { runNode } = require('./helpers/process-seam.cjs');
+const { INSTALL_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const { runMinimalInstall, INSTALL_SCRIPT, installerEnv } = require('./helpers/install-shared.cjs');
 const { cleanup, createTempDir, toPosixPath } = require('./helpers.cjs');
@@ -148,7 +149,7 @@ test('kimi --global: reinstalling is idempotent — the GSD [[hooks]] block is n
   const reinstall = runNode([INSTALL_SCRIPT, '--kimi', '--global', '--config-dir', root], {
     cwd: process.cwd(),
     env: installerEnv({ HOME: root, USERPROFILE: root }),
-    timeoutMs: 120000,
+    timeoutMs: INSTALL_TIMEOUT_MS,
   });
   assert.strictEqual(reinstall.exitCode, 0,
     `reinstall exited with status ${reinstall.exitCode}\nstdout: ${reinstall.stdout}\nstderr: ${reinstall.stderr}`);
@@ -334,6 +335,20 @@ test('boundary: every capability-declared extendedHookEvent is wired as a real e
     assert.match(toml, new RegExp(`event = "${event}"`),
       `base claude-dialect event ${event} must also be wired for kimi`);
   }
+});
+
+test('kimi: the secret read guard is wired on the native bus with the translated ReadFile|Grep|Shell matcher (#4221)', (t) => {
+  const { root } = runMinimalInstall({ runtime: 'kimi', scope: 'global' });
+  t.after(() => cleanup(root));
+
+  const toml = fs.readFileSync(path.join(root, '.kimi', 'config.toml'), 'utf8');
+  // One [[hooks]] table per entry: event, then matcher, then command. Locate
+  // the guard's table by its command and read its matcher from the same table.
+  const tables = toml.split('[[hooks]]').filter((t) => t.includes('gsd-secret-read-guard.js'));
+  assert.equal(tables.length, 1, 'exactly one [[hooks]] table must reference gsd-secret-read-guard.js');
+  assert.match(tables[0], /event = "PreToolUse"/, 'the secret read guard is a PreToolUse hook');
+  assert.match(tables[0], /matcher = "ReadFile\|Grep\|Shell"/,
+    'Kimi vocabulary: Read -> ReadFile, Bash -> Shell; Grep keeps its name');
 });
 
 // ---------------------------------------------------------------------------

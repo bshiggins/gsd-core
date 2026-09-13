@@ -9,8 +9,12 @@
  *
  * A prior version of this PR added a `docs guards` RULE to `RULES` in
  * scripts/ci-test-scope.cjs, on the theory that classify()'s `!codeChanged`
- * normalization (which zeroes fullMatrix/targeted_tests/windows_tests for
- * docs-only diffs) made the RULE inert to classify()'s scope decision.
+ * normalization (which at the time zeroed fullMatrix/targeted_tests/
+ * windows_tests for docs-only diffs) made the RULE inert to classify()'s
+ * scope decision. (#4641 later removed `windows_tests` from classify()'s
+ * output entirely; the normalization today only zeroes fullMatrix and
+ * targeted_tests. This paragraph is historical narration of a rejected
+ * design, not a description of current behaviour.)
  *
  * That is true for docs-ONLY diffs and FALSE for MIXED docs+code diffs:
  * `codeChanged` is true whenever ANY changed file is product/pipeline code,
@@ -193,6 +197,7 @@ const DOCS_GUARD_TESTS = {
   // (commit-files-pathspec.test.cjs:1618) — cannot be resolved to specific
   // files without re-deriving the scan's own file-discovery logic.
   'tests/commit-files-pathspec.test.cjs': ['*'],
+  'tests/compact-content-4139.test.cjs': ['docs/CONFIGURATION.md'],
   'tests/config-field-docs.test.cjs': ['docs/CONFIGURATION.md'],
   'tests/config.test.cjs': ['docs/CONFIGURATION.md'],
   'tests/context-index-sync.test.cjs': ['docs/CONTEXT-INDEX.json'],
@@ -335,6 +340,16 @@ const DOCS_GUARD_TESTS = {
   ],
   'tests/progress-forensic.test.cjs': ['docs/COMMANDS.md'],
   'tests/repo-layout.test.cjs': ['docs/contributing/bootstrap.md'],
+  // Reads REQ-LANG-04 and runs every form it offers an author through the
+  // matcher that enforces it, so a reword of the requirement alone is exactly
+  // the change this guard must run on (#2529). Both paths are named because
+  // #3840 made docs/FEATURES.md a generated projection: the requirement's
+  // source is the fragment, and an edit there that is not regenerated would
+  // otherwise reach this guard through neither path.
+  'tests/response-language-coverage.test.cjs': [
+    'docs/FEATURES.md',
+    'docs/features/response-language-config.md',
+  ],
   'tests/reversibility-tagging.test.cjs': ['docs/reference/plan-md.md'],
   'tests/reviewer-docs-parity.test.cjs': [
     'docs/COMMANDS.md',

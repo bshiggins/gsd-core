@@ -277,7 +277,7 @@ Markdown templates for all planning artifacts. Used by `gsd-tools.cjs template f
 - `DEBUG.md` — Debug session tracking template
 - `UI-SPEC.md`, `UAT.md`, `VALIDATION.md` — Specialized verification templates
 - `discussion-log.md` — Discussion audit trail template
-- `codebase/` — Brownfield mapping templates (stack, architecture, conventions, concerns, structure, testing, integrations)
+- `codebase/` — Brownfield mapping templates (architecture, stack)
 - `research-project/` — Research output templates (SUMMARY, STACK, FEATURES, ARCHITECTURE, PITFALLS)
 
 ### Hooks (`hooks/`)
@@ -287,13 +287,14 @@ Runtime hooks that integrate with the host AI agent:
 | Hook | Event | Purpose |
 |------|-------|---------|
 | `gsd-statusline.js` | `statusLine` | Displays model (long-context suffixes like `(1M context)` collapse to a compact `(1M)` badge), task, directory, and context usage bar |
-| `gsd-context-monitor.js` | `PostToolUse` / `AfterTool` | Injects agent-facing context warnings at 35%/25% remaining |
+| `gsd-context-monitor.js` | `PostToolUse` / `AfterTool` | Injects agent-facing context warnings at 35%/25% remaining by default (configurable — see [CONFIGURATION.md](CONFIGURATION.md)) |
 | `gsd-check-update.js` | `SessionStart` | Foreground trigger for the background update check |
 | `gsd-ensure-canonical-path.js` | `SessionStart` | For Claude Code plugin installs, symlinks `~/.claude/gsd-core/{bin,contexts,references,templates,workflows}` to the plugin's bundled tree so `@~/.claude/gsd-core/...` includes resolve; runs first in `SessionStart`, no-op in classic installs, self-heals after `claude plugin update` (#997) |
 | `gsd-check-update-worker.js` | (helper) | Background worker spawned by `gsd-check-update.js`; no direct event registration |
 | `gsd-prompt-guard.js` | `PreToolUse` | Scans `.planning/` writes for prompt injection patterns (advisory) |
 | `gsd-read-injection-scanner.js` | `PostToolUse` | Scans Read tool output for injected instructions in untrusted content |
 | `gsd-workflow-guard.js` | `PreToolUse` | Detects file edits outside GSD workflow context (advisory, opt-in via `hooks.workflow_guard`) |
+| `gsd-secret-read-guard.js` | `PreToolUse` | Hard-blocks Read / Grep / Bash reads of `.env`, `.env.<suffix>` (templates such as `.env.example` exempt) and `.secrets`; replaces the installer-written `Read(.env*)` permission deny rules, which made every `cd DIR && grep …` compound prompt for approval on Claude Code ≥ 2.1.259 (#4221) |
 | `gsd-read-guard.js` | `PreToolUse` | Advisory guard preventing Edit/Write on files not yet read in the session |
 | `gsd-session-state.sh` | `SessionStart` | Session state tracking for shell-based runtimes |
 | `gsd-validate-commit.sh` | `PreToolUse` | Commit validation for conventional commit enforcement |
@@ -327,6 +328,10 @@ Command families declared by capabilities (`commands: [{ family, module, router 
 2. **Third-party (installed overlay)** — `dispatchOverlayCapabilityCommand` calls `loadRegistry({ includeInstalled })` and dispatches a family only when its `capId` appears in `_overlay.commandRoots`. The loader lists a command root **only** for an accepted overlay capability with a **committed** ledger entry (consent gate), and the router module is `require()`'d **from that capability's install root**, confined by basename validation + `realpath` containment (rejecting `..` traversal and symlink escape). This is the one point where third-party capability code executes; see [the capability trust model](explanation/capability-trust-model.md) for the consent + confinement + project-scope trust boundary.
 
 Both paths share the same guards: prototype-pollution-safe command keys, an own-property router check, and synchronous-only routers (an async router is a fail-fast error).
+
+### Reviewer-Lane Capability Trait (#4209, ADR-2782)
+
+`/gsd-code-review` optionally corroborates its internal review with external reviewer lanes (`--codex`, `--agy`, ...), gated by the reusable `supportsReviewerLanes` capability-step trait and dispatched through the single `dispatchReviewerLanes` interpreter — see `gsd-core/references/loop-hook-dispatch.md` for the trait and `src/reviewer-step-dispatch.cts` for the interpreter's fail-closed contract. `gsd-code-reviewer` is the sole consolidator: it independently re-verifies every external claim against the actual source before writing anything to `REVIEW.md`, so a lane's evidence is corroborating input, never a second output schema.
 
 ### Research Module (`src/research-{store,provider}.cts`, `src/package-legitimacy.cts`)
 
@@ -787,6 +792,22 @@ verification.
 `.planning/codebase/*.md` file; `bin/lib/drift.cjs` provides
 `readMappedCommit` and `writeMappedCommit` round-trip helpers.
 
+The baseline is written by `gsd-tools stamp-codebase-map`, a shell step in the
+map-codebase workflow, not by the mapper agent. The mapper's own freshness
+markers (`**Analysis Date:**`, `<!-- refreshed: ... -->`) are restamped
+unconditionally on an Update run, so an agent that rewrites only the dates still
+looks current to a reader; the machine-readable stamp is the one marker that
+cannot be satisfied by a date-only rewrite, which is exactly why it is not the
+agent's to write. `--files a.md,b.md` narrows the stamp to the documents a
+caller actually refreshed, as the auto-remap path does.
+
+An absent or unresolvable baseline is reported as `skipped` with reason
+`no-mapped-commit` or `unresolvable-mapped-commit`, never as drift. Diffing
+HEAD against the empty tree would report every tracked file as newly added,
+which makes a stale map indistinguishable from a fresh one. Files under
+`.planning/` are excluded from the diff: the map's own commit is a planning
+artifact, not codebase structure.
+
 ---
 
 ## Installer Architecture
@@ -883,6 +904,11 @@ Runtime Engine (Claude Code / Antigravity CLI)
 | ≤ 35%             | WARNING  | "Avoid starting new complex work"       |
 | ≤ 25%             | CRITICAL | "Context nearly exhausted, inform user" |
 
+The two fire-points are defaults. `hooks.context_warning_threshold` and
+`hooks.context_critical_threshold` in `.planning/config.json` move them per
+project; see [context-monitor.md](context-monitor.md) for the resolution and
+fallback rules.
+
 
 Debounce: 5 tool uses between repeated warnings. Severity escalation (WARNING→CRITICAL) bypasses debounce.
 
@@ -926,6 +952,7 @@ For a conceptual overview of how the hook and guard layers fit into the broader 
 - Scans content for prompt injection patterns (role override, instruction bypass, system tag injection)
 - Advisory-only — logs detection, does not block
 - Patterns are inlined (subset of `security.cjs`) for hook independence
+- **Output contract:** `hookSpecificOutput` carries both `additionalContext` and `findings` — an array of `{ ruleId, match }` records (`INJECTION-PATTERN` or `INVISIBLE-UNICODE`), module-local to this hook (not shared with `gsd-read-injection-scanner.js`'s own `RULE_IDS`). The advisory is rendered from `findings` via a single mapper, so the two cannot disagree. Consumers should read `findings` rather than parsing the advisory text.
 
 **Read Injection Scanner** (`gsd-read-injection-scanner.js`):
 
@@ -935,7 +962,7 @@ For a conceptual overview of how the hook and guard layers fit into the broader 
 - Skips content shorter than 20 characters, and skips excluded paths (`.planning/`, `REVIEW.md`, `CHECKPOINT*`, security/injection docs, and GSD's own staged hook bundle)
 - Rule ids: the `MD-LINK-*` markdown-link rules mirrored from `security.cjs`'s `MARKDOWN_LINK_PATTERNS`, plus `INJECTION-PATTERN`, `INVISIBLE-UNICODE`, and `UNICODE-TAG-BLOCK`
 - Patterns are shared with `gsd-prompt-guard.js` via `hooks/lib/injection-patterns.js` (#3504); the markdown-link list is inlined for hook independence
-- **Output contract:** `hookSpecificOutput` carries both `additionalContext` (the human-readable advisory sentence) and `findings` — an array of `{ ruleId, match }` records naming each rule that fired. `findings` is the structured surface; the advisory is rendered from it, so the two cannot disagree. `match` is `null` for rules with no captured text (`INVISIBLE-UNICODE`, `UNICODE-TAG-BLOCK`). Consumers should read `findings` rather than parsing the advisory text.
+- **Output contract:** `hookSpecificOutput` carries `additionalContext` (the human-readable advisory sentence), `findings` — an array of `{ ruleId, match }` records naming each rule that fired — plus `severity` (`LOW` for 1-2 matches, `HIGH` for 3+) and `source` (the scanned file path, URL, or `search: <query>` string). `findings` and `severity` are the structured surface; the advisory is rendered from them, so the three cannot disagree. `match` is `null` for rules with no captured text (`INVISIBLE-UNICODE`, `UNICODE-TAG-BLOCK`). Consumers should read `findings`/`severity`/`source` rather than parsing the advisory text.
 
 **Workflow Guard** (`gsd-workflow-guard.js`):
 
@@ -943,6 +970,7 @@ For a conceptual overview of how the hook and guard layers fit into the broader 
 - Detects edits outside GSD workflow context (no active `/gsd-` command or Task subagent)
 - Advises using `/gsd-quick` or `/gsd-fast` for state-tracked changes
 - Opt-in via `hooks.workflow_guard: true` (default: false)
+- **Output contract:** the advisory leg's `hookSpecificOutput` carries `code: 'WORKFLOW_ADVISORY'` alongside `additionalContext`. This is distinct from the hook's separate force-add block leg (`code: 'WORKTREE_AGENT_FORCE_ADD_FORBIDDEN'`, `decision: 'block'`) — the two are disambiguated by `code`, never by presence.
 
 ---
 

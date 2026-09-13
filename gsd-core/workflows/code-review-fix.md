@@ -1,3 +1,5 @@
+@~/.claude/gsd-core/references/response-language-directive.md
+
 <purpose>
 Auto-fix issues from REVIEW.md. Validates phase, checks config gate, verifies REVIEW.md exists and has fixable issues, spawns gsd-code-fixer agent, handles --auto iteration loop (capped at 3), commits REVIEW-FIX.md once at the end, and presents results.
 </purpose>
@@ -33,9 +35,9 @@ Parse from init JSON: `phase_found`, `phase_dir`, `phase_number`, `phase_name`, 
 
 **Input sanitization (defense-in-depth):**
 ```bash
-# Validate PADDED_PHASE contains only digits and optional dot (e.g., "02", "03.1")
-if ! [[ "$PADDED_PHASE" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-  echo "Error: Invalid phase number format: '${PADDED_PHASE}'. Expected digits (e.g., 02, 03.1)."
+# Validate PADDED_PHASE contains only digits and dotted segments (e.g., "02", "03.1", "23.1.2")
+if ! [[ "$PADDED_PHASE" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+  echo "Error: Invalid phase number format: '${PADDED_PHASE}'. Expected digits (e.g., 02, 03.1, 23.1.2)."
   # Exit workflow
 fi
 ```

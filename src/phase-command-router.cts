@@ -5,7 +5,7 @@
  * Unsupported in this router:
  * - scaffold: routed through top-level scaffold command.
  *
- * CJS-only subcommands: mvp-mode (dispatched directly, before hub).
+ * CJS-only subcommands: mvp-mode, tdd-applicable (dispatched directly, before hub).
  *
  * #3788: dispatch is mediated by CommandRoutingHub. The public entry point
  * and observable CLI behaviour are unchanged.
@@ -32,10 +32,17 @@ const { createDefaultLogger, isAuditEnabled } = observabilityLogger;
 
 interface PhaseHandlers {
   cmdPhaseMvpMode: (cwd: string, args: string[], raw: boolean) => void;
+  cmdPhaseTddApplicable: (cwd: string, args: string[], raw: boolean) => void;
   cmdPhaseNextDecimal: (cwd: string, arg: string | undefined, raw: boolean) => void;
   cmdPhaseAdd: (cwd: string, desc: string, raw: boolean, customId: string | null) => void;
   cmdPhaseAddBatch: (cwd: string, descriptions: string[], raw: boolean) => void;
-  cmdPhaseInsert: (cwd: string, pos: string | undefined, desc: string, raw: boolean) => void;
+  cmdPhaseInsert: (
+    cwd: string,
+    pos: string | undefined,
+    desc: string,
+    raw: boolean,
+    allocation?: 'nested' | 'sibling',
+  ) => void;
   cmdPhaseRemove: (cwd: string, phaseNum: string, opts: { force: boolean }, raw: boolean) => void;
   cmdPhaseComplete: (cwd: string, phaseNum: string | undefined, raw: boolean) => void;
   cmdPhaseUatPassed: (cwd: string, phaseNum: string | undefined, raw: boolean, opts?: { policy?: { requireVerification?: boolean } }) => void;
@@ -84,6 +91,14 @@ function routePhaseCommand({ phase, args, cwd, raw, error }: RoutePhaseCommandOp
   // exit code, correct JSON error reason code, correct ROADMAP scan).
   if (subcommand === 'mvp-mode') {
     phase.cmdPhaseMvpMode(cwd, args.slice(2), raw);
+    return;
+  }
+
+  // `tdd-applicable` (#4273): same CJS-native dispatch shape as `mvp-mode`
+  // immediately above — a precedence cascade over plan/task/config sources
+  // with its own typed JSON result, not routed through the SDK query layer.
+  if (subcommand === 'tdd-applicable') {
+    phase.cmdPhaseTddApplicable(cwd, args.slice(2), raw);
     return;
   }
 
@@ -145,7 +160,19 @@ function routePhaseCommand({ phase, args, cwd, raw, error }: RoutePhaseCommandOp
         if (args.includes('--dry-run')) {
           return makeInvalidArgs('--dry-run', 'phase insert does not support --dry-run');
         }
-        phase.cmdPhaseInsert(cwd, args[2], args.slice(3).join(' '), raw);
+        // #4569: --sibling opts into joining afterPhase's parent decimal level
+        // instead of nesting one level deeper. Filtered out like other
+        // boolean flags (see `remove`'s --force handling above) so it never
+        // leaks into the free-text description.
+        const sibling = args.includes('--sibling');
+        const insertArgs = args.slice(2).filter(token => token !== '--sibling');
+        phase.cmdPhaseInsert(
+          cwd,
+          insertArgs[0],
+          insertArgs.slice(1).join(' '),
+          raw,
+          sibling ? 'sibling' : 'nested',
+        );
         return { ok: true as const, data: null };
       },
       remove: (_ctx: Record<string, unknown>) => {
@@ -240,14 +267,14 @@ function routePhaseCommand({ phase, args, cwd, raw, error }: RoutePhaseCommandOp
   // ── Build manifest (available subcommands for UnknownCommand detection) ─────
   // `availableSubcommands` is what the error message shows. It excludes
   // unsupported commands (already handled above) but does NOT include 'mvp-mode'
-  // because it was absent from PHASE_SUBCOMMANDS in the original and was not
-  // shown in the "Available:" list there either.
+  // or 'tdd-applicable' (#4273) because both are absent from PHASE_SUBCOMMANDS
+  // and were not shown in the "Available:" list there either.
   //
   // `manifestSubcommands` is the full routing set for the hub — it includes
-  // 'mvp-mode' (which the original code routed via a handler even without a
-  // manifest entry) so the hub's UnknownCommand check passes for it.
+  // 'mvp-mode' and 'tdd-applicable' (both routed via a handler even without a
+  // manifest entry) so the hub's UnknownCommand check passes for them.
   const availableSubcommands = PHASE_SUBCOMMANDS.filter(s => !UNSUPPORTED[s]);
-  const manifestSubcommands = ['mvp-mode', ...availableSubcommands];
+  const manifestSubcommands = ['mvp-mode', 'tdd-applicable', ...availableSubcommands];
   const manifest = { phase: manifestSubcommands };
 
   // ── Construct hub ──────────────────────────────────────────────────────────

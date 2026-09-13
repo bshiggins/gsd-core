@@ -19,6 +19,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { runGsdTools, cleanup } = require('./helpers.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 // ─── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -1013,7 +1014,7 @@ describe('capability consent store (#1459)', () => {
     const { throwIfFailed } = require('./helpers/git-fixture.cjs');
     const fifoPath = path.join(dir, 'capability.json');
     throwIfFailed(
-      runHook(fifoPath, [], { interpreter: 'mkfifo', timeoutMs: 15000 }),
+      runHook(fifoPath, [], { interpreter: 'mkfifo', timeoutMs: PROBE_TIMEOUT_MS }),
       `mkfifo ${fifoPath}`,
     );
     // A committed project ledger so the list iterates this entry (the FIFO is on the metadata-read path).
@@ -1145,6 +1146,10 @@ describe('issue-2322: capability set --runtime materializes an installed third-p
 
     // Step 3 of the issue repro: capability set my-thing --runtime claude --scope global
     const rcd = tmpDir('cap-cli-rcd-');
+    // A global materialization needs one complete Runtime Surface provider.
+    // This fixture exercises the supported legacy compatibility-marker path;
+    // source-less global trees now fail closed and must be upgraded first.
+    fs.writeFileSync(path.join(rcd, '.gsd-source'), path.join(__dirname, '..', 'commands', 'gsd') + '\n');
     const setResult = runGsdTools(
       ['capability', 'set', 'my-thing', '--runtime', 'claude', '--scope', 'global', '--config-dir', rcd, '--raw'],
       cwd,

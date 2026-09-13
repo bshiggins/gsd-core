@@ -389,8 +389,12 @@ function formatGsdState(s) {
     // Scene 2: idle + a recommended next command is visible to the user.
     // Surfaces "what to run next" without the user opening STATE.md.
     parts.push(`next ${s.nextAction} ${phasesStr}`);
-  } else if (Number(s.percent) === 100 || (s.completedPhases && s.totalPhases && s.completedPhases === s.totalPhases)) {
-    // Scene 3: milestone complete (every phase done).
+  } else if (Number(s.percent) === 100 || (Number(s.totalPhases) > 0 && Number(s.completedPhases) === Number(s.totalPhases))) {
+    // Scene 3: milestone complete (every phase done). #3945: the counters are
+    // regex-captured STRINGS, so the old `cp && tp && cp === tp` guard fired on
+    // the empty set ('0' is truthy, '0' === '0') — "0% · milestone complete".
+    // Numeric coercion + a non-empty denominator makes "nothing to measure"
+    // stop meaning "everything is done".
     parts.push('milestone complete');
   } else {
     // Backward-compatible default — preserved EXACTLY for STATE.md files that
@@ -445,13 +449,17 @@ function contextTokenSuffix(currentUsage) {
 // --- Compact state format (opt-in) ---------------------------------------------
 
 /**
- * Collapse GSD's free-text status (often a multi-sentence narrative) to a
- * single keyword, built on the canonical normalizer (#2162 approval
- * condition): normalizeStateStatus() in state-document.cjs owns the status
- * vocabulary (discussing / planning / executing / verifying / completed /
- * paused) so the two can't drift. "paused" — the canonical stuck state — is
- * uppercased to PAUSED, the one state worth shouting about. Statuses the
- * normalizer passes through unrecognized fall back to their first word,
+ * Collapse GSD's status value to a single keyword, built on the canonical
+ * normalizer (#2162 approval condition): normalizeStateStatus() in
+ * state-document.cjs owns the status vocabulary (discussing / planning /
+ * executing / verifying / completed / paused) so the two can't drift.
+ * #4186: the normalizer recognizes the DECLARED vocabulary by anchored
+ * whole-field match — vocabulary values (the state writer persists tokens)
+ * collapse to their keyword; free-text narratives are no longer
+ * keyword-guessed from substrings (a `.planning/` mention in non-English
+ * prose used to render `planning`), and pass through unrecognized to the
+ * first-word fallback below. "paused" — the canonical stuck state — is
+ * uppercased to PAUSED, the one state worth shouting about. The fallback is
  * capped at 16 chars so a rogue STATE.md can't blow up the line.
  * Returns null for empty input.
  */
@@ -500,7 +508,7 @@ function formatGsdStateCompact(s) {
   // still completes) wins over milestone-complete (Scene 3), even if a
   // non-atomic STATE.md edit leaves percent=100 alongside a lifecycle phase.
   const done = !s.activePhase && (Number(s.percent) === 100 ||
-    (s.completedPhases && s.totalPhases && s.completedPhases === s.totalPhases));
+    (Number(s.totalPhases) > 0 && Number(s.completedPhases) === Number(s.totalPhases)));
 
   if (done) {
     parts.push('complete');

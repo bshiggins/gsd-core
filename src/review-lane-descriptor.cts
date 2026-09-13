@@ -195,10 +195,11 @@ interface ReviewerLaneCommon {
    * config value that is not a positive finite number, falls back to `timeoutFloorMs` unchanged.
    * For a lane whose `args` template ALSO carries a native tool-side timeout (antigravity's
    * `--print-timeout`, via the `{{nativeTimeout}}` ARGV_PLACEHOLDER), the resolved value feeds both
-   * levels — see `resolveLanePlan`'s expansion of that token. Three lanes — `qwen`, `cursor`,
-   * `coderabbit` — accept neither a model flag nor a host and own no `review.timeouts.<slug>` key
-   * either, matching the same narrow key-ownership invariant `modelConfigKey` already follows for
-   * them (#3691 narrows #2797).
+   * levels — see `resolveLanePlan`'s expansion of that token. Two lanes — `qwen` and `coderabbit` —
+   * accept neither a model flag nor a host and own no `review.timeouts.<slug>` key either, matching
+   * the same narrow key-ownership invariant `modelConfigKey` already follows for them (#3691 narrows
+   * #2797). `cursor` gained a model flag (`review.models.cursor`, #3653) but still owns no
+   * `review.timeouts.cursor` key of its own.
    */
   timeoutConfigKey: string | null;
   emptyOutput: EmptyOutputPolicy;
@@ -223,6 +224,30 @@ interface ReviewerLaneCommon {
    * the lane, and a naming convention that one shipped lane already breaks is not a contract.
    */
   modelConfigKey: string | null;
+  /**
+   * Dotted config key holding this lane's REVIEW reasoning effort, or null when the lane has no
+   * effort channel to feed.
+   *
+   * #4255. Lane effort used to be resolved by querying `gsd-plan-checker`'s execution settings
+   * with a hardcoded agent id, so every prompt-fed lane ran at the plan CHECKER's frontmatter
+   * effort — `low` under every shipped profile. A cross-AI review is the opposite workload from a
+   * fast structural verifier, and `low` is where a large prompt makes a model end its turn with no
+   * final message: the lane came back empty and the stub read as a crash. Effort is a property of
+   * the REVIEW, so it is declared here beside the lane's other keys and never inherited from an
+   * agent that has nothing to do with reviewing.
+   */
+  effortConfigKey: string | null;
+  /**
+   * The effort this lane runs at when `effortConfigKey` is unset — the review-specific default,
+   * declared per lane rather than centrally so a lane that wants a different floor can say so.
+   *
+   * #4255. `'high'` for the prompt-fed, source-grounded lanes: they read the repository against a
+   * plan set, which is the one place effort is load-bearing. `null` means GSD has NO
+   * review-specific value for this lane and the invocation emits no effort argument at all, so the
+   * CLI's own configuration decides — the correct behaviour when GSD has nothing of its own to
+   * say. A configured `'inherit'` selects that same no-argument path explicitly (#3533).
+   */
+  defaultEffort: string | null;
   handler: LaneHandler;
 }
 
@@ -279,6 +304,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.gemini',
     modelConfigKey: 'review.models.gemini',
+    effortConfigKey: null,
+    defaultEffort: null,
     handler: null,
   },
   {
@@ -312,6 +339,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.claude',
     modelConfigKey: 'review.models.claude',
+    effortConfigKey: 'review.effort.claude',
+    defaultEffort: 'high',
     handler: null,
   },
   {
@@ -341,6 +370,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.codex',
     modelConfigKey: 'review.models.codex',
+    effortConfigKey: 'review.effort.codex',
+    defaultEffort: 'high',
     handler: null,
   },
   {
@@ -368,6 +399,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.coderabbit',
     // Accepts no model flag at all (review.md:367) — not merely "none configured".
     modelConfigKey: null,
+    effortConfigKey: null,
+    defaultEffort: null,
     handler: null,
   },
   {
@@ -395,6 +428,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.opencode',
     modelConfigKey: 'review.models.opencode',
+    effortConfigKey: 'review.effort.opencode',
+    defaultEffort: 'high',
     // Phase 5b (#2799): was `null`. The review is REBUILT from assistant `text` parts; a plain
     // stdout copy would write the raw JSON envelope as the review (#1936). See LaneHandler.
     handler: 'opencode',
@@ -419,6 +454,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.qwen',
     modelConfigKey: null,
+    effortConfigKey: null,
+    defaultEffort: null,
     handler: null,
   },
   {
@@ -431,10 +468,10 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     probe: { kind: 'command-exists', binary: 'cursor-agent' },
     invoke: {
       binary: 'cursor-agent',
-      args: ['-p', '--mode', 'ask', '--trust', '--output-format', 'text', '{{prompt}}'],
+      args: ['-p', '{{model}}', '--mode', 'ask', '--trust', '--output-format', 'text', '{{prompt}}'],
       promptChannel: 'argv-file-ref',
       outputChannel: 'stdout',
-      modelArg: null,
+      modelArg: '--model',
       effortChannel: 'none',
     },
     timeoutFloorMs: 900_000,
@@ -444,7 +481,10 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     evidenceClass: 'source-grounded',
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.cursor',
-    modelConfigKey: null,
+    // #3653: cursor-agent exposes --model (204 selectable models); wired the same as codex.
+    modelConfigKey: 'review.models.cursor',
+    effortConfigKey: null,
+    defaultEffort: null,
     handler: null,
   },
   {
@@ -480,6 +520,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     // NOT `review.models.antigravity` — the shipped key is `review.models.agy` (review.md:291) and
     // Phase 4 federated it under that name. This lane is why the key is declared, not derived.
     modelConfigKey: 'review.models.agy',
+    effortConfigKey: null,
+    defaultEffort: null,
     handler: 'antigravity',
   },
   {
@@ -510,6 +552,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.ollama',
     modelConfigKey: 'review.models.ollama',
+    effortConfigKey: null,
+    defaultEffort: null,
     handler: 'openai-compatible',
   },
   {
@@ -538,6 +582,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.lm_studio',
     modelConfigKey: 'review.models.lm_studio',
+    effortConfigKey: null,
+    defaultEffort: null,
     handler: 'openai-compatible',
   },
   {
@@ -566,6 +612,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.llama_cpp',
     modelConfigKey: 'review.models.llama_cpp',
+    effortConfigKey: null,
+    defaultEffort: null,
     handler: 'openai-compatible',
   },
   {
@@ -612,6 +660,8 @@ export const REVIEWER_LANES: ReadonlyArray<ReviewerLane> = Object.freeze([
     requiresBinaries: [],
     promptBudgetKey: 'review.max_prompt_tokens_per_reviewer.kimi-code',
     modelConfigKey: 'review.models.kimi-code',
+    effortConfigKey: null,
+    defaultEffort: null,
     handler: null,
   },
 ].map((lane) => Object.freeze(lane)) as ReviewerLane[]);

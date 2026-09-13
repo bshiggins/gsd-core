@@ -65,7 +65,16 @@ const LANE_COSTS = [
     // figure — rounded up from the higher, cancelled-run observation, since a
     // cancelled run's own timestamp is still real elapsed time even though the
     // job never finished.
-    measuredMinutes: 14,
+    // #4070's method applied again: the 14-minute figure went stale after
+    // #4207's run-tests temp-root regression suite landed — its rows spawn
+    // real runner instances on the windows scoped lane (each booting the full
+    // build), and windows shards 1-2 were CANCELLED at 99% of the 21-minute
+    // cap on three consecutive runs (33722188315 and two reruns; ubuntu and
+    // macos lanes green throughout, other PRs' windows lanes green — the
+    // long pole is this lane's windows matrix alone). A cancelled run's own
+    // timestamp is still real elapsed time: >=21 minutes, so 21 is the
+    // honest floor and the budget moves 21 -> 32 (1.5x headroom).
+    measuredMinutes: 21,
     // Sharded three ways as of #2952, so this is ONE shard's cost, not the
     // whole unit suite. Shard 1 is the long pole because the unsharded aux
     // suites (integration/security/install/slow) ride on it — #4070 fixed the
@@ -86,17 +95,6 @@ const LANE_COSTS = [
     // been measured. Replace this estimate with a real measured shard cost
     // once one exists, the same discipline every other entry here follows.
     evidence: 'run 33278340189 — 13m48s completed; run 33285384930 — CANCELLED at ~14m51s (#4070)',
-  },
-  {
-    job: 'test-full',
-    measuredMinutes: 27,
-    // Lane moved from windows-22 to windows-latest/24 and is now sharded three
-    // ways. Worst observed shard is `full test (windows-latest, 24, shard
-    // 3/3)`: 26m18s on run 32614439702 (shard 2/3 23m36s, shard 1/3 19m22s),
-    // and 23m17s for shard 2/3 on run 32603886007. The previous 18m59s /
-    // windows-22 figure recorded here predated this cost and is stale — the
-    // lane is measurably slower now, not merely relabeled.
-    evidence: 'run 32614439702 — 26m18s, windows-latest/24 shard 3/3',
   },
   {
     job: 'coverage-gate',
@@ -242,8 +240,8 @@ test('mutation.yml mutate job timeout budgets (#4036)', async (t) => {
 
 test('near-cap check CI_JOB_TIMEOUT_MINUTES literals match each job\'s own timeout-minutes (#4036)', async (t) => {
   const staticLanes = [
-    { workflowFile: 'test.yml', jobKey: 'test', envLiteral: '21' },
-    { workflowFile: 'test.yml', jobKey: 'test-full', envLiteral: '45' },
+    { workflowFile: 'test.yml', jobKey: 'test', envLiteral: '32' },
+    { workflowFile: 'test.yml', jobKey: 'test-conformance', envLiteral: '45' },
     { workflowFile: 'install-smoke.yml', jobKey: 'smoke', envLiteral: '12' },
   ];
 
@@ -271,11 +269,6 @@ test('near-cap check CI_JOB_TIMEOUT_MINUTES literals match each job\'s own timeo
       'test.yml jobs.test.name no longer starts with "test (" — update JOB_RULES in scripts/ci-timeout-report.cjs to match');
     assert.equal(testRule.test('test (ubuntu-latest, 24, shard 1/3)'), true);
 
-    const testFullRule = JOB_RULES.find((r) => r.workflowFile === 'test.yml' && r.jobKey === 'test-full');
-    assert.ok(testWorkflow.jobs['test-full'].name.startsWith('full test ('),
-      'test.yml jobs.test-full.name no longer starts with "full test (" — update JOB_RULES to match');
-    assert.equal(testFullRule.test('full test (windows-latest, 24, shard 1/3)'), true);
-
     const testInertRule = JOB_RULES.find((r) => r.workflowFile === 'test.yml' && r.jobKey === 'test-inert');
     assert.equal(testWorkflow.jobs['test-inert'].name, 'test (inert CI)',
       'test.yml jobs.test-inert.name changed — update JOB_RULES to match');
@@ -285,5 +278,10 @@ test('near-cap check CI_JOB_TIMEOUT_MINUTES literals match each job\'s own timeo
     assert.equal(testWorkflow.jobs['coverage-gate'].name, 'Coverage gate (merged shards)',
       'test.yml jobs.coverage-gate.name changed — update JOB_RULES to match');
     assert.equal(coverageGateRule.test('Coverage gate (merged shards)'), true);
+
+    const testConformanceRule = JOB_RULES.find((r) => r.workflowFile === 'test.yml' && r.jobKey === 'test-conformance');
+    assert.ok(testWorkflow.jobs['test-conformance'].name.startsWith('conformance test ('),
+      'test.yml jobs.test-conformance.name no longer starts with "conformance test (" — update JOB_RULES to match');
+    assert.equal(testConformanceRule.test('conformance test (windows-latest, 24, shard 1/3)'), true);
   });
 });

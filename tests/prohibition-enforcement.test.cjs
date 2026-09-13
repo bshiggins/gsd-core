@@ -499,6 +499,18 @@ describe('prohibition-enforcement real-runner helpers (#1259)', () => {
 // SF-01 slip past the injected-double tests. Typed-field assertions only.
 describe('prohibition-enforcement REAL runner end-to-end (#1259)', () => {
   const fs = require('node:fs');
+  const { spawn } = require('node:child_process');
+  const { setTimeout: sleep } = require('node:timers/promises');
+
+  // The hang fixture served to the bounded-timeout test below, hoisted so the #4104 self-exit
+  // regression cannot drift from the body it guards. Parks on a SETTLING 10s timer: still "hung"
+  // for any enforcement bound (the test below uses 1500ms), ~0% CPU while parked, and guaranteed
+  // to self-terminate (#4104) — unlike the retired `while (true) {}` busy loop, which orphaned at
+  // 100% CPU forever when the runner was killed, and unlike a never-settling `new Promise(() => {})`
+  // (#4105), whose non-exit relies on unstated runtime behavior.
+  const HANGS_BODY =
+    "const { test } = require('node:test');\n" +
+    "test('hangs forever', () => new Promise((resolve) => { setTimeout(resolve, 10_000); }));\n";
 
   test('a genuine non-vacuous passing node-test proven fail-first greens via the real runner + real prover', (t) => {
     const enforce = require(ENFORCEMENT_LIB);
@@ -687,9 +699,14 @@ describe('prohibition-enforcement REAL runner end-to-end (#1259)', () => {
     const dir = createTempDir('prohib-hang-');
     t.after(() => cleanup(dir));
     const tf = path.join(dir, 'hang.test.cjs');
-    // A test that never returns; the bounded timeout must kill it and dispose non-green.
-    fs.writeFileSync(tf,
-      "const { test } = require('node:test');\ntest('hangs forever', () => { while (true) {} });\n");
+    // A test that never returns within the enforcement bound; the bounded timeout must kill it and
+    // dispose non-green. The body PARKS on a settling setTimeout (#4104) rather than busy-looping
+    // `while (true) {}`: still "hung" for any enforcement timeout (10s >> the 1500ms bound below),
+    // but an orphaned worker costs ~0% CPU while parked and self-exits when the timer settles —
+    // never an immortal 100%-CPU process when the runner is killed. Deliberately NOT the
+    // never-settling `new Promise(() => {})` shape (the #4105 Node-24 concern): the settle is
+    // stated platform behavior, so the self-exit is guaranteed rather than incidental.
+    fs.writeFileSync(tf, HANGS_BODY);
     const result = enforce.runProhibitionEnforcement(
       TEST_TIER,
       { kind: 'node-test', target: tf, failFirst: true },
@@ -697,6 +714,52 @@ describe('prohibition-enforcement REAL runner end-to-end (#1259)', () => {
     );
     assert.notEqual(result.status, 'green', 'a hung check must be killed and fail closed — never hang verify or green');
     assert.equal(result.located, true);
+  });
+
+  test('the #4104 hang fixture parks (~0% CPU) and self-terminates — no immortal 100%-CPU orphan', (t, done) => {
+    // Regression (#4104): the enforcement hang test above relies on `t.after` cleanup and the
+    // bounded timeout, but if the RUNNER itself is killed (chunk timeout, CI cancel, Ctrl+C) nothing
+    // owns the fixture's worker. Old body: `while (true) {}` — orphaned at ~100% CPU forever
+    // (reproduced: worker reparented to PID 1 at 100.0% CPU surviving `kill -9` of the runner).
+    // Deterministic guard, no orphan hunt: spawn the EXACT served body directly, observe that it
+    // (a) is still running shortly into the enforcement-timeout window (it genuinely hangs), and
+    // (b) exits on its own — natural exit, no signal — inside a generous ceiling.
+    const dir = createTempDir('prohib-hang-selfexit-');
+    t.after(() => cleanup(dir));
+    const tf = path.join(dir, 'hang.test.cjs');
+    fs.writeFileSync(tf, HANGS_BODY);
+    const child = spawn(process.execPath, [tf], { stdio: 'ignore' });
+    t.after(() => { try { child.kill('SIGKILL'); } catch { /* already gone */ } });
+    // Fast-fail on a spawn error (execPath unspawnable): the poll below keys on exit/signal, which
+    // a failed spawn never sets, so without this the 20s ceiling would expire with a misleading
+    // "did not self-terminate" message instead of the real cause.
+    child.on('error', (err) => {
+      assert.fail(`could not spawn the fixture directly: ${err.message}`);
+    });
+    const CEILING_MS = 20_000;
+    const stillHangingAt = Date.now() + 750; // > half the 1500ms enforcement bound: it must not finish early
+    const deadline = Date.now() + CEILING_MS;
+    const poll = () => {
+      // `exitCode !== null` alone misses a SIGNALED exit (exitCode stays null when a signal ends
+      // the child); signalCode covers that, and the assertions below then name it as the failure.
+      if (child.exitCode !== null || child.signalCode !== null) {
+        // Exited. If it exited BEFORE the still-hanging checkpoint the fixture is no longer a hang
+        // fixture at all (breaks the enforcement test it serves — the negative space in 10-diagnosis).
+        assert.ok(Date.now() >= stillHangingAt,
+          `fixture must still be hanging at 750ms (exited after only ${Date.now() - (stillHangingAt - 750)}ms)`);
+        assert.equal(child.signalCode, null,
+          'fixture must SELF-terminate (natural exit) — a signal means we had to kill it (#4104 regression)');
+        assert.equal(child.exitCode, 0, 'the parked timer settles and the test passes cleanly');
+        done();
+        return;
+      }
+      if (Date.now() >= deadline) {
+        child.kill('SIGKILL');
+        assert.fail(`fixture did not self-terminate within ${CEILING_MS}ms — immortal process (#4104 regression)`);
+      }
+      setTimeout(poll, 250);
+    };
+    setImmediate(poll);
   });
 
   test('an EMPTY node-test file (exit 0, zero tests) does NOT green via the real runner (BL-01)', (t) => {
@@ -712,6 +775,172 @@ describe('prohibition-enforcement REAL runner end-to-end (#1259)', () => {
     );
     assert.notEqual(result.status, 'green', 'an empty (zero-test) file must NEVER green — fail-closed');
     assert.equal(result.located, true, 'the check was located; it just did not genuinely pass');
+    assert.equal(result.evidence.length, 0);
+  });
+
+  // ─── #3660 regression: a HANGING node-test's per-file WORKER must not be orphaned ──────────────
+  // `node --test` forks a per-file worker subprocess by default (Node 22+, `--test-isolation=process`);
+  // `execFileSync`'s `timeout` only signals the direct child (the runner), never the worker. These
+  // exercise the REAL, uninjected `defaultRunCheck` -> `execFileSyncReaping` path (no `runCheck`
+  // injected) and observe a real OS-level pid, so the fix (`reapDescendants`) is proven, not a mock.
+
+  /** Poll for the fixture's pidfile with bounded retry-with-backoff (no fixed sleep) — the pidfile
+   * write happens inside the spawned worker, which may take a beat to start. */
+  async function readPidWithRetry(pidfilePath, { attempts = 30, delayMs = 150 } = {}) {
+    for (let i = 0; i < attempts; i += 1) {
+      if (fs.existsSync(pidfilePath)) {
+        const txt = fs.readFileSync(pidfilePath, 'utf-8').trim();
+        if (txt) return Number(txt);
+      }
+      await sleep(delayMs);
+    }
+    throw new Error(`pidfile ${pidfilePath} was never written within the retry budget`);
+  }
+
+  /** Liveness probe. `process.kill(pid, 0)` alone cannot distinguish a genuinely-running process
+   * from an already-killed ZOMBIE stuck unreaped in a container with no init process to collect
+   * orphans (a real, confirmed condition on this repo's own Linux CI bench) -- both report "exists"
+   * with no throw. On Linux, read /proc/<pid>/stat's process-state field (3rd whitespace-separated
+   * token, inside the trailing `)` after the command name, which itself may contain spaces/parens)
+   * and treat state 'Z' (zombie) as DEAD -- it is no longer executing or consuming CPU, which is
+   * the actual thing #3660 cares about. Falls back to the plain kill(pid,0) probe on non-Linux
+   * platforms (no /proc there) and if /proc/<pid>/stat is unreadable for any reason (already fully
+   * gone, permissions, etc. -- ENOENT there means genuinely dead too). */
+  function isAlive(pid) {
+    if (process.platform === 'linux') {
+      let stat;
+      try {
+        stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf-8');
+      } catch (err) {
+        // ENOENT: /proc/<pid> genuinely gone -- fully reaped, no zombie remnant. Any OTHER read
+        // error (EACCES, EIO, ...) is inconclusive -- report "alive" rather than risk a false
+        // "dead" that would silently mask a real regression (a liveness check should fail loud
+        // via a longer retry loop, not fail quiet via a wrong verdict).
+        if (err && err.code === 'ENOENT') return false;
+        return true;
+      }
+      // Format: "pid (comm) state ...". comm may contain spaces/parens, so split on the LAST ')'.
+      const afterComm = stat.slice(stat.lastIndexOf(')') + 1).trim();
+      const state = afterComm.split(/\s+/)[0];
+      if (state === 'Z') return false; // zombie: already dead, just not yet reaped by its parent
+      return true;
+    }
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Bounded retry-with-backoff until `isAlive(pid)` reports false, or the budget is exhausted. */
+  async function waitUntilDead(pid, { attempts = 30, delayMs = 100 } = {}) {
+    let alive = isAlive(pid);
+    for (let i = 0; i < attempts && alive; i += 1) {
+      await sleep(delayMs);
+      alive = isAlive(pid);
+    }
+    return alive;
+  }
+
+  test('isAlive(pid) correctly reports TRUE for a genuinely running process (own pid) -- closes the vacuous-test gap: without this, a probe that always returned false would pass every #3660 test below trivially', () => {
+    assert.equal(isAlive(process.pid), true,
+      'isAlive must report this test\'s own (unambiguously running) process as alive');
+  });
+
+  test('a HANGING node-test leaves no orphaned descendant behind (#3660: worker survives runner-only kill)', async (t) => {
+    const enforce = require(ENFORCEMENT_LIB);
+    const dir = createTempDir('prohib-orphan-hang-');
+    t.after(() => cleanup(dir));
+    const pidfilePath = path.join(dir, 'worker.pid');
+    const tf = path.join(dir, 'hang-pid.test.cjs');
+    // Blocks via Atomics.wait (NOT a busy `while(true)`) so this test does not peg a CPU core; the
+    // deadline (10s) is far longer than the check's own timeoutMs (1200ms) below. The worker writes
+    // its OWN pid before blocking, matching the maintainer-blessed fixture design (no pgrep/procps).
+    fs.writeFileSync(tf,
+      "const { test } = require('node:test');\n" +
+      "const fs = require('node:fs');\n" +
+      "test('blocks forever (#3660 regression fixture)', () => {\n" +
+      "  fs.writeFileSync(process.env.GSD_TEST_PIDFILE, String(process.pid));\n" +
+      "  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10_000);\n" +
+      "});\n");
+    const prevPidfileEnv = process.env.GSD_TEST_PIDFILE;
+    process.env.GSD_TEST_PIDFILE = pidfilePath;
+    t.after(() => {
+      if (prevPidfileEnv === undefined) delete process.env.GSD_TEST_PIDFILE;
+      else process.env.GSD_TEST_PIDFILE = prevPidfileEnv;
+    });
+    // Real, UNINJECTED path: no runCheck/proveFailFirst override -> defaultRunCheck ->
+    // execFileSyncReaping runs the fixture for real. The short timeoutMs keeps this test fast.
+    const result = enforce.runProhibitionEnforcement(
+      TEST_TIER,
+      { kind: 'node-test', target: tf, failFirst: true },
+      { cwd: dir, timeoutMs: 1200 },
+    );
+    assert.notEqual(result.status, 'green', 'a hung check must fail closed (unchanged pre-existing contract)');
+    const workerPid = await readPidWithRetry(pidfilePath);
+    assert.ok(Number.isInteger(workerPid) && workerPid > 0, 'worker pid must be a real positive pid');
+    const stillAlive = await waitUntilDead(workerPid);
+    assert.equal(stillAlive, false,
+      `the node --test worker (pid ${workerPid}) must be reaped, not orphaned (#3660)`);
+  });
+
+  test('control: a CLEAN node-test subject\'s worker exits on its own (no reap needed; proves the liveness probe is meaningful)', async (t) => {
+    const enforce = require(ENFORCEMENT_LIB);
+    const dir = createTempDir('prohib-orphan-control-');
+    t.after(() => cleanup(dir));
+    const pidfilePath = path.join(dir, 'worker.pid');
+    const tf = path.join(dir, 'clean-pid.test.cjs');
+    // Same fixture SHAPE (writes its own pid) but does NOT block — it exits on its own. This proves
+    // the isAlive/waitUntilDead probe can observe a live-then-dead transition at all, so the hang
+    // test's "not alive" assertion above is meaningful, not vacuously true.
+    fs.writeFileSync(tf,
+      "const { test } = require('node:test');\n" +
+      "const fs = require('node:fs');\n" +
+      "test('exits immediately, no hang', () => {\n" +
+      "  fs.writeFileSync(process.env.GSD_TEST_PIDFILE, String(process.pid));\n" +
+      "});\n");
+    const prevPidfileEnv = process.env.GSD_TEST_PIDFILE;
+    process.env.GSD_TEST_PIDFILE = pidfilePath;
+    t.after(() => {
+      if (prevPidfileEnv === undefined) delete process.env.GSD_TEST_PIDFILE;
+      else process.env.GSD_TEST_PIDFILE = prevPidfileEnv;
+    });
+    enforce.runProhibitionEnforcement(
+      TEST_TIER,
+      { kind: 'node-test', target: tf, failFirst: true },
+      { cwd: dir },
+    );
+    const workerPid = await readPidWithRetry(pidfilePath);
+    assert.ok(Number.isInteger(workerPid) && workerPid > 0, 'worker pid must be a real positive pid');
+    const stillAlive = await waitUntilDead(workerPid);
+    assert.equal(stillAlive, false,
+      `control: the clean-exit worker (pid ${workerPid}) must be observably dead shortly after — proves the probe works`);
+  });
+
+  test('an ORDINARY FAILING node-test (no hang) fails closed exactly as before (#3660 non-regression: reap-gating does not alter the normal-failure path)', (t) => {
+    const enforce = require(ENFORCEMENT_LIB);
+    const dir = createTempDir('prohib-fail-ordinary-');
+    t.after(() => cleanup(dir));
+    const tf = path.join(dir, 'fails.test.cjs');
+    fs.writeFileSync(tf,
+      "const { test } = require('node:test');\n" +
+      "const assert = require('node:assert');\n" +
+      "test('fails immediately, no hang', () => {\n" +
+      "  assert.fail('deliberate ordinary failure (#3660 non-regression control)');\n" +
+      "});\n");
+    const result = enforce.runProhibitionEnforcement(
+      TEST_TIER,
+      { kind: 'node-test', target: tf, failFirst: true },
+      { cwd: dir },
+    );
+    // Same return-shape assertions as the pre-existing EMPTY-file fail-closed test above — the
+    // reap-gating change (gated strictly on `err.code === 'ETIMEDOUT'`, i.e. a timeout-kill) must
+    // not alter the ordinary non-zero-exit path's observable result. No wall-clock assertion
+    // (clock-seam rule): the absence of a hang is proven by this synchronous call returning at
+    // all, not by timing it.
+    assert.notEqual(result.status, 'green', 'an ordinary failing node-test must fail closed exactly as before this fix');
+    assert.equal(result.located, true, 'the check was located; it just did not pass');
     assert.equal(result.evidence.length, 0);
   });
 

@@ -11,7 +11,7 @@
  *
  *   C1 allow                — normal input -> exit 0.
  *   C2 deny                 — normal input that trips the hook's block path
- *                             (only the 6 hooks that HAVE one) -> exit 2,
+ *                             (only the 7 hooks that HAVE one) -> exit 2,
  *                             asserting the actual stream(s) that hook uses.
  *   C3 crash honors policy  — an input that makes the hook's own outer catch
  *                             fire, asserting the exit code matches its
@@ -45,6 +45,7 @@ const os = require('node:os');
 const { createTempDir, cleanup, TEST_ENV_BASE } = require('./helpers.cjs');
 const { runHook: runHookSeam, runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { gitOrThrow, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { ensureBuiltHooks } = require('../scripts/run-tests.cjs');
 
 const HOOKS_DIR = path.join(__dirname, '..', 'hooks');
@@ -186,6 +187,22 @@ const TABLE = [
       assert.equal(out.oldLines, 292);
       assert.match(r.stderr, /shrink/);
       assert.equal(r.stderr, out.reason);
+    },
+  },
+  {
+    file: 'gsd-secret-read-guard.js',
+    stdinTimeoutMs: 3000,
+    declaredOnCrash: 'allow',
+    allow: () => ({ payload: { tool_name: 'Bash', tool_input: { command: 'cd /proj && grep -n foo src/a.js' } } }),
+    // #4221: a plain secret-file read through Bash — the exact compound shape
+    // the retired Read() deny rules made prompt on Claude Code >= 2.1.259.
+    deny: () => ({ payload: { tool_name: 'Bash', tool_input: { command: 'cd /proj && cat .env' } } }),
+    assertDeny: (r) => {
+      const out = JSON.parse(r.stdout);
+      assert.equal(out.decision, 'block');
+      assert.equal(out.code, 'secret-read');
+      assert.equal(out.path, '.env');
+      assert.equal(r.stderr, out.reason, 'stderr must carry the plain reason string (deny stderrPayload)');
     },
   },
   {
@@ -360,14 +377,14 @@ describe('hooks-crash-policy: C1 normal allow -> exit 0', () => {
 });
 
 // ---------------------------------------------------------------------------
-// C2 — deny (only the 6 hooks with a real block path)
+// C2 — deny (only the 7 hooks with a real block path)
 // ---------------------------------------------------------------------------
 
 describe('hooks-crash-policy: C2 normal deny -> exit 2, correct stream(s)', () => {
   const denyRows = TABLE.filter((row) => typeof row.deny === 'function');
 
-  test('exactly 6 hooks in this table declare a deny case', () => {
-    assert.equal(denyRows.length, 6, denyRows.map((r) => r.file).join(', '));
+  test('exactly 7 hooks in this table declare a deny case', () => {
+    assert.equal(denyRows.length, 7, denyRows.map((r) => r.file).join(', '));
   });
 
   for (const row of denyRows) {
@@ -666,7 +683,7 @@ describe('hooks-crash-policy: hooks/dist/lib parity (#3911 review finding)', () 
       `const { terminateNow } = require(${JSON.stringify(distCliExitPath)});`,
       `terminateNow('HOOK_DENY', { x: 1 });`,
     ].join('\n');
-    const r = runNode(['-e', script], { timeoutMs: 15000 });
+    const r = runNode(['-e', script], { timeoutMs: PROBE_TIMEOUT_MS });
     assert.equal(r.outcome, OUTCOME.EXITED, `expected a clean exit; got ${r.outcome} stderr=${r.stderr}`);
     assert.equal(r.exitCode, 2, `expected HOOK_DENY's registered exit code 2; stdout=${r.stdout} stderr=${r.stderr}`);
   });

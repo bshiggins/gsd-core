@@ -13,7 +13,7 @@ import { escapeRegex } from './pattern.cjs';
 import { splitLines, detectEol, joinLines } from './text-lines.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
-const { output, error, formatDiagnosticToken } = ioMod;
+const { output, error, formatDiagnosticToken, declineNoOp } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
 const { normalizePhaseName, phaseMarkdownRegexSource, matchPhaseDirs, stripProjectCodePrefix, OPTIONAL_PHASE_TAG_SOURCE, roadmapPhaseLookupSources, phaseHeadingPrefixSrcFor, PHASE_HEADING_BASELINE, isSentinelPhaseId, scopeToPhase, bracketQualifiedKey, foldBracketId } = phaseIdMod;
@@ -65,8 +65,19 @@ interface PhasePlansAndSummaries {
    * readdirSync failed for any other reason (EACCES/EIO/...), so an
    * unreadable directory is never silently reported the same as one that was
    * successfully read and genuinely has no CONTEXT.md.
+   *
+   * #4014 (epic #3473 B4): kept — `AnalyzePhase.context_read_error` (the
+   * shipped, tested `roadmap analyze` JSON field this feeds) is an existing
+   * consumer, so this field stays additive rather than being retired. `scope`
+   * below is the new, typed sibling signal; this field is now derived from
+   * it rather than owning its own readdirSync.
    */
   contextReadError: string | null;
+  /** #4014 (epic #3473 B4): the `SCOPE` this phase dir's listing resolved to
+   * — `SCOPE.UNREADABLE` distinguishes a real read failure from a
+   * genuinely empty/absent phase dir (`SCOPE.COMPLETE`), which
+   * `contextReadError`/`hasContext` alone cannot. */
+  scope: Scope;
 }
 
 interface PhaseSearchResult {
@@ -122,37 +133,39 @@ function coerceTruthToString(t: unknown): string {
 
 // ─── countPhasePlansAndSummaries ──────────────────────────────────────────────
 
-function countPhasePlansAndSummaries(phaseDir: string): PhasePlansAndSummaries {
+function countPhasePlansAndSummaries(phaseDir: string, convention?: string | null): PhasePlansAndSummaries {
   const { planCount, summaryCount } = scanPhasePlans(phaseDir);
   // hasContext and hasResearch are not plan-scan concerns — read the directory
   // once and share the listing for all non-plan metadata that cmdRoadmapAnalyze needs.
-  let phaseFiles: string[] = [];
-  // #3885 (ADR-3473 §8.5): distinguish "genuinely absent" (ENOENT) from
-  // "could not read" (EACCES/EIO/...) — the collapse of both to an empty
-  // listing is exactly the defect class this item closes. Mirrors
-  // core-utils.cts's getPhaseFileStats / phase-locator.cts's
-  // listMilestonePhaseDirs SCOPE.UNREADABLE discriminator.
-  let contextReadError: string | null = null;
-  try {
-    phaseFiles = fs.readdirSync(phaseDir);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code;
-    if (code !== 'ENOENT') {
-      contextReadError = `Could not read phase directory ${formatDiagnosticToken(phaseDir)}: ${formatDiagnosticToken((err as Error)?.message ?? String(err))}`;
-    }
-  }
+  //
+  // #4014 (epic #3473 B4): the listing + unreadable-vs-empty discrimination
+  // is now owned by findContextMdIn's directory-string form, retiring this
+  // function's own readdirSync try/catch (mirrors core-utils.cts's
+  // getPhaseFileStats / phase-locator.cts's listMilestonePhaseDirs
+  // SCOPE.UNREADABLE discriminator).
+  const { files: phaseFiles, scope } = findContextMdIn(phaseDir);
+  // #3885 (ADR-3473 §8.5): `contextReadError` stays additive for the shipped
+  // `AnalyzePhase.context_read_error` JSON field — derived from `scope`
+  // rather than from its own caught error, since findContextMdIn's
+  // directory-string form reports SCOPE, not the raw errno message.
+  const contextReadError = scope === SCOPE.UNREADABLE
+    ? `Could not read phase directory ${formatDiagnosticToken(phaseDir)}`
+    : null;
   // #3511: scope the raw listing to this phase dir before the
   // phase-numbered-artifact predicates (hasContext/hasResearch) — planCount/
   // summaryCount above stay on scanPhasePlans's own unscoped listing since a
   // PLAN/SUMMARY leading number is a plan sequence number, not a phase
   // number. Mirrors core-utils.cts's getPhaseFileStats.
-  const scopedFiles = scopeToPhase(phaseFiles, path.basename(phaseDir));
+  // #612: `convention` threaded from the one caller (which already threads it
+  // into matchPhaseDirs) so a bracket dir scopes by its real token.
+  const scopedFiles = scopeToPhase(phaseFiles, path.basename(phaseDir), convention);
   return {
     planCount,
     summaryCount,
     hasContext: findContextMdIn(scopedFiles) !== null,
     hasResearch: scopedFiles.some(f => f.endsWith('-RESEARCH.md') || f === 'RESEARCH.md'),
     contextReadError,
+    scope,
   };
 }
 
@@ -393,6 +406,11 @@ type AnalyzePhase = {
   roadmap_complete: boolean;
   /** #3885 (ADR-3473 §8.5): see PhasePlansAndSummaries.contextReadError. */
   context_read_error: string | null;
+  /** #4014 (epic #3473 B4): see PhasePlansAndSummaries.scope. Additive
+   * sibling of context_read_error — SCOPE.UNREADABLE for the same read
+   * failure context_read_error names, SCOPE.COMPLETE otherwise (including a
+   * genuinely absent/no_directory phase). */
+  context_scope: Scope;
 };
 
 type AnalyzePhaseCollection = {
@@ -449,8 +467,17 @@ function collectAnalyzePhases(
   // #3036: widen the id capture to accept non-numeric-leading ids (e.g. B7, P0.3-2)
   // that get-phase/execute-phase already resolve. An optional leading letter prefix
   // ([A-Za-z]?) covers letter-prefixed ids without breaking numeric-leading ones.
+  // #4478: line-anchored (`^ {0,3}`, `/m`) — unanchored, `#{2,4}` matched a
+  // `### Phase N:`-shaped mention ANYWHERE `exec()`'s scan reached: mid-sentence
+  // prose, inside a blockquote, inside an inline code span (backtick-quoted on
+  // the same line, not a fenced block `tokenizeHeadings` would exclude). Any
+  // such line minted a phantom phase entry, inflating phase_count and able to
+  // collide on a phase NUMBER with a real heading nearby. `{0,3}` leading
+  // spaces mirrors `tokenizeHeadings`'s own CommonMark ATX-heading tolerance
+  // (src/markdown-sectionizer.cts:453) so a legitimately-indented heading that
+  // matched before this fix still matches after it.
   // phase-id-owner: uses the [.-] (dot-or-dash) separator variant, not the canonical dot-only token; a swap to PHASE_NUMBER_TOKEN_SOURCE would drop hyphenated phase-id matches.
-  const phasePattern = new RegExp(`#{2,4}\\s*${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.ANY_BRACKET, convention, true)}([A-Za-z]?\\d+[A-Z]?(?:[.-]\\d+)*)(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n]+)`, 'gi');
+  const phasePattern = new RegExp(`^ {0,3}#{2,4}\\s*${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.ANY_BRACKET, convention, true)}([A-Za-z]?\\d+[A-Z]?(?:[.-]\\d+)*)(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n]+)`, 'gim');
   // The capturing intro inserts the bracket id at group 1 only under the
   // bracket convention; the token and name shift by the same offset.
   const G = convention === 'bracket' ? 1 : 0;
@@ -472,7 +499,13 @@ function collectAnalyzePhases(
     // #3691: `\d` → `\d[\d.]*` so decimal phase headings (e.g. `### Phase 02.3:`) are
     // recognised as section boundaries. #3036: `[A-Za-z]?\d` so non-numeric-leading ids
     // (e.g. B7) are also recognised.
-    const nextHeader = restOfContent.match(new RegExp(`\\n#{2,4}\\s+${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.ANY_BRACKET, convention)}[A-Za-z]?\\d[\\d.-]*`, 'i'));
+    // #4478 follow-up (independent code review on this same fix): ` {0,3}` after
+    // the literal `\n` mirrors phasePattern's own new leading-space tolerance
+    // above -- without it, a legitimately-indented (1-3 space) NEXT phase
+    // heading was invisible to this boundary lookup, letting the PRIOR phase's
+    // goal/mode/depends_on extraction bleed across the section boundary into
+    // the next phase's own body.
+    const nextHeader = restOfContent.match(new RegExp(`\\n {0,3}#{2,4}\\s+${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.ANY_BRACKET, convention)}[A-Za-z]?\\d[\\d.-]*`, 'i'));
     const sectionEnd = nextHeader ? sectionStart + nextHeader.index! : content.length;
     const section = content.slice(sectionStart, sectionEnd);
 
@@ -496,6 +529,10 @@ function collectAnalyzePhases(
     // hit a non-ENOENT error — no directory at all is `disk_status:
     // 'no_directory'`, a real (if uninteresting) answer, not a read error.
     let contextReadError: string | null = null;
+    // #4014 (epic #3473 B4): additive sibling — SCOPE.COMPLETE by default
+    // (no directory at all is a genuine, not-unreadable answer), overwritten
+    // below only when dirMatch resolves.
+    let contextScope: Scope = SCOPE.COMPLETE;
 
     // DEAD catch removed (#2245 audit): matchPhaseDirs(...) is a pure
     // array lookup on an already-resolved string array, and
@@ -522,12 +559,13 @@ function collectAnalyzePhases(
     const dirMatch = matchPhaseDirs(phaseDirNames, normalized, convention).matches[0];
 
     if (dirMatch) {
-      const counts = countPhasePlansAndSummaries(path.join(phasesDir, dirMatch));
+      const counts = countPhasePlansAndSummaries(path.join(phasesDir, dirMatch), convention);
       planCount = counts.planCount;
       summaryCount = counts.summaryCount;
       hasContext = counts.hasContext;
       hasResearch = counts.hasResearch;
       contextReadError = counts.contextReadError;
+      contextScope = counts.scope;
 
       // ADR-3180 §7.4 (issue #3186, disk-strict, #3168 fix): route "is this
       // phase complete" through the canonical owner (`isPhaseComplete`),
@@ -535,7 +573,10 @@ function collectAnalyzePhases(
       // NOT a precondition, so a zero-plan phase with a passing
       // `*-VERIFICATION.md` reports complete here too, not just via
       // `phase.complete`.
-      const completionResult = isPhaseComplete(path.join(phasesDir, dirMatch));
+      // #612: `convention` (a parameter of this function, same thread as
+      // matchPhaseDirs above) rides into completion so a bracket phase dir
+      // resolves and scopes its verification report like its legacy twin.
+      const completionResult = isPhaseComplete(path.join(phasesDir, dirMatch), { convention });
       if (completionResult.value.complete) diskStatus = 'complete';
       else if (summaryCount > 0) diskStatus = 'partial';
       else if (planCount > 0) diskStatus = 'planned';
@@ -575,6 +616,7 @@ function collectAnalyzePhases(
       disk_status: diskStatus,
       roadmap_complete: roadmapComplete,
       context_read_error: contextReadError,
+      context_scope: contextScope,
     });
   }
 
@@ -595,6 +637,9 @@ function collectAnalyzePhases(
     let tHasContext = false;
     let tHasResearch = false;
     let tContextReadError: string | null = null;
+    // #4014 (epic #3473 B4): additive sibling, same default rule as the
+    // heading-declared branch above.
+    let tContextScope: Scope = SCOPE.COMPLETE;
     if (dirMatchA) {
       const counts = countPhasePlansAndSummaries(path.join(phasesDir, dirMatchA));
       tPlanCount = counts.planCount;
@@ -606,6 +651,7 @@ function collectAnalyzePhases(
       // existsSync (which cannot itself distinguish EACCES from absent), but
       // an unreadable phase directory is still surfaced via the sibling call.
       tContextReadError = counts.contextReadError;
+      tContextScope = counts.scope;
     }
     phases.push({
       number: tr.id,
@@ -620,6 +666,7 @@ function collectAnalyzePhases(
       disk_status: dirMatchA ? 'ok' : 'no_directory',
       roadmap_complete: false,
       context_read_error: tContextReadError,
+      context_scope: tContextScope,
     });
   }
   return { phases, detailKeys };
@@ -943,7 +990,13 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
   const summaryCount = countMatchedSummaries(phaseInfo!.plans, phaseInfo!.summaries);
 
   if (planCount === 0) {
-    output({ updated: false, reason: 'No plans found', plan_count: 0, summary_count: 0 }, raw, 'no plans');
+    declineNoOp(
+      raw,
+      'updated',
+      'No plans found',
+      'roadmap update-plan-progress skipped — no plans found for this phase. ROADMAP.md was left unchanged.',
+      { plan_count: 0, summary_count: 0 },
+    );
     return;
   }
 
@@ -960,7 +1013,11 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
   // the same phase (ADR-3180 §7.4's headline: one predicate for the read
   // path and the write path).
   const phaseDir = path.join(cwd, phaseInfo!.directory);
-  const completionResult = isPhaseComplete(phaseDir);
+  // ADR-3180 §7.4 read/write-path symmetry with the threaded site at ~583:
+  // thread convention here too, so this write path's completion reading
+  // agrees with the read path's under the bracket convention.
+  const convention = resolvePhaseIdConvention(cwd);
+  const completionResult = isPhaseComplete(phaseDir, { convention });
   const verificationResult = completionResult.value.verification;
   // #2648 precedent, applied at this write site (ADR-3180 §7.4 / #3186):
   // `isPhaseComplete` deliberately carries NO plan-count precondition — the
@@ -987,14 +1044,73 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
   const today = realClock.localToday();
 
   if (!fs.existsSync(roadmapPath)) {
-    output({ updated: false, reason: 'ROADMAP.md not found', plan_count: planCount, summary_count: summaryCount }, raw, 'no roadmap');
+    declineNoOp(
+      raw,
+      'updated',
+      'ROADMAP.md not found',
+      'roadmap update-plan-progress skipped — ROADMAP.md not found.',
+      { plan_count: planCount, summary_count: summaryCount },
+    );
     return;
   }
 
   // Wrap entire read-modify-write in lock to prevent concurrent corruption
+  let updated = false;
+  // #4247: the refusal flag. The write/report decision below must be keyed to
+  // "a writable roadmap representation of THIS phase was found", never to "any
+  // byte moved". On a checklist-form ROADMAP (`- [ ] **Phase N: …**`, the
+  // roadmapper's own summary-checklist form) every phase-targeted grammar
+  // below requires an ATX `#{2,4} Phase N` heading and therefore finds
+  // nothing; the Progress-table row is the only other writable target, and
+  // when its Phase cell does not match `phaseCellRe` (e.g. a word-prefixed
+  // `Phase 68` cell — deliberately unrecognized on the read side too,
+  // `deriveProgressFromRoadmap`'s `/^\d/` data-row filter) the command used
+  // to fall through to unrelated byte deltas (an UN-scoped plan-checkbox mark
+  // anywhere in the document) and report `updated: true` while the phase's
+  // own row stayed untouched — with the file-global write then letting the
+  // platform write seam's markdown normalization inject blank lines around
+  // other phases' bullets, splitting hand-wrapped sentences mid-entry. The
+  // refusal below declines with the analyzer's own `missing_phase_details`
+  // vocabulary and leaves ROADMAP.md byte-identical.
+  let missingPhaseDetails = false;
   withPlanningLock(cwd, () => {
-    let roadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
+    // #3957 (B9.4): captured BEFORE any transform runs, so the write/report
+    // decision below reflects whether the transforms actually changed
+    // anything — not just that they ran. Every transform below still runs
+    // unconditionally exactly as before; only the final write-and-report
+    // step becomes conditional on `roadmapContent !== originalContent`.
+    const originalContent = fs.readFileSync(roadmapPath, 'utf-8');
+    let roadmapContent = originalContent;
     const phasePattern = phaseMarkdownRegexSource(phaseNum);
+    // #4247: ONE local source for the ATX phase-heading anchor that every
+    // section-scoped writer below (`planCountPattern`,
+    // `insertRowsPatternA|B`) starts with — extracted so the target-detection
+    // gate below reads the SAME grammar the writers anchor on, and a future
+    // edit to one cannot drift from the other three copies.
+    const phaseHeadingAnchor = `#{2,4}\\s*Phase\\s+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s])`;
+    // #4247: target detection runs against the ORIGINAL content's active
+    // (post-</details>) region — the same milestone scoping every writer
+    // below applies — so the gate asks "does the file carry a writable phase
+    // representation" rather than "did some regex fire mid-transform".
+    const gateDetailsClose = originalContent.lastIndexOf('</details>');
+    const gateActiveRegion = gateDetailsClose === -1
+      ? originalContent
+      : originalContent.slice(gateDetailsClose + '</details>'.length);
+    // Heading target: the exact grammar `planCountPattern` /
+    // `insertRowsPatternA|B` anchor on (an ATX phase heading for this phase).
+    const headingTargetFound = new RegExp(phaseHeadingAnchor, 'i').test(gateActiveRegion);
+    // Checklist target: when the phase is complete, its own checklist bullet
+    // (`- [ ] **Phase N: …**`) IS a writable phase row — the completion
+    // checkbox stamp below updates it. Same grammar as that writer, widened
+    // one notch to `[ x]` so an ALREADY-checked bullet still counts as a
+    // found target: an idempotent re-run then takes the honest
+    // "no changes were needed" decline instead of this refusal.
+    const checklistTargetFound = isComplete && new RegExp(
+      `-\\s*\\[[ x]\\]\\s*.*Phase\\s+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
+      'i',
+    ).test(gateActiveRegion);
+    // Table-row target: set by the row-scoped cell updates below.
+    let tableRowFound = false;
 
     // Progress table row: update Plans Complete/Status/Completed columns BY
     // COLUMN NAME (handles 4- or 5-column RoadmapProgress tables regardless of
@@ -1016,10 +1132,10 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       let text = scoped;
 
       const plansResult = updateTableCell(text, rowMatch, 'Plans Complete', ` ${summaryCount}/${planCount} `);
-      if (plansResult.ok) text = plansResult.value;
+      if (plansResult.ok) { text = plansResult.value; tableRowFound = true; }
 
       const statusResult = updateTableCell(text, rowMatch, 'Status', ` ${status.padEnd(11)}`);
-      if (statusResult.ok) text = statusResult.value;
+      if (statusResult.ok) { text = statusResult.value; tableRowFound = true; }
 
       // Preserve only a valid ISO date (#1161: idempotent; self-heal garbage).
       // Ragged-tolerant (#2245 Blocker 2): probe the CURRENT Completed cell via
@@ -1035,7 +1151,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
         }
         return '  ';
       });
-      if (completedResult.ok) text = completedResult.value;
+      if (completedResult.ok) { text = completedResult.value; tableRowFound = true; }
 
       return text;
     });
@@ -1079,7 +1195,7 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     //      continuation on the next line, since the pattern never spans past
     //      `\n` in the first place.
     const planCountPattern = new RegExp(
-      `(#{2,4}\\s*Phase\\s+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s])(?:(?!\\n#{1,4}\\s)[\\s\\S])*?(?:\\*\\*Plans\\*\\*:|\\*\\*Plans:\\*\\*|(?:^|\\n)Plans:)\\s*)(\\d+\\s*\\/\\s*\\d+\\s+plans(?:\\s+(?:complete|executed))?|\\d+\\s+plans?)?([^\\r\\n]*)`,
+      `(${phaseHeadingAnchor}(?:(?!\\n#{1,4}\\s)[\\s\\S])*?(?:\\*\\*Plans\\*\\*:|\\*\\*Plans:\\*\\*|(?:^|\\n)Plans:)\\s*)(\\d+\\s*\\/\\s*\\d+\\s+plans(?:\\s+(?:complete|executed))?|\\d+\\s+plans?)?([^\\r\\n]*)`,
       'i'
     );
     const planCountText = isComplete
@@ -1172,11 +1288,11 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       // Pattern A: anchor to bare `Plans:` header (preferred).
       // Pattern B: fallback to bold summary when no bare header exists.
       const insertRowsPatternA = new RegExp(
-        `(#{2,4}\\s*Phase\\s+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s])(?:(?!\\n#{1,4}\\s)[\\s\\S])*?(?:^|\\n)(?:Plans:)[^\\n]*)`,
+        `(${phaseHeadingAnchor}(?:(?!\\n#{1,4}\\s)[\\s\\S])*?(?:^|\\n)(?:Plans:)[^\\n]*)`,
         'i'
       );
       const insertRowsPatternB = new RegExp(
-        `(#{2,4}\\s*Phase\\s+${phasePattern}${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s])(?:(?!\\n#{1,4}\\s)[\\s\\S])*?(?:\\*\\*Plans\\*\\*:|\\*\\*Plans:\\*\\*)[^\\n]*)`,
+        `(${phaseHeadingAnchor}(?:(?!\\n#{1,4}\\s)[\\s\\S])*?(?:\\*\\*Plans\\*\\*:|\\*\\*Plans:\\*\\*)[^\\n]*)`,
         'i'
       );
 
@@ -1217,17 +1333,62 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
       }
     }
 
-    platformWriteSync(roadmapPath, roadmapContent);
+    // #3957 (B9.4): write and report an update only when the transforms
+    // above actually produced different bytes — mirroring the sibling
+    // `cmdRoadmapAnnotateDependencies`'s existing `nextContent !== content`
+    // gate. Previously this wrote and reported `updated: true`
+    // unconditionally, even on an idempotent re-run that changed nothing.
+    //
+    // #4247: ...but ONLY when a writable representation of THIS phase was
+    // found. Without the target gate, a byte delta from an unrelated
+    // transform (the un-scoped plan-checkbox mark) satisfied the #3957 gate
+    // and produced a success-shaped `updated: true` while the phase's own
+    // row stayed untouched — and the file-global write let the platform
+    // write seam's markdown normalization reflow unrelated entries. When no
+    // target exists the command refuses: no write at all, so ROADMAP.md is
+    // left byte-identical, and the caller gets a typed
+    // `missing_phase_details` decline instead of a false green.
+    const phaseRepresentationFound = tableRowFound || headingTargetFound || checklistTargetFound;
+    if (phaseRepresentationFound && roadmapContent !== originalContent) {
+      platformWriteSync(roadmapPath, roadmapContent);
+      updated = true;
+    }
+    if (!phaseRepresentationFound) {
+      missingPhaseDetails = true;
+    }
   });
-  output({
-    updated: true,
+
+  const computed = {
     phase: phaseNum,
     plan_count: planCount,
     summary_count: summaryCount,
     status,
     complete: isComplete,
     verification_stale_check_indeterminate: verificationStaleCheckIndeterminate,
-  }, raw, `${summaryCount}/${planCount} ${status}`);
+  };
+  if (updated) {
+    output({ updated: true, ...computed }, raw, `${summaryCount}/${planCount} ${status}`);
+  } else if (missingPhaseDetails) {
+    // #4247: honest refusal — the reason names the real condition (the
+    // analyzer's `missing_phase_details` vocabulary), never "already
+    // reflects", which was false: the ROADMAP was never able to record this
+    // phase's progress in the first place.
+    declineNoOp(
+      raw,
+      'updated',
+      'missing_phase_details',
+      `roadmap update-plan-progress skipped — ROADMAP.md has no writable entry for phase ${formatDiagnosticToken(String(phaseNum))} (no matching Progress-table row, no phase detail section, and no checklist entry this command can update). ROADMAP.md was left unchanged.`,
+      computed,
+    );
+  } else {
+    declineNoOp(
+      raw,
+      'updated',
+      "no changes were needed — ROADMAP.md already reflects this phase's plan/summary counts and status",
+      "roadmap update-plan-progress skipped — no changes were needed; ROADMAP.md already reflects this phase's plan/summary counts and status.",
+      computed,
+    );
+  }
 }
 
 // ─── cmdRoadmapAnnotateDependencies ───────────────────────────────────────────
@@ -1252,13 +1413,33 @@ function cmdRoadmapAnnotateDependencies(cwd: string, phaseNum: string | null | u
 
   const roadmapPath = planningPaths(cwd).roadmap;
   if (!fs.existsSync(roadmapPath)) {
-    output({ updated: false, reason: 'ROADMAP.md not found' }, raw, 'no roadmap');
+    declineNoOp(raw, 'updated', 'ROADMAP.md not found', 'roadmap annotate-dependencies skipped — ROADMAP.md not found.');
     return;
   }
 
   const phaseInfo = findPhaseInternal(cwd, phaseNum);
-  if (!phaseInfo || phaseInfo.plans.length === 0) {
-    output({ updated: false, reason: 'no plans found for phase', phase: phaseNum }, raw, 'no plans');
+  // #3957 (B9.1): distinguish "phase does not resolve at all" from "phase
+  // resolves but has zero plans" — previously both collapsed into the same
+  // 'no plans found for phase' reason, which is simply false for the first
+  // case (there IS no such phase to have plans).
+  if (!phaseInfo) {
+    declineNoOp(
+      raw,
+      'updated',
+      `phase ${phaseNum} not found`,
+      `roadmap annotate-dependencies skipped — phase ${formatDiagnosticToken(String(phaseNum))} not found.`,
+      { phase: phaseNum },
+    );
+    return;
+  }
+  if (phaseInfo.plans.length === 0) {
+    declineNoOp(
+      raw,
+      'updated',
+      `phase ${phaseNum} has no plans`,
+      `roadmap annotate-dependencies skipped — phase ${formatDiagnosticToken(String(phaseNum))} has no plans.`,
+      { phase: phaseNum },
+    );
     return;
   }
 
@@ -1277,7 +1458,12 @@ function cmdRoadmapAnnotateDependencies(cwd: string, phaseNum: string | null | u
   }
 
   if (planData.length === 0) {
-    output({ updated: false, reason: 'could not read plan frontmatter' }, raw, 'no frontmatter');
+    declineNoOp(
+      raw,
+      'updated',
+      'could not read plan frontmatter',
+      'roadmap annotate-dependencies skipped — could not read plan frontmatter for any plan in this phase.',
+    );
     return;
   }
 

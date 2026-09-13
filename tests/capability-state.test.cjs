@@ -16,6 +16,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { cleanup, runGsdTools } = require('./helpers.cjs');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 
 const {
   resolveCapabilityState,
@@ -603,6 +604,63 @@ describe('resolveCapabilityState — hook activation details', () => {
   });
 });
 
+// ─── resolveCapabilityState — pointFrom gate (#3661, 50-test-matrix.md Section C) ──
+
+describe('resolveCapabilityState — pointFrom gate (#3661, matrix Section C)', () => {
+  test('C1: capabilityStateConfiguredTrueWhenBothGatesPass — same fixture as B3', () => {
+    const registry = makeRegistry({
+      steps: [{ point: 'plan:pre', when: 'mytool.on', pointFrom: 'mytool.point' }],
+      configSchema: { 'mytool.point': { type: 'enum', values: ['plan:pre', 'plan:post'], default: 'plan:pre', description: 'x' } },
+    });
+    const result = resolveCapabilityState({
+      registry,
+      installedSkills: '*',
+      surfacedSkills: new Set(),
+      config: { mytool: { on: true } },
+    });
+    const hook = result.capabilities[0].hooks.find((h) => h.kind === 'step');
+    assert.ok(hook, 'step hook should be present');
+    assert.strictEqual(hook.configured, true, 'configured=true when both when and pointFrom pass');
+    assert.strictEqual(hook.active, true, 'active reflects capability-level active AND configured');
+  });
+
+  test('C2: capabilityStateConfiguredFalseOnPointFromMismatch — same fixture as B4', () => {
+    const registry = makeRegistry({
+      steps: [{ point: 'plan:pre', when: 'mytool.on', pointFrom: 'mytool.point' }],
+      configSchema: { 'mytool.point': { type: 'enum', values: ['plan:pre', 'plan:post'], default: 'plan:post', description: 'x' } },
+    });
+    const result = resolveCapabilityState({
+      registry,
+      installedSkills: '*',
+      surfacedSkills: new Set(),
+      config: { mytool: { on: true } },
+    });
+    const hook = result.capabilities[0].hooks.find((h) => h.kind === 'step');
+    assert.ok(hook, 'step hook should be present');
+    assert.strictEqual(hook.configured, false, 'pointFrom mismatch must set configured=false even though when is truthy');
+    assert.strictEqual(hook.active, false);
+  });
+
+  test('C3: capabilityStateCarriesRawWhenThrough — hook.when unchanged even with pointFrom also present', () => {
+    const registry = makeRegistry({
+      steps: [{ point: 'plan:pre', when: 'mytool.on', pointFrom: 'mytool.point' }],
+      configSchema: { 'mytool.point': { type: 'enum', values: ['plan:pre', 'plan:post'], default: 'plan:pre', description: 'x' } },
+    });
+    const result = resolveCapabilityState({
+      registry,
+      installedSkills: '*',
+      surfacedSkills: new Set(),
+      config: { mytool: { on: true } },
+    });
+    const hook = result.capabilities[0].hooks.find((h) => h.kind === 'step');
+    assert.ok(hook, 'step hook should be present');
+    assert.strictEqual(
+      hook.when, 'mytool.on',
+      'raw when value must still be carried through unchanged for diagnostic visibility (pre-existing contract)',
+    );
+  });
+});
+
 // ─── resolveCapabilityState — determinism ─────────────────────────────────────
 
 describe('resolveCapabilityState — determinism', () => {
@@ -729,7 +787,7 @@ function runCapabilityState(cwd, configDir) {
   const result = spawnSync(
     process.execPath,
     [gsdToolsPath, 'capability', 'state', '--config-dir', configDir, '--raw', '--cwd', cwd],
-    { encoding: 'utf8', timeout: 15000 },
+    { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS },
   );
   return result;
 }
@@ -1267,7 +1325,7 @@ describe('regressions: installed-runtime capability surface (#1160)', () => {
           '--config-dir', tmpInstalledConfigDir,
           '--cwd', tmpInstalledProjectDir,
         ],
-        { encoding: 'utf8', timeout: 15000 },
+        { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS },
       );
       assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
       const envelope = JSON.parse(result.stdout.trim());
@@ -1296,7 +1354,7 @@ describe('regressions: installed-runtime capability surface (#1160)', () => {
           '--config-dir', tmpInstalledConfigDir,
           '--cwd', tmpInstalledProjectDir,
         ],
-        { encoding: 'utf8', timeout: 15000 },
+        { encoding: 'utf8', timeout: PROBE_TIMEOUT_MS },
       );
       assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
       const envelope = JSON.parse(result.stdout.trim());
@@ -1324,6 +1382,19 @@ describe('regressions: installed-runtime capability surface (#1160)', () => {
   // is genuinely empty, so pre-fix the '*' profile materialized to an empty
   // surfaced set → enabled=false → verify:post activeHooks: []. This test FAILS
   // before the fix and PASSES after.
+
+  /**
+   * gsd-tools.cjs spawned against a COPIED install-root tree (fs.cpSync of the
+   * executable runtime into a temp dir simulating a global skills-runtime
+   * install with no commands/ sibling) rather than the bare source checkout.
+   * Same CLI-query shape as PROBE_TIMEOUT_MS (15000ms) elsewhere in this file,
+   * but a genuinely heavier pre-existing bound -- not equalized without bench
+   * data. Coincides numerically with tests/helpers/timeouts.cjs's
+   * STAGED_HOOK_SCRIPT_TIMEOUT_MS but describes a different operation (a
+   * gsd-tools.cjs CLI subcommand, not a staged hook script) -- kept local.
+   */
+  const INSTALLED_RUNTIME_CLI_TIMEOUT_MS = 20000;
+
   describe('true installed layout (commands/gsd unreachable)', () => {
     let installRoot;
     let installedConfigDir;
@@ -1392,7 +1463,7 @@ describe('regressions: installed-runtime capability surface (#1160)', () => {
           '--cwd', installedProjectDir,
           '--raw',
         ],
-        { encoding: 'utf8', timeout: 20000 },
+        { encoding: 'utf8', timeout: INSTALLED_RUNTIME_CLI_TIMEOUT_MS },
       );
       assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
       const envelope = JSON.parse(result.stdout);
@@ -1414,7 +1485,7 @@ describe('regressions: installed-runtime capability surface (#1160)', () => {
           '--config-dir', installedConfigDir,
           '--cwd', installedProjectDir,
         ],
-        { encoding: 'utf8', timeout: 20000 },
+        { encoding: 'utf8', timeout: INSTALLED_RUNTIME_CLI_TIMEOUT_MS },
       );
       assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`);
       const envelope = JSON.parse(result.stdout.trim());
@@ -1449,7 +1520,7 @@ describe('regressions: installed-runtime capability surface (#1160)', () => {
             '--config-dir', installedConfigDir,
             '--cwd', disabledProj,
           ],
-          { encoding: 'utf8', timeout: 20000 },
+          { encoding: 'utf8', timeout: INSTALLED_RUNTIME_CLI_TIMEOUT_MS },
         );
         assert.strictEqual(result.status, 0, `gsd-tools exited ${result.status}:\nstderr: ${result.stderr}`);
         const envelope = JSON.parse(result.stdout.trim());

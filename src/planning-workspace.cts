@@ -19,6 +19,10 @@ import { platformEnsureDir, retryRenameSync } from './shell-command-projection.c
 import { realClock } from './clock.cjs';
 import type { Clock } from './clock.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
+import planningScopeMod = require('./planning-scope.cjs');
+const { SCOPE } = planningScopeMod;
+type Scope = planningScopeMod.Scope;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 import activeWorkstreamStore = require('./active-workstream-store.cjs');
 const {
   createSharedPointerAdapter,
@@ -121,9 +125,26 @@ const PLANNING_LOCK_RETRY_ERRNOS = new Set([
 // compatible with the structural type the store expects.
 type WorkstreamAdapterOpts = Record<string, unknown>;
 
+/**
+ * #4257: the ONE owner of the env workstream discriminator `planningDir`
+ * itself applies when handed no `ws` argument. `planningPaths(cwd)` — and
+ * therefore every workstream-scoped `PlanningSnapshot` read — resolves its
+ * base through exactly this read, and the CLI bootstrap has already folded
+ * the stored active-workstream pointer into the env by the time any
+ * diagnostic runs (`resolveActiveWorkstream` → `applyResolvedWorkstreamEnv`,
+ * `active-workstream-store.cjs`). Exposed so a consumer that needs to NAME
+ * the scope those reads used (W002's warning message, via the snapshot's
+ * `workstream` field) derives it from the same resolution point instead of
+ * growing a second env read site that can drift (the #612 PR-2
+ * two-readers-two-bases lesson).
+ */
+function resolveEnvWorkstream(): string | null {
+  return process.env['GSD_WORKSTREAM'] ?? null;
+}
+
 function planningDir(cwd: string, ws?: string | null, project?: string | null): string {
   if (project === undefined) project = process.env['GSD_PROJECT'] ?? null;
-  if (ws === undefined) ws = process.env['GSD_WORKSTREAM'] ?? null;
+  if (ws === undefined) ws = resolveEnvWorkstream();
 
   // Reject path separators and traversal components in project/workstream names
   const BAD_SEGMENT = /[/\\]|\.\./;
@@ -300,6 +321,7 @@ interface PlanningPaths {
   requirements: string;
   debug: string;
   quick: string;
+  todos: string;
 }
 
 // #2142: the quick-task directory. Exported as its own function (not only as a
@@ -310,6 +332,33 @@ interface PlanningPaths {
 // the `debug` key (#3149) was introduced to eliminate.
 function quickDirFrom(planningBase: string): string {
   return path.join(planningBase, 'quick');
+}
+
+// #4256: the todos directory — deliberately ROOT-SCOPED, unlike every other
+// planningPaths key. Todos are shared project state by construction: the
+// migrateToWorkstreams contract keeps them among the shared files that "stay
+// in place" at .planning/todos/ (workstream.cts), and every workflow writer
+// writes that literal cwd-relative root path. The six todos readers
+// previously hand-composed `path.join(planningDir(cwd), 'todos', ...)`,
+// which silently re-scoped to .planning/workstreams/<ws>/todos/ — a
+// directory nothing creates — under a workstream, so todos went invisible
+// and audit-open passed the milestone-close gate vacuously. Same
+// two-composers-of-one-path shape the `debug` (#3149) and `quick` (#2142)
+// keys were introduced to eliminate (DEFECT.GENERATIVE-FIX).
+//
+// Exported as its own function pair (not only as a `planningPaths` key)
+// because `audit.cts`'s `scanTodos`/`cmdAuditAcknowledge` consume an
+// already-resolved todos base rather than a `cwd`, mirroring how #2142
+// exported `quickDirFrom` for `scanQuickTasks`. `todosDir` takes NO ws/project
+// parameter — todos have no workstream- or project-scoped form anywhere, so
+// there is no discriminator to thread. This is also the single root #4327's
+// future filename-containment guard should enforce against.
+function todosDirFrom(planningBase: string): string {
+  return path.join(planningBase, 'todos');
+}
+
+function todosDir(cwd: string): string {
+  return todosDirFrom(planningRoot(cwd));
 }
 
 function planningPaths(cwd: string, ws?: string | null): PlanningPaths {
@@ -328,6 +377,11 @@ function planningPaths(cwd: string, ws?: string | null): PlanningPaths {
     debug: path.join(base, 'debug'),
     // #2142: quick-task directory, composed via the shared quickDirFrom helper.
     quick: quickDirFrom(base),
+    // #4256: todos directory — deliberately ROOT-scoped while the rest of
+    // this record follows the active workstream/project (todos are shared
+    // project state per the migrateToWorkstreams contract), composed via the
+    // shared todosDir helper so this key and every direct caller agree.
+    todos: todosDir(cwd),
   };
 }
 
@@ -569,32 +623,56 @@ function describeUnresolvedWorkstreamReason(reason: 'invalid_name' | 'missing_wo
  * form (`CONTEXT.md`) and the padded-prefix convention (`NN-CONTEXT.md`,
  * `NN.N-CONTEXT.md`, etc.) used by gsd-discuss-phase output.
  *
- * Returns the filename (not the full path) of the first match, or null if
- * no CONTEXT.md exists in the directory.
- *
  * Canonical dual-form predicate extracted here to eliminate the 5-site
  * duplication that previously existed across init.cjs, roadmap.cjs,
  * core.cjs, gap-checker.cjs (#3739).
  *
- * @param absDirOrFiles - Absolute path to the phase directory,
- *   OR an already-read files array (avoids a redundant readdirSync at call sites
- *   that already hold a directory listing).
+ * Two call shapes, two return shapes (#4014, epic #3473 B4-unreadable):
+ *
+ * - Array-input form (`files: string[]`, an already-read directory listing —
+ *   avoids a redundant readdirSync at call sites that already hold one, and
+ *   lets a caller pass an already phase-scoped listing): UNCHANGED —
+ *   returns the matched filename or `null`, never throws (there is no I/O
+ *   to fail on an in-memory array).
+ * - Directory-string form (`absDir: string`): performs the `readdirSync`
+ *   itself and returns `{ file, files, scope }` — `file`/`files` are the
+ *   match and the raw listing, `scope` is `SCOPE.COMPLETE` on a successful
+ *   read (including ENOENT, which is a genuine "nothing there yet" answer,
+ *   not a failure) or `SCOPE.UNREADABLE` on any other read error
+ *   (EACCES/EIO/…). This form never throws — a caller that used to see an
+ *   exception on an unreadable directory now sees `scope: SCOPE.UNREADABLE`
+ *   instead, so an unreadable phase dir is reported distinctly from a
+ *   genuinely empty one rather than being silently indistinguishable from
+ *   it (#1883's original defect this closes at the source).
  */
-function findContextMdIn(absDirOrFiles: string | string[]): string | null {
-  try {
-    const files = Array.isArray(absDirOrFiles)
-      ? absDirOrFiles
-      : fs.readdirSync(absDirOrFiles);
+function findContextMdIn(files: string[]): string | null;
+function findContextMdIn(absDir: string): { file: string | null; files: string[]; scope: Scope };
+function findContextMdIn(
+  absDirOrFiles: string | string[],
+): string | null | { file: string | null; files: string[]; scope: Scope } {
+  const matchIn = (files: string[]): string | null => {
     if (files.includes('CONTEXT.md')) return 'CONTEXT.md';
     return files.find((f: string) => f.endsWith('-CONTEXT.md')) ?? null;
+  };
+
+  if (Array.isArray(absDirOrFiles)) {
+    return matchIn(absDirOrFiles);
+  }
+
+  try {
+    const files = fs.readdirSync(absDirOrFiles);
+    return { file: matchIn(files), files, scope: SCOPE.COMPLETE };
   } catch (err) {
-    // #1883: distinguish genuine absence from a permission/I-O failure. ENOENT
-    // ("nothing there") keeps the long-standing null contract the callers rely
-    // on; every other error (EACCES, EIO, …) is a real read failure that must
-    // propagate — otherwise an unreadable phase dir is silently reported as
-    // "no CONTEXT.md" and the discuss/plan gates wrongly skip context.
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw err;
+    // #1883 / #4014: distinguish genuine absence from a permission/I-O
+    // failure. ENOENT ("nothing there") keeps the long-standing "real empty"
+    // contract callers rely on; every other error (EACCES, EIO, …) is a real
+    // read failure — reported as SCOPE.UNREADABLE rather than thrown, so a
+    // caller no longer needs its own try/catch to keep an unreadable phase
+    // dir from being silently reported the same as "no CONTEXT.md".
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { file: null, files: [], scope: SCOPE.COMPLETE };
+    }
+    return { file: null, files: [], scope: SCOPE.UNREADABLE };
   }
 }
 
@@ -606,10 +684,13 @@ export = {
   createMemoryPointerAdapter,
   planningDir,
   planningRoot,
+  resolveEnvWorkstream,
   resolvePhaseIdConvention,
   listAvailableWorkstreams,
   planningPaths,
   quickDirFrom,
+  todosDirFrom,
+  todosDir,
   withPlanningLock,
   getActiveWorkstream,
   peekActiveWorkstream,
