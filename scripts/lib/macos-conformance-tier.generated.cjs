@@ -173,6 +173,7 @@ module.exports = {
   "tests/roadmap-mode-field.test.cjs",
   "tests/roadmap-parser.test.cjs",
   "tests/roadmap-phase-fallback.test.cjs",
+  "tests/roadmap-upgrade-bracket.test.cjs",
   "tests/roadmap.test.cjs",
   "tests/runtime-artifact-layout.test.cjs",
   "tests/runtime-identity.test.cjs",
