@@ -240,6 +240,25 @@ describe('roadmap upgrade --convention bracket', () => {
     assert.doesNotMatch(rename.newDir, /\.\./, 'the target must not retain traversal tokens');
   });
 
+  test('names the phase and legacy directory when a bracket slug cannot be emitted', () => {
+    const cwd = materializeFixture('legacy-multi-milestone');
+    const phasesPath = path.join(cwd, '.planning', 'phases');
+    fs.renameSync(
+      path.join(phasesPath, '01-alpha'),
+      path.join(phasesPath, '01-2026'),
+    );
+    const before = snapshotTree(cwd, { skipGit: true });
+
+    const result = runBracketUpgrade(cwd);
+
+    assertExited(result, 1, 'all-digit bracket slug');
+    assert.match(
+      result.stderr,
+      /Cannot build bracket directory for phase "1" from source directory "01-2026"/,
+    );
+    assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'dry-run refusal must write nothing');
+  });
+
   test('apply refuses a dirty tracked working tree before mutating the ignored planning tree', () => {
     const cwd = materializeFixture('legacy-multi-milestone');
     fs.appendFileSync(path.join(cwd, 'README.md'), '\ndirty\n', 'utf8');
@@ -299,6 +318,27 @@ describe('roadmap upgrade --convention bracket', () => {
       before,
       'ignored planning tree must be byte-restored after rollback',
     );
+  });
+
+  test('a config write failure restores renamed directories and ROADMAP bytes', {
+    skip: process.platform === 'win32' ? 'requires POSIX mode-bit enforcement' : false,
+  }, () => {
+    const cwd = materializeFixture('legacy-multi-milestone');
+    const planningPath = path.join(cwd, '.planning');
+    const configPath = path.join(planningPath, 'config.json');
+    fs.chmodSync(configPath, 0o444);
+    const before = snapshotTree(planningPath);
+
+    const result = runBracketUpgrade(cwd, ['--apply']);
+
+    assertExited(result, 1, 'config write rollback');
+    assert.match(result.stderr, /Migration failed and rolled back/);
+    assert.deepEqual(
+      snapshotTree(planningPath),
+      before,
+      'ignored planning tree must be byte-restored after a config write failure',
+    );
+    assert.match(result.stderr, /config\.json write phase/);
   });
 
   test('an applied migration is idempotent on re-run', () => {

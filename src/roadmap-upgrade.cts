@@ -389,19 +389,27 @@ function buildBracketDirName(
   projectCode: string,
   mapping: BracketMapping,
   slug: string,
+  sourceDir: string,
 ): string {
   const milestone = pad2(mapping.milestoneInt);
   const [phase, subphase] = mapping.token.split('.');
   if (!slug) return `${projectCode}.${milestone}-${mapping.token}`;
-  return toDir(
-    {
-      project: projectCode,
-      milestone,
-      phase,
-      ...(subphase ? { subphase } : {}),
-    },
-    slug,
-  );
+  try {
+    return toDir(
+      {
+        project: projectCode,
+        milestone,
+        phase,
+        ...(subphase ? { subphase } : {}),
+      },
+      slug,
+    );
+  } catch (err) {
+    throw new Error(
+      `Cannot build bracket directory for phase ${JSON.stringify(mapping.sourceToken)} `
+      + `from source directory ${JSON.stringify(sourceDir)}: ${(err as Error).message}`,
+    );
+  }
 }
 
 function computeBracketPlan(cwd: string): MigrationPlan {
@@ -516,7 +524,7 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     if (!hit) continue;
     hit.used = true;
 
-    const newDir = buildBracketDirName(code, hit.mapping, matchedSlug);
+    const newDir = buildBracketDirName(code, hit.mapping, matchedSlug, dirName);
     if (newDir !== dirName) {
       phases.push({
         oldId: hit.mapping.sourceToken,
@@ -1029,7 +1037,11 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
 
     configData['phase_id_convention'] = plan.targetConvention ?? 'milestone-prefixed';
     snapshotFile(configPath);
-    fs.writeFileSync(configPath, JSON.stringify(configData, null, 2) + '\n', 'utf8');
+    try {
+      fs.writeFileSync(configPath, JSON.stringify(configData, null, 2) + '\n', 'utf8');
+    } catch (err) {
+      throw new Error(`config.json write phase failed: ${(err as Error).message}`);
+    }
     editedFiles.push('config.json');
 
   } catch (err) {
