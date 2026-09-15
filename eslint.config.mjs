@@ -271,8 +271,8 @@ export default tseslint.config(
       'gsd-core/bin/lib/core-utils.cjs',
       'gsd-core/bin/lib/io.cjs',
       'gsd-core/bin/lib/phase-id.cjs',
-      // #4144: tsc-generated bracket convention card; lint src/phase-id-card.cts.
       'gsd-core/bin/lib/phase-id-card.cjs',
+      'gsd-core/bin/lib/phase-id-display.cjs',
       'gsd-core/bin/lib/phase-estimation.cjs',
       'gsd-core/bin/lib/estimate-cli.cjs',
       'gsd-core/bin/lib/normalize-test-command.cjs',
