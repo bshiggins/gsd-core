@@ -1890,6 +1890,7 @@ function cmdPhaseInsert(
     );
     const anyHeadingPattern = new RegExp(`#{2,4}\\s*${headingIntro}\\d`, 'i');
     const roadmapHasHeadingPhases = anyHeadingPattern.test(content);
+    // #4304 review fix (Minor 3): bracket identities live in headings only, so a bracket ROADMAP never takes the legacy bullet-insertion branch — a bullet-only bracket ROADMAP falls through to the checklist-refusal path below instead.
     const isBulletStyle = !bracketContext && !headingMatch && bulletPattern.test(content) && !roadmapHasHeadingPhases;
 
     if (!headingMatch && !isBulletStyle) {

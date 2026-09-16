@@ -138,6 +138,37 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.deepEqual(fs.readdirSync(planning(dir, 'phases')), []);
   });
 
+  test('a bracket ROADMAP with only bullet-style phase rows refuses phase insert instead of falling back to legacy bullet insertion', () => {
+    // #4304 review fix (Minor 3): bracket identities live in headings only
+    // (cmdPhaseInsert forces isBulletStyle=false whenever bracketContext is
+    // set), so a bracket ROADMAP whose only phase row is bullet-style must
+    // take the checklist-only refusal path, not the legacy bullet-insertion
+    // path — even though the bullet line itself matches the bracket-aware
+    // bullet pattern.
+    const dir = project('adr-612-bracket-bullet-only-');
+    writeConfig(dir, 'bracket');
+    fs.writeFileSync(planning(dir, 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    fs.writeFileSync(
+      planning(dir, 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Foundation',
+        '',
+        '- [ ] [CK.02] 01: Foundation',
+        '',
+      ].join('\n'),
+    );
+    const before = fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8');
+
+    const result = runGsdTools(['phase', 'insert', '01', 'Second Hotfix'], dir);
+
+    assert.equal(result.success, false, result.error || result.output);
+    assert.match(result.error, /missing a detail section/);
+    assert.equal(fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8'), before);
+    assert.deepEqual(fs.readdirSync(planning(dir, 'phases')), []);
+  });
+
   test('phase add-batch allocates consecutive bracket ids', () => {
     const dir = project();
     writeBracketFixture(dir);
