@@ -2018,6 +2018,10 @@ Migrate an existing roadmap to a phase-ID convention. The historical
 `milestone-prefixed` target converts legacy `Phase N` IDs to `Phase M-NN`.
 The `bracket` target converts either legacy or M-NN IDs to `[CODE.MM] NN`,
 renames matching phase directories, and writes `phase_id_convention: "bracket"`.
+When a renamed directory's phase token changes, the bracket target also
+renames every phase-qualified artifact inside it (`03-VERIFICATION.md`,
+`03-01-PLAN.md`, and similar) to the new token, so existing plans and
+verification reports stay attached to their phase.
 
 | Flag | Required | Description |
 |------|----------|-------------|

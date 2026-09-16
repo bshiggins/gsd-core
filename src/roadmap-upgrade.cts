@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { retryRenameSync } from './shell-command-projection.cjs';
+import { escapeRegex } from './pattern.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -81,11 +82,24 @@ interface AssignedMapping {
   legacyPhaseNum: string;
 }
 
+/**
+ * #4698 Blocker 3: a phase-qualified artifact filename inside a renamed
+ * directory, mapped from its pre-migration name to its bracket-token name.
+ * Populated only by the bracket target (`computeBracketPlan`) — the
+ * historical milestone-prefixed target is unaffected and simply omits this
+ * field on its own `PhaseRename` entries.
+ */
+interface ArtifactRename {
+  oldName: string;
+  newName: string;
+}
+
 interface PhaseRename {
   oldId: string;
   newId: string;
   oldDir: string;
   newDir: string;
+  fileRenames?: ArtifactRename[];
 }
 
 interface RoadmapEdit {
@@ -362,8 +376,15 @@ function legacyLookupKey(token: string): string {
  * null. M-NN matching consumes exactly the expected number of numeric fields,
  * so a digit-leading slug remains a slug instead of becoming another identity
  * segment (the ambiguity the bracket convention removes).
+ *
+ * `matchedToken` is the identity segment(s) exactly AS SPELLED on disk (e.g.
+ * "02-04" or "02.1"), distinct from `mapping.sourceToken` (the ROADMAP
+ * heading's own spelling, which can differ in zero-padding). #4698 Blocker 3
+ * needs this exact on-disk spelling to locate and rename the phase's
+ * artifact files, whose filenames are written to match the DIRECTORY, not
+ * the heading.
  */
-function matchBracketSourceDir(dirName: string, mapping: BracketMapping): { slug: string } | null {
+function matchBracketSourceDir(dirName: string, mapping: BracketMapping): { slug: string; matchedToken: string } | null {
   const stripped = stripProjectCodePrefix(dirName);
 
   if (mapping.source === 'mnn') {
@@ -374,7 +395,10 @@ function matchBracketSourceDir(dirName: string, mapping: BracketMapping): { slug
       const actual = asciiInteger(parts[i]);
       if (actual === null || actual !== expected[i]) return null;
     }
-    return { slug: parts.slice(expected.length).join('-') };
+    return {
+      slug: parts.slice(expected.length).join('-'),
+      matchedToken: parts.slice(0, expected.length).join('-'),
+    };
   }
 
   const legacyDirMatch = stripped.match(
@@ -382,7 +406,89 @@ function matchBracketSourceDir(dirName: string, mapping: BracketMapping): { slug
   );
   if (!legacyDirMatch) return null;
   if (legacyLookupKey(legacyDirMatch[1]) !== legacyLookupKey(mapping.sourceToken)) return null;
-  return { slug: legacyDirMatch[2] ?? '' };
+  return { slug: legacyDirMatch[2] ?? '', matchedToken: legacyDirMatch[1] };
+}
+
+/**
+ * #4698 Blocker 3: a directory rename changes the phase's on-disk token, but
+ * the phase-qualified artifact FILENAMES inside it (`03-VERIFICATION.md`,
+ * `03-01-PLAN.md`, `03-CONTEXT.md`, `03-RESEARCH.md`, ...) keep spelling the
+ * OLD token unless renamed too. `isPhaseArtifact`'s bracket branch
+ * (src/phase-id.cts) compares the new bracket directory's own qualified/bare
+ * token against each candidate filename and excludes anything that
+ * disagrees — so a stale-prefixed artifact silently drops out of
+ * bracket-convention reads (verification, plan/summary scans) the moment its
+ * directory is renamed. Fix: rename every ROOT-LEVEL file (never anything
+ * inside a nested `plans/` subdirectory — see the docblock note below) whose
+ * name starts with the directory's OWN on-disk source token, spelled exactly
+ * as that directory spells it, followed by `-`, `.`, or the end of the name,
+ * to the new bracket artifact token — keeping the rest of the filename
+ * unchanged.
+ *
+ * NESTED `plans/` ARTIFACTS ARE OUT OF SCOPE: the #3139 nested layout writes
+ * `plans/PLAN-<n>.md` / `plans/SUMMARY-<n>.md` with NO phase-token prefix at
+ * all (phase.cts: "pairs a nested `plans/PLAN-01.md`... layout-agnostic" —
+ * the phase identity comes from the CONTAINING directory alone). There is
+ * nothing to rename there, so this function only ever reads the phase
+ * directory's own root entries (`fs.readdirSync` is not recursive), which
+ * naturally excludes the `plans/` subdirectory itself (a directory, not a
+ * file) without any extra filtering.
+ *
+ * Collisions are refused HERE, before `computeBracketPlan` returns — the
+ * same "refuse before any write" contract every other hard-refusal in this
+ * file already follows, so a colliding fixture is caught on dry-run too, not
+ * just on apply.
+ */
+function computeArtifactRenames(
+  dirName: string,
+  oldDirPath: string,
+  sourceToken: string,
+  targetToken: string,
+): ArtifactRename[] {
+  if (!sourceToken || sourceToken === targetToken) return [];
+
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(oldDirPath, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const tokenPrefixRe = new RegExp(`^${escapeRegex(sourceToken)}(?=[-.]|$)`);
+
+  const fileNames = entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
+  const renames: ArtifactRename[] = [];
+  for (const fileName of fileNames) {
+    if (!tokenPrefixRe.test(fileName)) continue;
+    const newName = fileName.replace(tokenPrefixRe, targetToken);
+    if (newName === fileName) continue;
+    renames.push({ oldName: fileName, newName });
+  }
+  if (renames.length === 0) return renames;
+
+  // Refuse before any write: a renamed target must not collide with a file
+  // that already has that name and is not itself being renamed away.
+  const renamedAway = new Set(renames.map((r) => r.oldName));
+  const staticNames = new Set(fileNames.filter((f) => !renamedAway.has(f)));
+  const producerByTarget = new Map<string, string>();
+  for (const rename of renames) {
+    if (staticNames.has(rename.newName)) {
+      throw new Error(
+        `Cannot rename artifact ${JSON.stringify(rename.oldName)} to ${JSON.stringify(rename.newName)} `
+        + `in phase directory ${JSON.stringify(dirName)}: a different file already has that name.`,
+      );
+    }
+    const producer = producerByTarget.get(rename.newName);
+    if (producer) {
+      throw new Error(
+        `Cannot migrate phase artifacts in ${JSON.stringify(dirName)}: both ${JSON.stringify(producer)} `
+        + `and ${JSON.stringify(rename.oldName)} would rename to ${JSON.stringify(rename.newName)}.`,
+      );
+    }
+    producerByTarget.set(rename.newName, rename.oldName);
+  }
+
+  return renames;
 }
 
 /**
@@ -576,6 +682,7 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     // which directory this loop visits first.
     let hit: { mapping: BracketMapping; used: boolean } | undefined;
     let matchedSlug = '';
+    let matchedToken = '';
     let bestSpecificity = -1;
     for (const candidate of orderedMappings) {
       if (candidate.used) continue;
@@ -586,6 +693,7 @@ function computeBracketPlan(cwd: string): MigrationPlan {
         bestSpecificity = specificity;
         hit = candidate;
         matchedSlug = match.slug;
+        matchedToken = match.matchedToken;
       }
     }
     if (!hit) continue;
@@ -598,6 +706,11 @@ function computeBracketPlan(cwd: string): MigrationPlan {
         newId: `${code}.${pad2(hit.mapping.milestoneInt)}-${hit.mapping.token}`,
         oldDir: dirName,
         newDir,
+        // #4698 Blocker 3: rename this directory's own phase-qualified
+        // artifacts (computed against the OLD path — nothing has moved yet,
+        // this is still plan computation) so they keep matching their
+        // phase's new bracket token after the directory itself is renamed.
+        fileRenames: computeArtifactRenames(dirName, path.join(phasesDir, dirName), matchedToken, hit.mapping.token),
       });
     }
   }
@@ -1043,7 +1156,13 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
   };
 
   try {
-    // 1. Rename phase directories
+    // 1. Rename phase directories, then (#4698 Blocker 3) any phase-qualified
+    // artifact filenames inside them whose names still spell the
+    // pre-migration phase token. File renames are recorded onto the SAME
+    // `performedRenames` list, immediately after their own directory's
+    // entry — rollback below walks this list newest-first, so a file rename
+    // is always reversed before the directory rename that contains it, which
+    // is the only order that can succeed.
     for (const phaseEntry of plan.phases) {
       const oldPath = path.join(phasesDir, phaseEntry.oldDir);
       const newPath = path.join(phasesDir, phaseEntry.newDir);
@@ -1051,6 +1170,15 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
         retryRenameSync(oldPath, newPath);
         performedRenames.push({ oldPath, newPath });
         renamedDirs.push(`${phaseEntry.oldDir} → ${phaseEntry.newDir}`);
+
+        for (const fileRename of phaseEntry.fileRenames ?? []) {
+          const oldFilePath = path.join(newPath, fileRename.oldName);
+          const newFilePath = path.join(newPath, fileRename.newName);
+          if (fs.existsSync(oldFilePath)) {
+            retryRenameSync(oldFilePath, newFilePath);
+            performedRenames.push({ oldPath: oldFilePath, newPath: newFilePath });
+          }
+        }
       }
     }
 

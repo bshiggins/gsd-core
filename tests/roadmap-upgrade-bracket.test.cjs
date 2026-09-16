@@ -30,6 +30,7 @@ const { cleanup, TOOLS_PATH } = helpers;
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { computeMigrationPlan, applyMigration } = require('../gsd-core/bin/lib/roadmap-upgrade.cjs');
+const { readVerificationStatus } = require('../gsd-core/bin/lib/verification.cjs');
 
 const FIXTURE_ROOT = path.join(__dirname, 'fixtures', 'roadmap-upgrade-bracket');
 const COMMAND_TIMEOUT_MS = 60000;
@@ -706,6 +707,188 @@ describe('roadmap upgrade --convention bracket', () => {
       assertExited(result, 1, 'zero recognized headings must still refuse under the Blocker 1 fix');
       assert.match(result.stderr, /No recognized phase headings/);
       assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'refusal must write nothing');
+    });
+  });
+
+  // #4698 Blocker 3: renaming a legacy/M-NN phase DIRECTORY to its bracket
+  // identity does not rename the phase-qualified ARTIFACT FILENAMES inside
+  // it. Legacy phases are renumbered per milestone by assignBracketTokens
+  // (03-gamma in milestone 2 becomes GSD.02-01-gamma — its on-disk token
+  // changes from "03" to "01"), so a contained 03-VERIFICATION.md keeps
+  // spelling the OLD token and src/phase-id.cts's bracket-convention artifact
+  // membership predicate (isPhaseArtifact) then excludes it: the report
+  // reads as missing and plans disappear from the phase after migration.
+  describe('renames phase-qualified artifacts inside a renamed directory (#4698 Blocker 3)', () => {
+    test('dry-run plan previews the artifact renames for every directory whose on-disk token changes', () => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'artifact-rename dry-run preview');
+
+      const byOldDir = Object.fromEntries(plan.phases.map((p) => [p.oldDir, p]));
+      // "01-alpha" keeps token "01" in its OWN milestone (first legacy phase
+      // in milestone 1) — the directory is still renamed (project code +
+      // milestone bracket added) but the phase TOKEN itself does not change,
+      // so no artifact inside it needs renaming.
+      assert.deepEqual(
+        byOldDir['01-alpha'].fileRenames,
+        [],
+        '01-alpha keeps token "01"; its artifacts must not be touched',
+      );
+      // "02.1-beta" is legacy token "02.1" but becomes the milestone's 2nd
+      // phase, bracket token "02" — every artifact must be renamed.
+      assert.deepEqual(
+        byOldDir['02.1-beta'].fileRenames.sort((a, b) => a.oldName.localeCompare(b.oldName)),
+        [
+          { oldName: '02.1-01-PLAN.md', newName: '02-01-PLAN.md' },
+          { oldName: '02.1-VERIFICATION.md', newName: '02-VERIFICATION.md' },
+        ],
+      );
+      // "03-gamma" is legacy token "03" but is the ONLY phase in milestone 2,
+      // so it becomes bracket token "01" — the exact repro from the review
+      // finding (03-VERIFICATION.md -> 01-VERIFICATION.md).
+      assert.deepEqual(
+        byOldDir['03-gamma'].fileRenames.sort((a, b) => a.oldName.localeCompare(b.oldName)),
+        [
+          { oldName: '03-01-PLAN.md', newName: '01-01-PLAN.md' },
+          { oldName: '03-VERIFICATION.md', newName: '01-VERIFICATION.md' },
+        ],
+      );
+    });
+
+    test('dry-run plan previews the M-NN artifact renames when the deep-slice subphase token changes', () => {
+      const cwd = materializeFixture('mnn-multi-milestone');
+
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'M-NN artifact-rename dry-run preview');
+
+      const byOldDir = Object.fromEntries(plan.phases.map((p) => [p.oldDir, p]));
+      assert.deepEqual(
+        byOldDir['GSD-02-01-foundation'].fileRenames.sort((a, b) => a.oldName.localeCompare(b.oldName)),
+        [
+          { oldName: '02-01-PLAN.md', newName: '01-PLAN.md' },
+          { oldName: '02-01-VERIFICATION.md', newName: '01-VERIFICATION.md' },
+        ],
+      );
+      assert.deepEqual(
+        byOldDir['GSD-02-04-01-deep-slice'].fileRenames.sort((a, b) => a.oldName.localeCompare(b.oldName)),
+        [
+          { oldName: '02-04-01-PLAN.md', newName: '04.01-PLAN.md' },
+          { oldName: '02-04-01-VERIFICATION.md', newName: '04.01-VERIFICATION.md' },
+        ],
+      );
+    });
+
+    test('apply renames the artifact files on disk, preserving their bytes', () => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      const gammaBytesBefore = {
+        plan: fs.readFileSync(path.join(cwd, '.planning', 'phases', '03-gamma', '03-01-PLAN.md')),
+        verification: fs.readFileSync(path.join(cwd, '.planning', 'phases', '03-gamma', '03-VERIFICATION.md')),
+      };
+
+      const result = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(result, 0, 'artifact-rename apply');
+
+      const gammaDir = path.join(cwd, '.planning', 'phases', 'GSD.02-01-gamma');
+      assert.equal(fs.existsSync(path.join(gammaDir, '03-01-PLAN.md')), false, 'old plan name must be gone');
+      assert.equal(fs.existsSync(path.join(gammaDir, '03-VERIFICATION.md')), false, 'old verification name must be gone');
+      assert.deepEqual(
+        fs.readFileSync(path.join(gammaDir, '01-01-PLAN.md')),
+        gammaBytesBefore.plan,
+        'renamed plan file must keep its exact original bytes',
+      );
+      assert.deepEqual(
+        fs.readFileSync(path.join(gammaDir, '01-VERIFICATION.md')),
+        gammaBytesBefore.verification,
+        'renamed verification file must keep its exact original bytes',
+      );
+
+      const betaDir = path.join(cwd, '.planning', 'phases', 'GSD.01-02-beta');
+      assert.equal(fs.existsSync(path.join(betaDir, '02-01-PLAN.md')), true);
+      assert.equal(fs.existsSync(path.join(betaDir, '02-VERIFICATION.md')), true);
+
+      // "01-alpha" -> "GSD.01-01-alpha": token unchanged, artifact names untouched.
+      const alphaDir = path.join(cwd, '.planning', 'phases', 'GSD.01-01-alpha');
+      assert.equal(fs.existsSync(path.join(alphaDir, '01-01-PLAN.md')), true);
+      assert.equal(fs.existsSync(path.join(alphaDir, '01-VERIFICATION.md')), true);
+    });
+
+    test('a legacy phase renumbered by the migration is still complete-readable by the real verification reader', () => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+
+      const result = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(result, 0, 'artifact-rename apply for verification-reader check');
+
+      const gammaDir = path.join(cwd, '.planning', 'phases', 'GSD.02-01-gamma');
+      const status = readVerificationStatus(gammaDir, { convention: 'bracket' });
+
+      assert.equal(
+        status.status,
+        'passed',
+        'the renamed 01-VERIFICATION.md must still resolve as this phase\'s own report, not "missing"',
+      );
+    });
+
+    test('a name collision between a renamed artifact and an existing file is refused before any write', () => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      // "03-gamma" -> bracket token "01": 03-VERIFICATION.md would rename to
+      // 01-VERIFICATION.md. Pre-seed that exact colliding name so the plan
+      // must refuse rather than silently overwrite or pick one arbitrarily.
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'phases', '03-gamma', '01-VERIFICATION.md'),
+        'a pre-existing, unrelated file that must not be silently overwritten\n',
+        'utf8',
+      );
+      const before = snapshotTree(cwd, { skipGit: true });
+
+      const dryRun = runBracketUpgrade(cwd);
+      assertExited(dryRun, 1, 'artifact-rename collision (dry-run)');
+      assert.match(dryRun.stderr, /already has that name|would rename to/);
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'dry-run refusal must write nothing');
+
+      const apply = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(apply, 1, 'artifact-rename collision (apply)');
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'apply refusal must write nothing');
+    });
+
+    test('a failure after directory and artifact renames complete rolls both back byte-for-byte', (t) => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      const planningPath = path.join(cwd, '.planning');
+      const roadmapPath = path.join(planningPath, 'ROADMAP.md');
+
+      const plan = computeMigrationPlan(cwd, { convention: 'bracket' });
+      assert.equal(plan.alreadyMigrated, false);
+      const gammaEntry = plan.phases.find((p) => p.oldDir === '03-gamma');
+      assert.ok(gammaEntry, 'fixture must produce the 03-gamma rename');
+      assert.ok(gammaEntry.fileRenames.length >= 1, 'fixture must produce at least one artifact rename to reverse');
+
+      const before = snapshotTree(planningPath);
+
+      // Fail at the ROADMAP.md write — step 2, strictly AFTER step 1's
+      // directory renames AND their artifact renames have already completed
+      // on disk. This is the specific "failure after the artifact renames"
+      // case the brief asks fault-injection to prove reversible.
+      const realWrite = fs.writeFileSync;
+      const writeMock = mock.method(fs, 'writeFileSync', (target, data, opts) => {
+        if (path.resolve(String(target)) === path.resolve(roadmapPath)) {
+          throw Object.assign(new Error('EIO: simulated write failure'), { code: 'EIO' });
+        }
+        return realWrite.call(fs, target, data, opts);
+      });
+      t.after(() => writeMock.mock.restore());
+
+      let caught;
+      try {
+        applyMigration(cwd, plan, { dryRun: false });
+      } catch (err) {
+        caught = err;
+      }
+
+      assert.ok(caught, 'a ROADMAP.md write failure must throw, not silently succeed');
+      assert.match(caught.message, /Migration failed and rolled back/);
+      assert.deepEqual(
+        snapshotTree(planningPath),
+        before,
+        'directory renames AND their artifact renames must both be reversed, byte-for-byte',
+      );
     });
   });
 });
