@@ -158,4 +158,65 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal((roadmap.match(/^\| \[CK\.02\] 01\.01 \|/gm) ?? []).length, 1);
     assert.equal(roadmap.includes('### [CK.02] 02: Two'), true);
   });
+
+  // #4304 Blocker 1: a qualified bracket id (`CK.02-02`) used to resolve and
+  // delete its directory, then crash on `parseInt(normalized, 10)` (NaN)
+  // inside renameBracketPhases/updateRoadmapAfterBracketPhaseRemoval, leaving
+  // ROADMAP and STATE unsynced with the already-deleted directory. The fix
+  // parses the qualified form through parsePhaseId and validates it BEFORE
+  // any deletion.
+  test('removes a phase using its fully-qualified bracket id, identically to the bare form', () => {
+    const result = runGsdTools(['phase', 'remove', 'CK.02-02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+
+    assert.equal(out.directory_deleted, 'CK.02-02-two');
+    assert.equal(out.roadmap_updated, true);
+    assert.equal(out.state_updated, true);
+    assert.deepEqual(
+      fs.readdirSync(planning('phases')).sort(),
+      [
+        'CK.01-02-prior-decoy',
+        'CK.02-01-one',
+        'CK.02-01.01-first-insert',
+        'CK.02-01.02-second-insert',
+        'CK.02-02-three',
+        'CK.02-03-four',
+      ],
+    );
+    assert.equal(fs.existsSync(planning('phases', 'CK.02-02-three', '02-01-PLAN.md')), true);
+    assert.equal(fs.existsSync(planning('phases', 'CK.02-03-four', '03-01-PLAN.md')), true);
+
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    assert.equal(roadmap.includes('### [CK.01] 02: Prior Decoy'), true);
+    assert.equal(roadmap.includes('### [CK.02] 02: Two'), false);
+    assert.equal(roadmap.includes('### [CK.02] 02: Three'), true);
+    assert.equal(roadmap.includes('### [CK.02] 03: Three'), false);
+    assert.equal(roadmap.includes('### [CK.02] 03: Four'), true);
+  });
+
+  test('removes a phase using its fully-qualified decimal bracket id (subphase)', () => {
+    const result = runGsdTools(['phase', 'remove', 'CK.02-01.01', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+
+    assert.equal(fs.existsSync(planning('phases', 'CK.02-01.01-first-insert')), false);
+    assert.equal(fs.existsSync(planning('phases', 'CK.02-01.01-second-insert')), true);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    assert.equal(roadmap.includes('First Insert'), false);
+    assert.equal(roadmap.includes('### [CK.02] 01.01: Second Insert'), true);
+    assert.equal(roadmap.includes('### [CK.02] 02: Two'), true);
+  });
+
+  test('refuses a qualified id naming a different milestone, leaving the directory in place', () => {
+    const roadmapBefore = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    const dirsBefore = fs.readdirSync(planning('phases')).sort();
+
+    const result = runGsdTools(['phase', 'remove', 'CK.01-02', '--force'], tmpDir);
+
+    assert.equal(result.success, false, result.output);
+    assert.match(result.error, /active milestone/i);
+    assert.equal(fs.existsSync(planning('phases', 'CK.01-02-prior-decoy')), true);
+    assert.equal(fs.readFileSync(planning('ROADMAP.md'), 'utf8'), roadmapBefore);
+    assert.deepEqual(fs.readdirSync(planning('phases')).sort(), dirsBefore);
+  });
 });

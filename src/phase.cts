@@ -2637,17 +2637,20 @@ function renameBracketPhases(
 
 function updateRoadmapAfterBracketPhaseRemoval(
   roadmapPath: string,
-  targetPhase: string,
-  isDecimal: boolean,
   removedInt: number,
+  removedSubphase: number | undefined,
   context: BracketWriteContext,
   cwd: string,
 ): boolean {
   return withPlanningLock(cwd, () => {
     const originalContent = fs.readFileSync(roadmapPath, 'utf-8');
-    const removedSubphase = isDecimal
-      ? parseInt(targetPhase.split('.')[1], 10)
-      : undefined;
+    // #4304 Blocker 1: removedInt/removedSubphase are now the caller's
+    // already-validated, already-canonical values (see cmdPhaseRemove) —
+    // this function no longer re-derives them from a targetPhase string,
+    // which broke for a qualified id like `CK.02-02` (isDecimal was true
+    // because the MILESTONE half contains a dot, and `removedSubphase` was
+    // read off the wrong segment).
+    const isDecimal = removedSubphase !== undefined;
     const targetDisplay = renderPhaseId(
       bracketPhaseId(context, removedInt, removedSubphase),
     );
@@ -2746,13 +2749,64 @@ function cmdPhaseRemove(
 
   if (!fs.existsSync(roadmapPath)) error('ROADMAP.md not found');
 
-  const normalized = normalizePhaseName(targetPhase);
-  const isDecimal = targetPhase.includes('.');
   const force = options.force || false;
   const removeConvention = resolvePhaseIdConvention(cwd);
   const removeContext = removeConvention === 'bracket'
     ? bracketWriteContext(cwd, loadConfig(cwd))
     : null;
+
+  // #4304 Blocker 1 fix: a bracket project's `phase remove` argument may be a
+  // bare number (`02`, `02.1`), the on-disk qualified id (`CK.02-02`,
+  // `CK.02-02.1`), or the display form (`[CK.02] 02`) — the same shapes the
+  // ROADMAP and directory names themselves carry. `normalizePhaseName` leaves
+  // a qualified/display string untouched (it only knows the bare grammar), so
+  // parsing it through `parsePhaseId` — the SAME canonical parser the
+  // read/emit paths already trust — resolves it to a real
+  // {project, milestone, phase, subphase} tuple instead of a string
+  // `matchPhaseDirs` merely happens to pattern-match. The milestone is
+  // checked against the ACTIVE write context and every numeric value is
+  // derived here, BEFORE any deletion, so a qualified id naming another
+  // milestone — or one whose numbers cannot be rendered by the bracket
+  // convention — is refused with the phase directory still present, rather
+  // than deleted and then crashing on `parseInt(normalized, 10)` producing
+  // NaN (the prior defect: fs.rmSync ran unconditionally before this parse
+  // was ever attempted). A non-bracket project never reaches the
+  // `removeContext` branch below, so `normalized`/`isDecimal` stay exactly
+  // `normalizePhaseName(targetPhase)` / `targetPhase.includes('.')`,
+  // byte-identical to before — as does the bare form under bracket, since
+  // `parsePhaseId` rejects it (no project-code prefix) and leaves this
+  // fallback untouched.
+  let normalized = normalizePhaseName(targetPhase);
+  let isDecimal = targetPhase.includes('.');
+  if (removeContext) {
+    type QualifiedRemoveId = { project: string; milestone: string; phase: string; subphase?: string };
+    let qualifiedId: QualifiedRemoveId | null;
+    try {
+      qualifiedId = parsePhaseId(targetPhase) as QualifiedRemoveId;
+    } catch {
+      qualifiedId = null;
+    }
+    if (qualifiedId) {
+      if (qualifiedId.project !== removeContext.project || qualifiedId.milestone !== removeContext.milestone) {
+        error(
+          `Phase ${targetPhase} belongs to milestone [${qualifiedId.project}.${qualifiedId.milestone}], `
+          + `but the active milestone is [${removeContext.project}.${removeContext.milestone}]. `
+          + 'Refusing to remove a phase outside the active milestone.',
+        );
+      }
+      isDecimal = qualifiedId.subphase !== undefined;
+      normalized = isDecimal ? `${qualifiedId.phase}.${qualifiedId.subphase}` : qualifiedId.phase;
+    }
+  }
+  const removedInt = parseInt(normalized, 10);
+  const removedSubphase = isDecimal ? parseInt(normalized.split('.')[1], 10) : undefined;
+  if (removeContext && (!Number.isSafeInteger(removedInt) || (isDecimal && !Number.isSafeInteger(removedSubphase!)))) {
+    // Every validation must run before any deletion (see above) — a target
+    // that cannot be rendered by the bracket convention at all (a malformed
+    // custom id `normalizePhaseName` passed through unchanged) is refused
+    // here rather than reaching fs.rmSync and crashing afterward.
+    error(`Phase ${targetPhase} cannot be resolved to a bracket phase number`);
+  }
 
   const subdirs = readSubdirectories(phasesDir, true);
   // #2237/#2528: every other resolution path refuses to choose between multiple
@@ -2809,11 +2863,14 @@ function cmdPhaseRemove(
   let renamedFileCollisions: { from: string; to: string; displaced_to: string | null }[] = [];
   try {
     if (removeContext) {
+      // #4304 Blocker 1: reuse the SAME removedInt/removedSubphase validated
+      // above (before deletion) instead of re-deriving from `normalized`,
+      // which is NaN for a qualified id like `CK.02-02`.
       const renamed = renameBracketPhases(
         phasesDir,
-        parseInt(normalized, 10),
+        removedInt,
         removeContext,
-        isDecimal ? parseInt(normalized.split('.')[1], 10) : undefined,
+        removedSubphase,
       );
       renamedDirs = renamed.renamedDirs;
       renamedFiles = renamed.renamedFiles;
@@ -2849,9 +2906,8 @@ function cmdPhaseRemove(
   const roadmapUpdated = removeContext
     ? updateRoadmapAfterBracketPhaseRemoval(
         roadmapPath,
-        normalized,
-        isDecimal,
-        parseInt(normalized, 10),
+        removedInt,
+        removedSubphase,
         removeContext,
         cwd,
       )
