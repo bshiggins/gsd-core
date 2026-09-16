@@ -33,11 +33,14 @@ const {
   PHASE_HEADING_BASELINE,
   isSentinelPhaseId,
   scopeToPhase,
-  parsePhaseId,
-  renderPhaseId,
   // #2761 M3: owns the bracket milestone intro and canonical pad2 spelling.
   bracketMilestoneIntroSrcFor,
 } = phaseIdMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseIdDisplayMod = require('./phase-id-display.cjs');
+// #4304 review fix (Major): phaseDisplayFor below renders through this adapter
+// instead of re-deriving the bracket numeric grammar locally.
+const { renderBracketPhaseDisplay } = phaseIdDisplayMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
 // #3642: hasMilestoneSectioning no longer consumed here — its >=2 semantics answered sibling conflation, but this branch asks asserted-vs-section (>=1). It stays exported from roadmap-parser.cjs for its unit pins.
@@ -80,28 +83,14 @@ function phaseDisplayFor(cwd: string, phaseNumber: string | number): string {
 
   const info = getMilestoneInfo(cwd);
   const version = info.value?.version ?? '';
-  const milestoneMatch = String(version).match(/^v?(\d+)/i);
-  if (!milestoneMatch) {
-    error('phase_id_convention is "bracket" but the active milestone cannot be resolved');
+  const display = renderBracketPhaseDisplay(version, phaseNumber, project);
+  if (display === null) {
+    error(
+      `phase_id_convention is "bracket" but phase ${phaseNumber} cannot be rendered ` +
+        `(the active milestone ${JSON.stringify(version)} cannot be resolved, or the phase number is invalid)`,
+    );
   }
-
-  const parts = String(phaseNumber).split('.');
-  if (parts.length > 2 || parts.some((part) => !/^\d+$/.test(part))) {
-    error(`phase ${phaseNumber} cannot be rendered by the bracket convention`);
-  }
-  const canonical = (value: string): string => {
-    const numeric = Number(value);
-    if (!Number.isSafeInteger(numeric)) error(`phase identity field ${value} exceeds the supported integer range`);
-    return String(numeric).padStart(2, '0');
-  };
-  const id: { project: string; milestone: string; phase: string; subphase?: string } = {
-    project,
-    milestone: canonical(milestoneMatch![1]),
-    phase: canonical(parts[0]),
-  };
-  if (parts[1] !== undefined) id.subphase = canonical(parts[1]);
-  const display = renderPhaseId(id);
-  return renderPhaseId(parsePhaseId(display));
+  return display!;
 }
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import scanPhasePlans = require('./plan-scan.cjs');

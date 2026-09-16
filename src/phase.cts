@@ -57,6 +57,12 @@ const {
   OPTIONAL_PHASE_TAG_SOURCE,
   PHASE_NUMBER_TOKEN_SOURCE,
 } = phaseIdMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseIdDisplayMod = require('./phase-id-display.cjs');
+// #4304 review fix (Major): reuse the Phase Id Display Module's milestone/phase
+// numeric canonicalization instead of re-deriving it here — see
+// bracketWriteContext/bracketPhaseId below.
+const { milestoneToken, phaseToken } = phaseIdDisplayMod;
 import { escapeRegex } from './pattern.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-locator.cjs is an export= CommonJS module
 import phaseLocatorMod = require('./phase-locator.cjs');
@@ -1282,19 +1288,6 @@ type BracketWriteContext = {
 };
 
 /**
- * Canonicalize one numeric field before handing the complete identity to the
- * phase-id owner. This mirrors the owner's two-character minimum without ever
- * assembling a display or directory spelling locally.
- */
-function bracketNumericField(value: unknown, label: string): string {
-  const raw = String(value);
-  if (!/^\d+$/.test(raw)) error(`${label} must be a non-negative integer`);
-  const numeric = Number(raw);
-  if (!Number.isSafeInteger(numeric)) error(`${label} exceeds the supported integer range`);
-  return String(numeric).padStart(2, '0');
-}
-
-/**
  * Resolve the write identity shared by add/insert/remove. Convention selection
  * happens at the caller and is the sole branch gate; project/milestone checks
  * here validate the identity after that branch has already been selected.
@@ -1309,12 +1302,12 @@ function bracketWriteContext(cwd: string, config: Record<string, unknown>): Brac
     value?: { version?: string } | null;
   };
   const version = milestoneInfo.value?.version ?? '';
-  const match = String(version).match(/^v?(\d+)/i);
-  if (!match) {
+  const milestone = milestoneToken(version);
+  if (milestone === null) {
     error('phase_id_convention is "bracket" but the active milestone cannot be resolved');
   }
 
-  return { project, milestone: bracketNumericField(match![1], 'milestone') };
+  return { project, milestone: milestone! };
 }
 
 function bracketPhaseId(
@@ -1322,12 +1315,22 @@ function bracketPhaseId(
   phase: unknown,
   subphase?: unknown,
 ): { project: string; milestone: string; phase: string; subphase?: string } {
+  const phaseTok = phaseToken(phase);
+  if (phaseTok === null) {
+    error(`phase ${String(phase)} cannot be rendered by the bracket convention`);
+  }
   const id: { project: string; milestone: string; phase: string; subphase?: string } = {
     project: context.project,
     milestone: context.milestone,
-    phase: bracketNumericField(phase, 'phase'),
+    phase: phaseTok!,
   };
-  if (subphase !== undefined) id.subphase = bracketNumericField(subphase, 'subphase');
+  if (subphase !== undefined) {
+    const subphaseTok = phaseToken(subphase);
+    if (subphaseTok === null) {
+      error(`phase ${String(phase)} subphase ${JSON.stringify(subphase)} cannot be rendered by the bracket convention`);
+    }
+    id.subphase = subphaseTok!;
+  }
   return id;
 }
 
