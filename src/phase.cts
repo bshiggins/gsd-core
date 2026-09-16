@@ -2009,13 +2009,34 @@ function cmdPhaseInsert(
         `(#{2,4}\\s*${headingIntro}${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}:[^\\n]*\\n)`,
         'i',
       );
-      const headerMatch = rawContent.match(headerPattern);
+      // #4304 Blocker 2 fix: a bracket ROADMAP can have the same phase number
+      // in more than one milestone (`[CK.01] 01:` and `[CK.02] 01:`) —
+      // headingIntro matches ANY project.milestone bracket, not just the
+      // active one, so rawContent.match found the FIRST occurrence in the
+      // whole document regardless of which milestone is active, and the
+      // "next phase" boundary search from there could land the insertion
+      // inside an earlier milestone's own section. Scope both the header
+      // lookup and the next-phase boundary to the active milestone's own
+      // section — the same raw offsets `currentMilestoneRawRanges` already
+      // derives for the read/scoping paths — so the insertion point can
+      // never land outside it. Falls back to the legacy whole-document
+      // search when the active milestone cannot be offset-scoped (mirrors
+      // cmdPhaseComplete's own null fallback for this same helper), and stays
+      // the untouched whole-document search for every non-bracket
+      // convention, which never had this cross-milestone ambiguity.
+      const bracketSectionRanges = bracketContext
+        ? currentMilestoneRawRanges(rawContent, cwd)
+        : null;
+      const searchStart = bracketSectionRanges ? bracketSectionRanges.primary.start : 0;
+      const searchEnd = bracketSectionRanges ? bracketSectionRanges.primary.end : rawContent.length;
+      const searchWindow = rawContent.slice(searchStart, searchEnd);
+      const headerMatch = searchWindow.match(headerPattern);
       if (!headerMatch) {
         error(`Could not find Phase ${afterPhase} header`);
       }
 
-      const headerIdx = rawContent.indexOf(headerMatch![0]);
-      const afterHeader = rawContent.slice(headerIdx + headerMatch![0].length);
+      const headerIdx = searchStart + searchWindow.indexOf(headerMatch![0]);
+      const afterHeader = rawContent.slice(headerIdx + headerMatch![0].length, searchEnd);
       const nextPhaseMatch = afterHeader.match(
         new RegExp(`\\r?\\n#{2,4}\\s+${headingIntro}\\d[\\d.]*`, 'i'),
       );
@@ -2024,7 +2045,7 @@ function cmdPhaseInsert(
       if (nextPhaseMatch) {
         insertIdx = headerIdx + headerMatch![0].length + (nextPhaseMatch.index as number);
       } else {
-        insertIdx = rawContent.length;
+        insertIdx = searchEnd;
       }
 
       updatedContent =

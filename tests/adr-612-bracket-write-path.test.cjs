@@ -209,6 +209,66 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     );
   });
 
+  // #4304 Blocker 2: the bracket branch validated the parent heading against
+  // extractCurrentMilestone (correctly scoped to the active milestone) but
+  // then located the insertion point with headerPattern against the WHOLE
+  // rawContent. rawContent.match found CK.01's OWN "01:" heading first (an
+  // earlier milestone sharing the same phase number), and the "next phase"
+  // boundary search from there found CK.01's OWN later phase heading before
+  // ever reaching CK.02 — landing the new phase BETWEEN CK.01's own phase
+  // headings, so the active milestone (CK.02) never received it at all.
+  test('phase insert scopes the insertion point to the active milestone when an earlier milestone shares the same phase number', () => {
+    const dir = project('adr-612-bracket-cross-milestone-insert-');
+    writeConfig(dir, 'bracket');
+    fs.writeFileSync(planning(dir, 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    const roadmapBefore = [
+      '# Roadmap',
+      '',
+      '## [CK.01] v1.0 — Prior',
+      '',
+      '### [CK.01] 01: Old One',
+      '',
+      '**Goal:** untouched',
+      '',
+      '### [CK.01] 02: Old Two',
+      '',
+      '**Goal:** also untouched',
+      '',
+      '## [CK.02] v2.0 — Current',
+      '',
+      '### [CK.02] 01: One',
+      '',
+      '**Goal:** keep',
+      '',
+    ].join('\n');
+    fs.writeFileSync(planning(dir, 'ROADMAP.md'), roadmapBefore);
+    fs.mkdirSync(planning(dir, 'phases', 'CK.01-01-old-one'), { recursive: true });
+    fs.mkdirSync(planning(dir, 'phases', 'CK.01-02-old-two'), { recursive: true });
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-01-one'), { recursive: true });
+
+    const ck01SectionBefore = roadmapBefore.slice(
+      roadmapBefore.indexOf('## [CK.01]'),
+      roadmapBefore.indexOf('## [CK.02]'),
+    );
+
+    const out = run(['phase', 'insert', '01', 'Hotfix'], dir);
+
+    assert.equal(out.phase_number, '01.01');
+    assert.equal(out.directory, '.planning/phases/CK.02-01.01-hotfix');
+    assert.equal(fs.existsSync(planning(dir, 'phases', 'CK.02-01.01-hotfix')), true);
+
+    const roadmapAfter = fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8');
+    const ck01SectionAfter = roadmapAfter.slice(
+      roadmapAfter.indexOf('## [CK.01]'),
+      roadmapAfter.indexOf('## [CK.02]'),
+    );
+    assert.equal(ck01SectionAfter, ck01SectionBefore);
+
+    const ck02SectionAfter = roadmapAfter.slice(roadmapAfter.indexOf('## [CK.02]'));
+    assert.equal(ck02SectionAfter.includes('### [CK.02] 01.01: Hotfix (INSERTED)'), true);
+    assert.equal(roadmapAfter.includes('### [CK.01] 01.01'), false);
+  });
+
   test('phase insert --sibling allocates the next bracket subphase at the parent level', () => {
     const dir = project('adr-612-bracket-sibling-insert-');
     writeBracketFixture(dir);
