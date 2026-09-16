@@ -526,4 +526,65 @@ describe('roadmap upgrade --convention bracket', () => {
       );
     });
   });
+
+  // #4698 Blocker 1: `applyMigration` stamped `phase_id_convention` only when
+  // `plan.phases.length > 0`, but `phases` holds DIRECTORY renames, not
+  // converted HEADINGS. A roadmap with recognizable headings and zero phase
+  // directories on disk therefore had its headings rewritten to bracket text
+  // while config stayed unset — and Blocker 2's own mixed/partial guard above
+  // then permanently refuses every retry (headings read bracket, config does
+  // not: `alreadyBracket.length > 0 && unconverted.length > 0` after a repair
+  // attempt could never apply here since NO unconverted headings remain, but
+  // the untouched config also never says "bracket", so a caller checking
+  // config directly stays fooled). Activation must instead follow whether any
+  // identity — heading OR directory — actually converted.
+  describe('activates the convention on converted headings, not just directory renames (#4698 Blocker 1)', () => {
+    test('bracket target: headings convert and config is stamped even with zero phase directories', () => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      cleanup(path.join(cwd, '.planning', 'phases'));
+
+      const plan = computeMigrationPlan(cwd, { convention: 'bracket' });
+      assert.equal(plan.alreadyMigrated, false);
+      assert.equal(plan.phases.length, 0, 'fixture must have zero phase directories after removal');
+      assert.ok(plan.roadmapEdits.length >= 1, 'fixture must still produce heading conversions');
+
+      const result = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(result, 0, 'headings-only bracket apply');
+
+      const roadmap = fs.readFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), 'utf8');
+      assert.match(roadmap, /### \[GSD\.01\] 01: Alpha/);
+      assert.match(roadmap, /### \[GSD\.01\] 02: Beta/);
+      assert.match(roadmap, /### \[GSD\.02\] 01: Gamma/);
+      const config = JSON.parse(fs.readFileSync(path.join(cwd, '.planning', 'config.json'), 'utf8'));
+      assert.equal(
+        config.phase_id_convention,
+        'bracket',
+        'config must be stamped once headings convert, even though zero directories were renamed',
+      );
+
+      // A second run must see every heading as already bracket and
+      // short-circuit to `done` — never re-refuse as "mixed" and never
+      // rewrite anything (the exact retry Blocker 1 made unreachable).
+      const afterFirst = snapshotTree(cwd, { skipGit: true });
+      const second = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(second, 0, 'second headings-only bracket apply must be `done`, not refused');
+      assert.deepEqual(
+        snapshotTree(cwd, { skipGit: true }),
+        afterFirst,
+        'second run must be a no-op once config already says bracket and headings agree',
+      );
+    });
+
+    test('the empty-plan refusal from #4698 Blocker 2 still writes nothing (regression guard)', () => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      fs.writeFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), '', 'utf8');
+      const before = snapshotTree(cwd, { skipGit: true });
+
+      const result = runBracketUpgrade(cwd, ['--apply']);
+
+      assertExited(result, 1, 'zero recognized headings must still refuse under the Blocker 1 fix');
+      assert.match(result.stderr, /No recognized phase headings/);
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'refusal must write nothing');
+    });
+  });
 });

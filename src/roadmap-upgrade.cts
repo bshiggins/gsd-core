@@ -1066,14 +1066,22 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
     }
 
     // 4. Update config.json to the convention named by this plan — but only
-    // when the plan actually converted at least one phase (#4698 Blocker 2).
-    // An empty plan (e.g. a roadmap this migrator failed to recognize) must
-    // never stamp phase_id_convention: computeBracketPlan's own idempotency
-    // guard treats that stamp as proof the migration already finished, so a
-    // write here with nothing converted would make the correct re-run (once
-    // the roadmap is fixed) permanently unreachable. Legacy plans omit
-    // targetConvention and retain the historical milestone-prefixed target.
-    if (plan.phases.length > 0) {
+    // when the plan actually converted at least one IDENTITY (#4698 Blocker
+    // 1/2). `plan.phases` holds DIRECTORY renames, not converted HEADINGS —
+    // gating on `phases.length` alone left a roadmap with recognizable
+    // headings but zero phase directories on disk (nothing to rename) with
+    // its ROADMAP.md already rewritten to the target convention's text while
+    // config stayed unset, and Blocker 2's own mixed/partial guard then
+    // permanently refuses every retry (headings already read as the target
+    // convention, config does not). An empty plan (e.g. a roadmap this
+    // migrator failed to recognize) must still never stamp
+    // phase_id_convention: computeBracketPlan's own idempotency guard treats
+    // that stamp as proof the migration already finished, so a write here
+    // with nothing converted would make the correct re-run (once the roadmap
+    // is fixed) permanently unreachable. Applies identically to both targets
+    // — legacy (milestone-prefixed) plans omit targetConvention and retain
+    // the historical default.
+    if (plan.phases.length > 0 || plan.roadmapEdits.length > 0) {
       let configData: Record<string, unknown> = {};
       try {
         configData = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
