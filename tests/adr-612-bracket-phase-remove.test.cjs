@@ -260,6 +260,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
         '',
       ].join('\n'),
     );
+    // eslint-disable-next-line local/no-raw-rmsync-in-tests -- removing only the .planning/phases subdir within a still-live fixture (this test replaces seed()'s ROADMAP with its own, and the seeded phase dirs would otherwise leak in as unrelated rename candidates); helpers.cleanup() tears down the whole tmpDir, not a subdirectory, so it cannot substitute here.
     fs.rmSync(planning('phases'), { recursive: true, force: true });
     makePhaseDir('CK.01-03-prior-three', ['03-01-PLAN.md', '03-01-SUMMARY.md']);
     makePhaseDir('CK.02-02-two', ['02-01-PLAN.md']);

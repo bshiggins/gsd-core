@@ -2735,7 +2735,7 @@ function updateRoadmapAfterBracketPhaseRemoval(
       const [phase, subphase, extra] = String(rawToken).split('.');
       if (extra || !/^\d+$/.test(phase) || (subphase !== undefined && !/^\d+$/.test(subphase))) continue;
       if (isDecimal) {
-        if (Number(phase) === removedInt && subphase !== undefined && Number(subphase) > removedSubphase!) {
+        if (Number(phase) === removedInt && subphase !== undefined && Number(subphase) > removedSubphase) {
           tokens.add(Number(subphase));
         }
       } else if (Number(phase) > removedInt && !isSentinelPhaseId(Number(phase))) {
@@ -2822,7 +2822,7 @@ function cmdPhaseRemove(
     type QualifiedRemoveId = { project: string; milestone: string; phase: string; subphase?: string };
     let qualifiedId: QualifiedRemoveId | null;
     try {
-      qualifiedId = parsePhaseId(targetPhase) as QualifiedRemoveId;
+      qualifiedId = parsePhaseId(targetPhase);
     } catch {
       qualifiedId = null;
     }
