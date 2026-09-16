@@ -2712,8 +2712,26 @@ function updateRoadmapAfterBracketPhaseRemoval(
       if (deleted.ok) content = before + deleted.value + rest;
     }
 
+    // #4304 Blocker 3 fix: the display-id replace below is milestone-qualified
+    // ("[CK.02] 03" can never match "[CK.01] 03"), but the bare artifact-token
+    // replace that follows it is not — artifact filenames carry no milestone
+    // qualifier (the phase DIRECTORY does), so "03-01-PLAN.md" is textually
+    // indistinguishable from an earlier milestone's own "03-01-PLAN.md"
+    // reference. Confine both the token scan and both replaces below to the
+    // active milestone's own section, using the same raw offsets
+    // `currentMilestoneRawRanges` already derives for the read/scoping paths
+    // (mirrors cmdPhaseInsert's Blocker 2 fix), so a token collision with a
+    // sibling milestone's own artifact reference can never cross the section
+    // boundary. Falls back to whole-content replacement — the prior
+    // behaviour — only when the active milestone cannot be offset-scoped,
+    // mirroring cmdPhaseComplete's own null fallback for this same helper.
+    const bracketSectionRanges = currentMilestoneRawRanges(content, cwd);
+    const sectionStart = bracketSectionRanges ? bracketSectionRanges.primary.start : 0;
+    const sectionEnd = bracketSectionRanges ? bracketSectionRanges.primary.end : content.length;
+    let section = content.slice(sectionStart, sectionEnd);
+
     const tokens = new Set<number>();
-    for (const rawToken of scanMilestonePhaseIds(content, 'bracket')) {
+    for (const rawToken of scanMilestonePhaseIds(section, 'bracket')) {
       const [phase, subphase, extra] = String(rawToken).split('.');
       if (extra || !/^\d+$/.test(phase) || (subphase !== undefined && !/^\d+$/.test(subphase))) continue;
       if (isDecimal) {
@@ -2734,7 +2752,7 @@ function updateRoadmapAfterBracketPhaseRemoval(
         : bracketPhaseId(context, token - 1);
       const oldDisplay = renderPhaseId(oldId);
       const newDisplay = renderPhaseId(newId);
-      content = content.replace(
+      section = section.replace(
         new RegExp(`${escapeRegex(oldDisplay)}(?!\\d)`, 'g'),
         () => newDisplay,
       );
@@ -2742,7 +2760,7 @@ function updateRoadmapAfterBracketPhaseRemoval(
       const oldToken = bracketArtifactToken(oldId);
       const newToken = bracketArtifactToken(newId);
       const artifactTail = isDecimal ? '' : '(?:\\.\\d+)?';
-      content = content.replace(
+      section = section.replace(
         new RegExp(
           `(?<![\\d.])${escapeRegex(oldToken)}(?=${artifactTail}-\\d{2}`
           + '(?:-[A-Za-z][A-Za-z0-9-]*)?-(?:PLAN|SUMMARY)\\.md)',
@@ -2751,6 +2769,7 @@ function updateRoadmapAfterBracketPhaseRemoval(
         () => newToken,
       );
     }
+    content = content.slice(0, sectionStart) + section + content.slice(sectionEnd);
 
     platformWriteSync(roadmapPath, content);
     return contentChangedAfterNormalize(roadmapPath, originalContent, content);

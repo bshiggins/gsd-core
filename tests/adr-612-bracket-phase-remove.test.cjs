@@ -219,4 +219,72 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(fs.readFileSync(planning('ROADMAP.md'), 'utf8'), roadmapBefore);
     assert.deepEqual(fs.readdirSync(planning('phases')).sort(), dirsBefore);
   });
+
+  // #4304 Blocker 3: the artifact-token rewrite (`03-01-PLAN.md` -> `02-01-PLAN.md`)
+  // ran as a global replace with no milestone qualifier, so an EARLIER
+  // milestone's own same-numbered artifact reference was corrupted even
+  // though that milestone's directory/files were never touched. The display-id
+  // rewrite (`[CK.02] 03` -> `[CK.02] 02`) was already milestone-qualified and
+  // safe; only the bare-token rewrite needed scoping.
+  test('confines artifact-token renumbering to the active milestone, leaving an earlier milestone byte-identical', () => {
+    fs.writeFileSync(
+      planning('ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## [CK.01] v1.0 — Prior',
+        '',
+        '### [CK.01] 03: Prior Three',
+        '',
+        '**Goal:** untouched',
+        '**Plans:** `03-01-PLAN.md`, `03-01-SUMMARY.md`',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '### [CK.02] 02: Two',
+        '',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '',
+        '**Goal:** renumber',
+        '**Plans:** `03-01-PLAN.md`',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.01] 03 | 0/1 | Prior |',
+        '| [CK.02] 02 | 0/1 | Planned |',
+        '| [CK.02] 03 | 0/1 | Planned |',
+        '',
+      ].join('\n'),
+    );
+    fs.rmSync(planning('phases'), { recursive: true, force: true });
+    makePhaseDir('CK.01-03-prior-three', ['03-01-PLAN.md', '03-01-SUMMARY.md']);
+    makePhaseDir('CK.02-02-two', ['02-01-PLAN.md']);
+    makePhaseDir('CK.02-03-three', ['03-01-PLAN.md']);
+
+    const roadmapBefore = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    const ck01SectionBefore = roadmapBefore.slice(
+      roadmapBefore.indexOf('## [CK.01]'),
+      roadmapBefore.indexOf('## [CK.02]'),
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+
+    const roadmapAfter = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    const ck01SectionAfter = roadmapAfter.slice(
+      roadmapAfter.indexOf('## [CK.01]'),
+      roadmapAfter.indexOf('## [CK.02]'),
+    );
+    assert.equal(ck01SectionAfter, ck01SectionBefore);
+    assert.equal(fs.existsSync(planning('phases', 'CK.01-03-prior-three', '03-01-PLAN.md')), true);
+    assert.equal(fs.existsSync(planning('phases', 'CK.01-03-prior-three', '03-01-SUMMARY.md')), true);
+
+    assert.equal(fs.existsSync(planning('phases', 'CK.02-02-three', '02-01-PLAN.md')), true);
+    assert.equal(roadmapAfter.includes('### [CK.02] 02: Three'), true);
+    assert.equal(roadmapAfter.includes('### [CK.02] 03: Three'), false);
+  });
 });
