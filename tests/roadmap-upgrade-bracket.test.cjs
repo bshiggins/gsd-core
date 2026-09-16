@@ -527,6 +527,127 @@ describe('roadmap upgrade --convention bracket', () => {
     });
   });
 
+  // #4698 Blocker 2: `matchBracketSourceDir` matched an M-NN mapping by
+  // checking only its LEADING integer segments, so a parent mapping (e.g.
+  // `2-04`, two segments) is a strict prefix of its own child's mapping
+  // (`2-04-01`, three segments) and matches the child's directory just as
+  // readily as the child's own mapping — the resolution loop took whichever
+  // candidate it reached FIRST (roadmap heading order), so a parent heading
+  // that happens to precede its child's heading could claim the child's
+  // directory and leave the true parent directory unmapped. These tests call
+  // computeMigrationPlan() in-process (not the CLI subprocess `runBracketUpgrade`
+  // spawns) specifically so `fs.readdirSync` can be mocked to pin the phases
+  // directory's listing order — a subprocess would never see a mock installed
+  // in this parent process (the same constraint documented on the Blocker 1
+  // config-write-failure test above).
+  describe('M-NN directories resolve to their most specific mapping (#4698 Blocker 2)', () => {
+    function withPhaseDirOrder(phasesDir, orderedNames, fn) {
+      const real = fs.readdirSync;
+      const dirMock = mock.method(fs, 'readdirSync', (dir, opts) => {
+        if (path.resolve(String(dir)) === path.resolve(phasesDir)) {
+          if (opts && opts.withFileTypes) {
+            return orderedNames.map((name) => ({
+              name,
+              isDirectory: () => true,
+              isFile: () => false,
+              isSymbolicLink: () => false,
+            }));
+          }
+          return orderedNames.slice();
+        }
+        return real.call(fs, dir, opts);
+      });
+      try {
+        return fn();
+      } finally {
+        dirMock.mock.restore();
+      }
+    }
+
+    function setupParentChildFixture() {
+      const cwd = materializeFixture('mnn-multi-milestone');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v2.0 — Existing milestone',
+          '',
+          '### Phase 2-04: Parent',
+          '',
+          '- [ ] **Phase 2-04:** Parent',
+          '',
+          '### Phase 2-01: Foundation',
+          '',
+          '- [ ] **Phase 2-01:** Foundation',
+          '',
+          '### Phase 2-04-01: Deep slice',
+          '',
+          '- [x] Phase 2-04-01: Deep slice',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      fs.mkdirSync(path.join(phasesDir, 'GSD-02-04-parent'), { recursive: true });
+      fs.writeFileSync(path.join(phasesDir, 'GSD-02-04-parent', '02-04-PLAN.md'), '# Parent plan\n', 'utf8');
+      return { cwd, phasesDir };
+    }
+
+    const expectedRenames = [
+      { oldDir: 'GSD-02-01-foundation', newDir: 'GSD.02-01-foundation' },
+      { oldDir: 'GSD-02-04-01-deep-slice', newDir: 'GSD.02-04.01-deep-slice' },
+      { oldDir: 'GSD-02-04-parent', newDir: 'GSD.02-04-parent' },
+    ].sort((a, b) => a.oldDir.localeCompare(b.oldDir));
+
+    test('parent-before-child directory listing order still maps both to their own bracket directories', () => {
+      const { cwd, phasesDir } = setupParentChildFixture();
+
+      const plan = withPhaseDirOrder(
+        phasesDir,
+        ['GSD-02-04-parent', 'GSD-02-01-foundation', 'GSD-02-04-01-deep-slice'],
+        () => computeMigrationPlan(cwd, { convention: 'bracket' }),
+      );
+
+      assert.deepEqual(
+        plan.phases.map(({ oldDir, newDir }) => ({ oldDir, newDir })).sort((a, b) => a.oldDir.localeCompare(b.oldDir)),
+        expectedRenames,
+      );
+    });
+
+    test('child-before-parent directory listing order still maps both to their own bracket directories', () => {
+      const { cwd, phasesDir } = setupParentChildFixture();
+
+      const plan = withPhaseDirOrder(
+        phasesDir,
+        ['GSD-02-04-01-deep-slice', 'GSD-02-01-foundation', 'GSD-02-04-parent'],
+        () => computeMigrationPlan(cwd, { convention: 'bracket' }),
+      );
+
+      assert.deepEqual(
+        plan.phases.map(({ oldDir, newDir }) => ({ oldDir, newDir })).sort((a, b) => a.oldDir.localeCompare(b.oldDir)),
+        expectedRenames,
+      );
+    });
+
+    test('a digit-leading slug with no matching phase still maps to its milestone-phase parent, slug intact', () => {
+      const { cwd, phasesDir } = setupParentChildFixture();
+      fs.mkdirSync(path.join(phasesDir, 'GSD-02-04-2024-audit'), { recursive: true });
+      fs.writeFileSync(path.join(phasesDir, 'GSD-02-04-2024-audit', '02-04-PLAN.md'), '# Audit plan\n', 'utf8');
+      // Remove the literal parent directory so "2-04" has exactly ONE
+      // directory candidate: the digit-leading-slug one. This isolates "no
+      // `2-04-2024` phase exists, so 2024 must stay slug" from the
+      // parent/child specificity claim the two tests above already cover.
+      cleanup(path.join(phasesDir, 'GSD-02-04-parent'));
+
+      const plan = computeMigrationPlan(cwd, { convention: 'bracket' });
+
+      const auditRename = plan.phases.find((p) => p.oldDir === 'GSD-02-04-2024-audit');
+      assert.ok(auditRename, 'the digit-leading-slug directory must still be matched to the 2-04 mapping');
+      assert.equal(auditRename.newDir, 'GSD.02-04-2024-audit', 'the "2024-audit" slug must survive unchanged');
+    });
+  });
+
   // #4698 Blocker 1: `applyMigration` stamped `phase_id_convention` only when
   // `plan.phases.length > 0`, but `phases` holds DIRECTORY renames, not
   // converted HEADINGS. A roadmap with recognizable headings and zero phase

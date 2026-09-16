@@ -385,6 +385,22 @@ function matchBracketSourceDir(dirName: string, mapping: BracketMapping): { slug
   return { slug: legacyDirMatch[2] ?? '' };
 }
 
+/**
+ * #4698 Blocker 2: how many integer identity segments THIS mapping requires
+ * a directory to match. An M-NN mapping with more segments (`2-04-01`, a
+ * child) is strictly more specific than one with fewer (`2-04`, its parent)
+ * — the parent's own match is a textual PREFIX of the child's, so a
+ * directory satisfying both must resolve to the more specific (longer)
+ * identity, never whichever candidate the resolution loop reaches first.
+ * A legacy token is always matched exactly (see `matchBracketSourceDir`'s
+ * legacy branch: equality against ONE specific normalized token, never a
+ * prefix of another legacy token), so it has no competing specificity of its
+ * own to rank — treated as a single segment.
+ */
+function bracketMappingSpecificity(mapping: BracketMapping): number {
+  return mapping.source === 'mnn' ? mapping.sourceToken.split('-').length : 1;
+}
+
 function buildBracketDirName(
   projectCode: string,
   mapping: BracketMapping,
@@ -548,15 +564,29 @@ function computeBracketPlan(cwd: string): MigrationPlan {
   const orderedMappings = [...idMapping.values()].map((mapping) => ({ mapping, used: false }));
   const phases: PhaseRename[] = [];
   for (const dirName of existingDirs) {
+    // #4698 Blocker 2: scan EVERY still-unused candidate and keep the MOST
+    // SPECIFIC match (the one requiring the most integer segments), rather
+    // than stopping at the first one found. A parent M-NN mapping is a
+    // prefix of its own child's mapping and matches the child's directory
+    // just as readily as the child's own mapping does — resolving on
+    // encounter order let a parent heading that happens to precede its
+    // child's heading claim the child's directory, leaving the true parent
+    // unmapped. Specificity is independent of both roadmap-heading order and
+    // directory-listing order, so this resolves correctly regardless of
+    // which directory this loop visits first.
     let hit: { mapping: BracketMapping; used: boolean } | undefined;
     let matchedSlug = '';
+    let bestSpecificity = -1;
     for (const candidate of orderedMappings) {
       if (candidate.used) continue;
       const match = matchBracketSourceDir(dirName, candidate.mapping);
       if (!match) continue;
-      hit = candidate;
-      matchedSlug = match.slug;
-      break;
+      const specificity = bracketMappingSpecificity(candidate.mapping);
+      if (specificity > bestSpecificity) {
+        bestSpecificity = specificity;
+        hit = candidate;
+        matchedSlug = match.slug;
+      }
     }
     if (!hit) continue;
     hit.used = true;
