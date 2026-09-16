@@ -430,7 +430,6 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     configData = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
   } catch { /* config may not exist */ }
 
-  if (configData['phase_id_convention'] === 'bracket') return done;
   const projectCode = typeof configData['project_code'] === 'string' && configData['project_code'].length > 0
     ? configData['project_code']
     : null;
@@ -444,7 +443,45 @@ function computeBracketPlan(cwd: string): MigrationPlan {
 
   const lines = roadmapContent.split('\n');
   const parsed = parseBracketSourcePhases(lines);
-  if (parsed.some((entry) => entry.alreadyMigrated)) return done;
+
+  // #4698 Blocker 2: an unrecognized or partially-migrated roadmap must
+  // refuse outright, never silently return a "successful" empty/partial plan.
+  // Bracket is the terminal convention — once config says "bracket", the
+  // guard below (`unconverted.length === 0`) short-circuits every later run,
+  // so a roadmap this planner failed to fully convert can never be revisited
+  // by a corrected re-run unless it is refused now, before any write.
+  const alreadyBracket = parsed.filter((entry) => entry.alreadyMigrated);
+  const unconverted = parsed.filter((entry) => !entry.alreadyMigrated);
+
+  if (parsed.length === 0) {
+    throw new Error(
+      'No recognized phase headings found in ROADMAP.md. The bracket migrator recognizes exactly '
+      + 'three phase heading shapes: bracket ("### [CODE.MM] NN: Name"), M-NN ("### Phase M-NN: Name"), '
+      + 'or legacy ("### Phase N: Name"). Add at least one recognized phase heading, then re-run.',
+    );
+  }
+
+  const refuseMixedRoadmap = (): never => {
+    throw new Error(
+      'Cannot safely migrate ROADMAP.md to the bracket convention: it still has unconverted phase '
+      + 'headings. Refusing to guess at a partial migration. Unconverted headings:\n'
+      + unconverted.map((entry) => `  ${lines[entry.lineIndex]}`).join('\n'),
+    );
+  };
+
+  // A textual mix (some headings already bracket, others not) is never safe
+  // to resume automatically.
+  if (alreadyBracket.length > 0 && unconverted.length > 0) refuseMixedRoadmap();
+
+  // Every recognized heading is already bracket text: nothing left to
+  // convert, regardless of what config.json's own phase_id_convention says.
+  if (unconverted.length === 0) return done;
+
+  // From here, unconverted.length > 0. If config already claims "bracket",
+  // it disagrees with the roadmap's own text — the same refusal as the
+  // textual mix above, never `done`: a stale/incorrect config value must
+  // never hide un-migrated content or make it permanently unreachable.
+  if (configData['phase_id_convention'] === 'bracket') refuseMixedRoadmap();
 
   if (!projectCode) {
     throw new Error(
@@ -457,7 +494,7 @@ function computeBracketPlan(cwd: string): MigrationPlan {
   }
   const code = projectCode;
 
-  const sourcePhases = parsed.filter((entry) => !entry.alreadyMigrated);
+  const sourcePhases = unconverted;
 
   // Real single-milestone repositories may omit a `## vN.M` heading while
   // carrying project-prefixed phase directories. Resolve those legacy entries
@@ -1028,21 +1065,29 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
       }
     }
 
-    // 4. Update config.json to the convention named by this plan. Legacy plans
-    // omit targetConvention and retain the historical milestone-prefixed target.
-    let configData: Record<string, unknown> = {};
-    try {
-      configData = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
-    } catch { /* config may not exist yet */ }
+    // 4. Update config.json to the convention named by this plan — but only
+    // when the plan actually converted at least one phase (#4698 Blocker 2).
+    // An empty plan (e.g. a roadmap this migrator failed to recognize) must
+    // never stamp phase_id_convention: computeBracketPlan's own idempotency
+    // guard treats that stamp as proof the migration already finished, so a
+    // write here with nothing converted would make the correct re-run (once
+    // the roadmap is fixed) permanently unreachable. Legacy plans omit
+    // targetConvention and retain the historical milestone-prefixed target.
+    if (plan.phases.length > 0) {
+      let configData: Record<string, unknown> = {};
+      try {
+        configData = JSON.parse(fs.readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+      } catch { /* config may not exist yet */ }
 
-    configData['phase_id_convention'] = plan.targetConvention ?? 'milestone-prefixed';
-    snapshotFile(configPath);
-    try {
-      fs.writeFileSync(configPath, JSON.stringify(configData, null, 2) + '\n', 'utf8');
-    } catch (err) {
-      throw new Error(`config.json write phase failed: ${(err as Error).message}`);
+      configData['phase_id_convention'] = plan.targetConvention ?? 'milestone-prefixed';
+      snapshotFile(configPath);
+      try {
+        fs.writeFileSync(configPath, JSON.stringify(configData, null, 2) + '\n', 'utf8');
+      } catch (err) {
+        throw new Error(`config.json write phase failed: ${(err as Error).message}`);
+      }
+      editedFiles.push('config.json');
     }
-    editedFiles.push('config.json');
 
   } catch (err) {
     // Surgical rollback: reverse the renames (newest first) and restore every

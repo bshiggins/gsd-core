@@ -398,4 +398,132 @@ describe('roadmap upgrade --convention bracket', () => {
     assertExited(second, 0, 'second M-NN bracket apply');
     assert.deepEqual(snapshotTree(path.join(cwd, '.planning')), afterFirst, 'second apply must be a no-op');
   });
+
+  // #4698 Blocker 2: an unrecognized or partially-migrated roadmap must
+  // refuse outright rather than silently mark the project "bracket" with
+  // zero (or partial) conversions — see computeBracketPlan's idempotency
+  // guard, which would otherwise treat that stamp as proof the migration is
+  // already complete and make a corrected re-run permanently unreachable.
+  describe('refuses unrecognized or partially migrated roadmaps (#4698 Blocker 2)', () => {
+    test('refuses an empty ROADMAP.md on both dry-run and apply, writing nothing', () => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      fs.writeFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), '', 'utf8');
+      const before = snapshotTree(cwd, { skipGit: true });
+
+      const dryRun = runBracketUpgrade(cwd);
+      assertExited(dryRun, 1, 'zero recognized headings (dry-run)');
+      assert.match(dryRun.stderr, /No recognized phase headings/);
+      assert.match(dryRun.stderr, /\[CODE\.MM\] NN/);
+      assert.match(dryRun.stderr, /Phase M-NN/);
+      assert.match(dryRun.stderr, /Phase N: Name/);
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'dry-run refusal must write nothing');
+
+      const apply = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(apply, 1, 'zero recognized headings (apply)');
+      assert.match(apply.stderr, /No recognized phase headings/);
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'apply refusal must write nothing');
+    });
+
+    test('refuses a ROADMAP.md whose ### headings match none of the recognized grammars', () => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        '# Roadmap\n\n## v1.0 — Foundation\n\n### Overview\n\nSome prose.\n\n### Open questions\n\nMore prose.\n',
+        'utf8',
+      );
+      const before = snapshotTree(cwd, { skipGit: true });
+
+      const result = runBracketUpgrade(cwd);
+
+      assertExited(result, 1, 'prose-only headings match no grammar');
+      assert.match(result.stderr, /No recognized phase headings/);
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'refusal must write nothing');
+    });
+
+    test('refuses a roadmap mixing a bracket heading with an unconverted legacy heading', () => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v1.0 — Foundation',
+          '',
+          '### [GSD.01] 01: Alpha',
+          '',
+          '### Phase 2.1: Beta',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const before = snapshotTree(cwd, { skipGit: true });
+
+      const result = runBracketUpgrade(cwd, ['--apply']);
+
+      assertExited(result, 1, 'mixed bracket/legacy roadmap');
+      assert.match(result.stderr, /still has unconverted phase headings/);
+      assert.match(result.stderr, /### Phase 2\.1: Beta/);
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'refusal must write nothing');
+    });
+
+    test('refuses when config already says bracket but a legacy heading remains (does not return done)', () => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      const configPath = path.join(cwd, '.planning', 'config.json');
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      config.phase_id_convention = 'bracket';
+      fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+      const before = snapshotTree(cwd, { skipGit: true });
+
+      const result = runBracketUpgrade(cwd, ['--apply']);
+
+      assertExited(result, 1, 'config says bracket but legacy headings remain');
+      assert.match(result.stderr, /still has unconverted phase headings/);
+      assert.match(result.stderr, /### Phase 1: Alpha/);
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'refusal must write nothing, not `done`');
+    });
+
+    test('the existing fully-migrated idempotency test still passes (regression guard)', () => {
+      // Duplicate, minimal re-assertion of the pre-existing idempotency
+      // contract, scoped to this describe block so a future reader can see
+      // Blocker 2's fix did not disturb it — the full-fidelity version is
+      // the file's own "an applied migration is idempotent on re-run" test
+      // above (mnn-multi-milestone), which continues to run unmodified.
+      const cwd = materializeFixture('legacy-multi-milestone');
+      const first = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(first, 0, 'first legacy bracket apply');
+      const afterFirst = snapshotTree(path.join(cwd, '.planning'));
+
+      const second = runBracketUpgrade(cwd, ['--apply']);
+
+      assertExited(second, 0, 'second legacy bracket apply (must be `done`, not a mixed refusal)');
+      assert.deepEqual(
+        snapshotTree(path.join(cwd, '.planning')),
+        afterFirst,
+        'a fully-migrated roadmap must still short-circuit to done',
+      );
+    });
+
+    test('applyMigration does not write config.json when the plan converted zero phases', () => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      const configPath = path.join(cwd, '.planning', 'config.json');
+      const configBefore = fs.readFileSync(configPath, 'utf8');
+
+      const emptyPlan = {
+        alreadyMigrated: false,
+        phases: [],
+        roadmapEdits: [],
+        crossRefEdits: [],
+        targetConvention: 'bracket',
+      };
+
+      const result = applyMigration(cwd, emptyPlan, { dryRun: false });
+
+      assert.equal(result.applied, true);
+      assert.equal(
+        fs.readFileSync(configPath, 'utf8'),
+        configBefore,
+        'config.json must be untouched when the plan converted zero phases',
+      );
+    });
+  });
 });
