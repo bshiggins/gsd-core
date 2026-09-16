@@ -7,9 +7,19 @@
  * repositories and drive the compiled gsd-tools command. The router and the
  * migrator are intentionally not stubbed: dry-run, dirty-tree refusal,
  * rollback, and idempotence are command-boundary contracts.
+ *
+ * One exception: the config-write-failure rollback test below calls
+ * computeMigrationPlan()/applyMigration() directly (in-process) instead of
+ * through the CLI. #4698 Blocker 1 — a chmod-based injection there would be
+ * vacuous under the uid-0 `gsd-test` Docker bench (root's own write is not
+ * blocked by a 0o444 mode bit), and a mock.method() interception installed
+ * from this parent process is invisible to a spawned child process (see
+ * tests/broken-windows.test.cjs's #1950-H2 note, and the identical in-process
+ * pattern this file's sibling tests/roadmap-upgrade.test.cjs already uses for
+ * the milestone-prefixed convention's own config-write rollback test).
  */
 
-const { describe, test, afterEach } = require('node:test');
+const { describe, test, afterEach, mock } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -19,6 +29,7 @@ const helpers = require('./helpers.cjs');
 const { cleanup, TOOLS_PATH } = helpers;
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
+const { computeMigrationPlan, applyMigration } = require('../gsd-core/bin/lib/roadmap-upgrade.cjs');
 
 const FIXTURE_ROOT = path.join(__dirname, 'fixtures', 'roadmap-upgrade-bracket');
 const COMMAND_TIMEOUT_MS = 60000;
@@ -320,25 +331,60 @@ describe('roadmap upgrade --convention bracket', () => {
     );
   });
 
-  test('a config write failure restores renamed directories and ROADMAP bytes', {
-    skip: process.platform === 'win32' ? 'requires POSIX mode-bit enforcement' : false,
-  }, () => {
+  test('a config write failure restores renamed directories and ROADMAP bytes', (t) => {
     const cwd = materializeFixture('legacy-multi-milestone');
     const planningPath = path.join(cwd, '.planning');
     const configPath = path.join(planningPath, 'config.json');
-    fs.chmodSync(configPath, 0o444);
+
+    const plan = computeMigrationPlan(cwd, { convention: 'bracket' });
+    assert.equal(plan.alreadyMigrated, false);
+    assert.ok(plan.phases.length >= 1, 'fixture must produce phase renames');
+    assert.ok(plan.roadmapEdits.length >= 1, 'fixture must produce roadmap edits');
+
     const before = snapshotTree(planningPath);
 
-    const result = runBracketUpgrade(cwd, ['--apply']);
+    // uid-independent fault injection: a JS-level function replacement throws
+    // for every caller regardless of uid, filesystem, or capabilities — unlike
+    // fs.chmodSync(configPath, 0o444), which the uid-0 gsd-test Docker bench's
+    // own write bypasses entirely (see file header note).
+    const realWrite = fs.writeFileSync;
+    const writeMock = mock.method(fs, 'writeFileSync', (target, data, opts) => {
+      if (path.resolve(String(target)) === configPath) {
+        throw Object.assign(
+          new Error(`EACCES: permission denied, open '${configPath}'`),
+          { code: 'EACCES' },
+        );
+      }
+      return realWrite.call(fs, target, data, opts);
+    });
+    t.after(() => writeMock.mock.restore());
 
-    assertExited(result, 1, 'config write rollback');
-    assert.match(result.stderr, /Migration failed and rolled back/);
+    // Probe: the injection must actually block a write to this exact path
+    // before trusting it to exercise the rollback branch below. A probe that
+    // unexpectedly succeeds (e.g. a path-matching bug in the mock above) must
+    // fail the test loudly, never let the migration proceed "successfully"
+    // and pass with zero rollback coverage.
+    assert.throws(
+      () => fs.writeFileSync(configPath, 'probe'),
+      /EACCES/,
+      'fault-injection probe unexpectedly wrote to config.json — refusing to trust this run',
+    );
+
+    let caught;
+    try {
+      applyMigration(cwd, plan, { dryRun: false });
+    } catch (err) {
+      caught = err;
+    }
+
+    assert.ok(caught, 'a config write failure must throw, not silently succeed');
+    assert.match(caught.message, /Migration failed and rolled back/);
+    assert.match(caught.message, /config\.json write phase/);
     assert.deepEqual(
       snapshotTree(planningPath),
       before,
       'ignored planning tree must be byte-restored after a config write failure',
     );
-    assert.match(result.stderr, /config\.json write phase/);
   });
 
   test('an applied migration is idempotent on re-run', () => {
