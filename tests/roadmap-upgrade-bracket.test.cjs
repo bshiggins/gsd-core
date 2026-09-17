@@ -29,7 +29,11 @@ const helpers = require('./helpers.cjs');
 const { cleanup, TOOLS_PATH } = helpers;
 const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
-const { computeMigrationPlan, applyMigration } = require('../gsd-core/bin/lib/roadmap-upgrade.cjs');
+const {
+  computeMigrationPlan,
+  applyMigration,
+  computeDependsOnRewrites,
+} = require('../gsd-core/bin/lib/roadmap-upgrade.cjs');
 const { readVerificationStatus } = require('../gsd-core/bin/lib/verification.cjs');
 const { scopeToPhase } = require('../gsd-core/bin/lib/phase-id.cjs');
 // #4698 Blocker 1 (round 2): real production functions used to prove the
@@ -943,6 +947,40 @@ describe('roadmap upgrade --convention bracket', () => {
   // src/phase.cts) then reports the token unresolved and the dependent plan
   // never reaches ready_plans, even once its predecessor completes.
   describe('rewrites stale depends_on references inside renamed phase artifacts (#4698 Blocker 1, round 2)', () => {
+    test('matches dependency tokens with the resolver case fold and preserves unrelated content', () => {
+      const phaseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-bracket-case-dependency-'));
+      tempRoots.push(phaseDir);
+      const predecessor = '---\nphase: "03A"\nplan: "01"\ndepends_on: []\n---\n\nFirst.\n';
+      const dependent = '---\nphase: "03A"\nplan: "02"\ndepends_on: ["03a-01"]\n---\n\nSecond.\n';
+      fs.writeFileSync(path.join(phaseDir, '03A-01-PLAN.md'), predecessor, 'utf8');
+      fs.writeFileSync(path.join(phaseDir, '03A-02-PLAN.md'), dependent, 'utf8');
+
+      const rewrites = computeDependsOnRewrites(
+        phaseDir,
+        '03A',
+        '01',
+        [
+          { oldName: '03A-01-PLAN.md', newName: '01-01-PLAN.md' },
+          { oldName: '03A-02-PLAN.md', newName: '01-02-PLAN.md' },
+        ],
+      );
+
+      assert.equal(rewrites.length, 1);
+      assert.equal(rewrites[0].oldName, '03A-02-PLAN.md');
+      assert.equal(rewrites[0].finalName, '01-02-PLAN.md');
+      assert.deepEqual(parsePlanDocument(rewrites[0].to).dependsOn, ['01-01']);
+      assert.match(rewrites[0].to, /phase: "03A"\nplan: "02"/);
+      assert.match(rewrites[0].to, /\n---\n\nSecond\.\n$/);
+
+      fs.renameSync(path.join(phaseDir, '03A-01-PLAN.md'), path.join(phaseDir, '01-01-PLAN.md'));
+      fs.writeFileSync(path.join(phaseDir, '01-02-PLAN.md'), rewrites[0].to, 'utf8');
+      fs.unlinkSync(path.join(phaseDir, '03A-02-PLAN.md'));
+      const { level, unresolved } = readyPlansViaRealResolver(phaseDir);
+      assert.deepEqual(unresolved, []);
+      assert.equal(level.get('01-01'), 0);
+      assert.equal(level.get('01-02'), 1);
+    });
+
     function setupDependsOnRewriteFixture() {
       const cwd = materializeFixture('legacy-multi-milestone');
       // Replace the roadmap with a single phase ("3") that is the ONLY phase

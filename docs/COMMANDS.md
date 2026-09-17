@@ -2025,6 +2025,8 @@ verification reports stay attached to their phase, and rewrites any
 `depends_on` reference inside that same directory's plan files that named a
 renamed sibling by its old token (`depends_on: ["03-01"]` becomes
 `["01-01"]`), so the dependency still resolves after migration.
+It refuses before writing when a source phase has no bracket spelling or a
+multi-milestone phase has no unambiguous reader-recognized milestone section.
 
 | Flag | Required | Description |
 |------|----------|-------------|

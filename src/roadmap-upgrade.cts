@@ -11,7 +11,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { retryRenameSync } from './shell-command-projection.cjs';
-import { escapeRegex } from './pattern.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -24,6 +23,8 @@ import planningScopeMod = require('./planning-scope.cjs');
 import frontmatterMod = require('./frontmatter.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseMod = require('./phase.cjs');
 const { planningDir } = planningWorkspace;
 const { listAllPhaseDirs } = phaseLocatorMod;
 const { SCOPE } = planningScopeMod;
@@ -33,6 +34,7 @@ const { SCOPE } = planningScopeMod;
 // byte-for-byte", which is exactly the contract a `depends_on` rewrite needs.
 const { extractFrontmatter, spliceFrontmatter } = frontmatterMod;
 const { milestoneSections } = roadmapParserMod;
+const { normalizeDependencyToken } = phaseMod;
 const {
   BRACKET_ID_SRC,
   BRACKET_PROJECT_CODE_SRC,
@@ -478,40 +480,6 @@ function legacyLookupKey(token: string): string {
 }
 
 /**
- * #4698 Blocker 2 (round 2): the set of prefix spellings this phase's own
- * OLD token can legitimately appear as on disk elsewhere in this directory —
- * the literal on-disk spelling (`sourceToken`, exactly as the directory
- * itself spells it — `matchBracketSourceDir`'s `matchedToken`) and, when it
- * differs, that SAME token's canonically padded spelling via
- * `normalizePhaseName` (src/phase-id.cts — the single owner of phase-token
- * padding, reused rather than re-derived, per the review finding).
- *
- * WHY BOTH FORMS ARE NEEDED: `cmdScaffold` (src/commands.cts) always writes
- * phase-qualified artifact filenames using the PADDED form
- * (`normalizePhaseName(phase)`), regardless of how the phase's own directory
- * happens to be spelled on disk. A legacy directory named exactly `3-gamma`
- * (on-disk token `"3"`, unpadded) therefore holds artifacts prefixed `03-...`
- * — a spelling its OWN directory name does not literally contain. Matching
- * artifact filenames against `sourceToken` alone (`"3"`) missed every one of
- * them, so the migrated directory's real, passing verification report
- * silently reported as `missing` (the exact reported defect: `3-gamma` /
- * `03-VERIFICATION.md` produced zero file renames). `depends_on` frontmatter
- * values (Blocker 1, round 2) name a sibling by that SAME padded,
- * filename-derived plan id, so `computeDependsOnRewrites` shares this one
- * form set rather than re-deriving its own comparison.
- *
- * Sorted longest-first defensively (padding only ever ADDS a leading digit,
- * so one form is never a literal string-prefix of the other in practice —
- * `"3"` is not a prefix of `"03"` — but ordering the more specific spelling
- * first costs nothing and removes any doubt).
- */
-function sourceTokenForms(sourceToken: string): string[] {
-  const normalized = String(normalizePhaseName(sourceToken));
-  const forms = sourceToken === normalized ? [sourceToken] : [normalized, sourceToken];
-  return forms.sort((a, b) => b.length - a.length);
-}
-
-/**
  * Return the old directory's slug when it belongs to a mapping, otherwise
  * null. M-NN matching consumes exactly the expected number of numeric fields,
  * so a digit-leading slug remains a slug instead of becoming another identity
@@ -644,18 +612,12 @@ function computeArtifactRenames(
  * the dependent plan fails readiness (`missingEvidence`) even after its
  * predecessor completes — reproducing the reported defect exactly.
  *
- * Fix: for every root-level `*-PLAN.md` file in the directory being renamed,
- * read its CURRENT (pre-migration) frontmatter — nothing has moved yet, this
- * is still plan computation, the same contract `computeArtifactRenames`
- * follows — and rewrite any `depends_on` entry whose token starts with this
- * directory's own OLD token (`sourceTokenForms`, shared with Blocker 2 so
- * the two can never disagree about what the old token's accepted spellings
- * are) followed by `-<planNumber>`, to the NEW token. A bare in-phase
- * short-form dependency (`"01"`, no phase prefix — #3897 rung 4) or a token
- * naming a genuinely different phase is never touched: only a token whose
- * PREFIX exactly matches one of the directory's own old spellings is
- * rewritten, and only that prefix — the plan-number suffix is preserved
- * verbatim.
+ * Fix: derive the old and new plan IDs from the exact artifact-renames plan,
+ * then compare each `depends_on` value through `normalizeDependencyToken`,
+ * the real resolver's exported case-folding seam. This means the migration
+ * rewrites exactly those tokens the resolver considers equal to a renamed
+ * plan ID. Bare in-phase short forms and tokens naming other plans remain
+ * untouched.
  *
  * `depends_on` is the only frontmatter field this rewrites. It is the only
  * field the real resolver reads for cross-plan identity: `parsePlanDocument`
@@ -685,8 +647,22 @@ function computeDependsOnRewrites(
     return [];
   }
 
-  const depTokenRe = new RegExp(`^(?:${sourceTokenForms(sourceToken).map(escapeRegex).join('|')})-`);
   const renameByOldName = new Map(fileRenames.map((r) => [r.oldName, r.newName]));
+  const renamedPlanIdByToken = new Map<string, string>();
+  for (const rename of fileRenames) {
+    if (!/-PLAN\.md$/i.test(rename.oldName) || !/-PLAN\.md$/i.test(rename.newName)) continue;
+    const oldPlanId = rename.oldName.replace(/-PLAN\.md$/i, '');
+    const newPlanId = rename.newName.replace(/-PLAN\.md$/i, '');
+    const comparisonToken = normalizeDependencyToken(oldPlanId);
+    const existing = renamedPlanIdByToken.get(comparisonToken);
+    if (existing !== undefined && existing !== newPlanId) {
+      throw new Error(
+        `Cannot migrate depends_on references in ${JSON.stringify(path.basename(oldDirPath))}: `
+        + `renamed plan IDs collide when compared by the dependency resolver.`,
+      );
+    }
+    renamedPlanIdByToken.set(comparisonToken, newPlanId);
+  }
 
   const rewrites: DependsOnRewrite[] = [];
   for (const entry of entries) {
@@ -720,9 +696,10 @@ function computeDependsOnRewrites(
 
     let changed = false;
     const newDeps = deps.map((dep) => {
-      if (!depTokenRe.test(dep)) return dep;
+      const replacement = renamedPlanIdByToken.get(normalizeDependencyToken(dep));
+      if (replacement === undefined) return dep;
       changed = true;
-      return dep.replace(depTokenRe, `${targetToken}-`);
+      return replacement;
     });
     if (!changed) continue;
 
@@ -1657,4 +1634,5 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
 export = {
   computeMigrationPlan,
   applyMigration,
+  computeDependsOnRewrites,
 };
