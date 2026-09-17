@@ -1,8 +1,5 @@
 'use strict';
 
-// allow-test-rule: source-text-is-the-product — see #4304
-// ROADMAP.md and phase artifact names are the phase-remove output contract.
-
 const { test, describe, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');

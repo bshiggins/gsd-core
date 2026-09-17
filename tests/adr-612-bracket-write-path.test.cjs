@@ -1,9 +1,5 @@
 'use strict';
 
-// allow-test-rule: source-text-is-the-product — see #4304
-// ROADMAP.md and STATE.md are the writer outputs under test, so their exact bytes
-// are the public contract at this seam.
-
 const { test, describe, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
