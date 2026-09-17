@@ -401,6 +401,40 @@ function legacyLookupKey(token: string): string {
 }
 
 /**
+ * #4698 Blocker 2 (round 2): the set of prefix spellings this phase's own
+ * OLD token can legitimately appear as on disk elsewhere in this directory —
+ * the literal on-disk spelling (`sourceToken`, exactly as the directory
+ * itself spells it — `matchBracketSourceDir`'s `matchedToken`) and, when it
+ * differs, that SAME token's canonically padded spelling via
+ * `normalizePhaseName` (src/phase-id.cts — the single owner of phase-token
+ * padding, reused rather than re-derived, per the review finding).
+ *
+ * WHY BOTH FORMS ARE NEEDED: `cmdScaffold` (src/commands.cts) always writes
+ * phase-qualified artifact filenames using the PADDED form
+ * (`normalizePhaseName(phase)`), regardless of how the phase's own directory
+ * happens to be spelled on disk. A legacy directory named exactly `3-gamma`
+ * (on-disk token `"3"`, unpadded) therefore holds artifacts prefixed `03-...`
+ * — a spelling its OWN directory name does not literally contain. Matching
+ * artifact filenames against `sourceToken` alone (`"3"`) missed every one of
+ * them, so the migrated directory's real, passing verification report
+ * silently reported as `missing` (the exact reported defect: `3-gamma` /
+ * `03-VERIFICATION.md` produced zero file renames). `depends_on` frontmatter
+ * values (Blocker 1, round 2) name a sibling by that SAME padded,
+ * filename-derived plan id, so `computeDependsOnRewrites` shares this one
+ * form set rather than re-deriving its own comparison.
+ *
+ * Sorted longest-first defensively (padding only ever ADDS a leading digit,
+ * so one form is never a literal string-prefix of the other in practice —
+ * `"3"` is not a prefix of `"03"` — but ordering the more specific spelling
+ * first costs nothing and removes any doubt).
+ */
+function sourceTokenForms(sourceToken: string): string[] {
+  const normalized = String(normalizePhaseName(sourceToken));
+  const forms = sourceToken === normalized ? [sourceToken] : [normalized, sourceToken];
+  return forms.sort((a, b) => b.length - a.length);
+}
+
+/**
  * Return the old directory's slug when it belongs to a mapping, otherwise
  * null. M-NN matching consumes exactly the expected number of numeric fields,
  * so a digit-leading slug remains a slug instead of becoming another identity
@@ -483,7 +517,10 @@ function computeArtifactRenames(
     return [];
   }
 
-  const tokenPrefixRe = new RegExp(`^${escapeRegex(sourceToken)}(?=[-.]|$)`);
+  // #4698 Blocker 2 (round 2): match either accepted spelling of the
+  // directory's own old token (see sourceTokenForms), not the literal
+  // on-disk spelling alone.
+  const tokenPrefixRe = new RegExp(`^(?:${sourceTokenForms(sourceToken).map(escapeRegex).join('|')})(?=[-.]|$)`);
 
   const fileNames = entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
   const renames: ArtifactRename[] = [];
@@ -539,10 +576,12 @@ function computeArtifactRenames(
  * read its CURRENT (pre-migration) frontmatter — nothing has moved yet, this
  * is still plan computation, the same contract `computeArtifactRenames`
  * follows — and rewrite any `depends_on` entry whose token starts with this
- * directory's own OLD token followed by `-<planNumber>`, to the NEW token. A
- * bare in-phase short-form dependency (`"01"`, no phase prefix — #3897 rung
- * 4) or a token naming a genuinely different phase is never touched: only a
- * token whose PREFIX exactly matches the directory's own old token is
+ * directory's own OLD token (`sourceTokenForms`, shared with Blocker 2 so
+ * the two can never disagree about what the old token's accepted spellings
+ * are) followed by `-<planNumber>`, to the NEW token. A bare in-phase
+ * short-form dependency (`"01"`, no phase prefix — #3897 rung 4) or a token
+ * naming a genuinely different phase is never touched: only a token whose
+ * PREFIX exactly matches one of the directory's own old spellings is
  * rewritten, and only that prefix — the plan-number suffix is preserved
  * verbatim.
  *
@@ -574,7 +613,7 @@ function computeDependsOnRewrites(
     return [];
   }
 
-  const depTokenRe = new RegExp(`^${escapeRegex(sourceToken)}-`);
+  const depTokenRe = new RegExp(`^(?:${sourceTokenForms(sourceToken).map(escapeRegex).join('|')})-`);
   const renameByOldName = new Map(fileRenames.map((r) => [r.oldName, r.newName]));
 
   const rewrites: DependsOnRewrite[] = [];

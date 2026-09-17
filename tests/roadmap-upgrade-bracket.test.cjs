@@ -1082,4 +1082,81 @@ describe('roadmap upgrade --convention bracket', () => {
       );
     });
   });
+
+  // #4698 Blocker 2 (round 2, Astra pre-push gate round 2): computeArtifactRenames
+  // matched an artifact filename against the directory's own on-disk token as
+  // EXACT text, but cmdScaffold always writes artifact filenames using the
+  // PADDED form regardless of how the phase's own directory happens to be
+  // spelled — an unpadded legacy directory ("3-gamma") holds artifacts
+  // prefixed with a spelling ("03-...") its own directory name does not
+  // literally contain, so the exact-text match produced zero renames and the
+  // phase's real, passing verification report silently read as missing.
+  describe('matches artifact prefixes by numeric token equivalence, not literal spelling (#4698 Blocker 2, round 2)', () => {
+    function setupPaddedUnpaddedFixture() {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      // "03-gamma" -> "3-gamma": the DIRECTORY now spells its own token
+      // unpadded, while "03-VERIFICATION.md" (already in the base fixture)
+      // keeps the padded spelling cmdScaffold actually writes. Also rename
+      // the plan file itself to the UNPADDED spelling, so this one directory
+      // holds BOTH an already-padded and an unpadded artifact filename.
+      fs.renameSync(path.join(phasesDir, '03-gamma'), path.join(phasesDir, '3-gamma'));
+      fs.renameSync(path.join(phasesDir, '3-gamma', '03-01-PLAN.md'), path.join(phasesDir, '3-gamma', '3-01-PLAN.md'));
+      return { cwd, phasesDir };
+    }
+
+    test('a directory spelled unpadded still renames both a padded and an unpadded artifact filename', () => {
+      const { cwd } = setupPaddedUnpaddedFixture();
+
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'padded/unpadded dry-run preview');
+      const entry = plan.phases.find((p) => p.oldDir === '3-gamma');
+      assert.ok(entry, '"3-gamma" must still be matched and migrated despite the unpadded spelling');
+      assert.equal(entry.newDir, 'GSD.02-01-gamma');
+      assert.deepEqual(
+        entry.fileRenames.sort((a, b) => a.oldName.localeCompare(b.oldName)),
+        [
+          { oldName: '03-VERIFICATION.md', newName: '01-VERIFICATION.md' },
+          { oldName: '3-01-PLAN.md', newName: '01-01-PLAN.md' },
+        ],
+        'both the padded and the unpadded artifact filename must be recognized and renamed',
+      );
+
+      const result = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(result, 0, 'padded/unpadded apply');
+
+      const gammaDir = path.join(cwd, '.planning', 'phases', 'GSD.02-01-gamma');
+      assert.equal(fs.existsSync(path.join(gammaDir, '01-VERIFICATION.md')), true);
+      assert.equal(fs.existsSync(path.join(gammaDir, '01-01-PLAN.md')), true);
+      assert.equal(fs.existsSync(path.join(gammaDir, '03-VERIFICATION.md')), false, 'old padded name must be gone');
+      assert.equal(fs.existsSync(path.join(gammaDir, '3-01-PLAN.md')), false, 'old unpadded name must be gone');
+
+      const status = readVerificationStatus(gammaDir, { convention: 'bracket' });
+      assert.equal(
+        status.status, 'passed',
+        'the real verification reader must still resolve the renamed report as this phase\'s own, not "missing"',
+      );
+    });
+
+    test('a padded/unpadded pair that collides after renaming to the same target is refused before any write', () => {
+      const { cwd, phasesDir } = setupPaddedUnpaddedFixture();
+      // A second, UNPADDED-spelled verification file: it renames to the exact
+      // same target ("01-VERIFICATION.md") as the already-padded one, so both
+      // are renamed-away producers colliding on one target.
+      fs.writeFileSync(
+        path.join(phasesDir, '3-gamma', '3-VERIFICATION.md'),
+        'a second, colliding verification file that must not silently overwrite or be silently dropped\n',
+        'utf8',
+      );
+      const before = snapshotTree(cwd, { skipGit: true });
+
+      const dryRun = runBracketUpgrade(cwd);
+      assertExited(dryRun, 1, 'padded/unpadded collision (dry-run)');
+      assert.match(dryRun.stderr, /already has that name|would rename to/);
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'dry-run refusal must write nothing');
+
+      const apply = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(apply, 1, 'padded/unpadded collision (apply)');
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'apply refusal must write nothing');
+    });
+  });
 });
