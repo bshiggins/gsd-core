@@ -1226,9 +1226,17 @@ function describeGoalShapedTitle(description: string): string | null {
  * STATE.md `milestone:` and no in-progress `🚧`/`🔄` marker), fall back to the
  * legacy whole-file lastIndexOf('\n---') so simple no-milestone roadmaps keep
  * their existing behavior.
+ *
+ * #4304 round-3 Blocker 2: `phaseIdConvention` is threaded through to
+ * `currentMilestoneRawRanges` so a version-less bracket milestone heading
+ * (`## [CK.02] Current`) is still offset-scoped — omitting it here silently
+ * degraded to the legacy-only search, which finds nothing for that heading
+ * shape and falls back to whole-document insertion, landing `phase add` /
+ * `add-batch` outside the active milestone. Optional and additive: every
+ * pre-existing non-bracket caller passes nothing and compiles byte-identically.
  */
-function phaseEntryInsertOffset(rawContent: string, cwd: string): number {
-  const ranges = currentMilestoneRawRanges(rawContent, cwd);
+function phaseEntryInsertOffset(rawContent: string, cwd: string, phaseIdConvention?: string | null): number {
+  const ranges = currentMilestoneRawRanges(rawContent, cwd, phaseIdConvention);
   if (!ranges) {
     const legacy = rawContent.lastIndexOf('\n---');
     return legacy > 0 ? legacy : rawContent.length;
@@ -1596,7 +1604,7 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
         `\n### Phase ${_newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${_newPhaseId} to break down)\n`;
     }
 
-    const insertAt = phaseEntryInsertOffset(rawContent, cwd);
+    const insertAt = phaseEntryInsertOffset(rawContent, cwd, convention);
     const updatedContent = rawContent.slice(0, insertAt) + phaseEntry + rawContent.slice(insertAt);
 
     platformWriteSync(roadmapPath, updatedContent);
@@ -1737,7 +1745,7 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
         phaseEntry =
           `\n### Phase ${newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${newPhaseId} to break down)\n`;
       }
-      const insertAt = phaseEntryInsertOffset(rawContent, cwd);
+      const insertAt = phaseEntryInsertOffset(rawContent, cwd, convention);
       rawContent = rawContent.slice(0, insertAt) + phaseEntry + rawContent.slice(insertAt);
       added.push({
         phase_number: typeof newPhaseId === 'number' ? newPhaseId : String(newPhaseId),

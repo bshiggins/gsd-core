@@ -425,6 +425,89 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.equal(state.includes('milestone: v2.0'), true);
     assert.equal(JSON.parse(runGsdTools(['state', 'json'], dir).output).milestone, 'v2.0');
   });
+
+  // #4304 round-3 Blocker 2: phaseEntryInsertOffset called currentMilestoneRawRanges
+  // without the resolved convention, so on version-less bracket headings
+  // (`## [CK.02] Current` followed by `## [CK.03] Future`) it got null and
+  // fell back to whole-document insertion (past CK.03, at EOF) instead of
+  // the active milestone's own end.
+  function versionlessTwoMilestoneRoadmap() {
+    return [
+      '# Roadmap',
+      '',
+      '## [CK.02] Current',
+      '',
+      '### [CK.02] 01: One',
+      '',
+      '**Goal:** keep',
+      '',
+      '## [CK.03] Future',
+      '',
+      '### [CK.03] 01: Later',
+      '',
+      '**Goal:** untouched',
+      '',
+    ].join('\n');
+  }
+
+  test('phase add scopes the insertion point to the active milestone when milestone headings carry no version token', () => {
+    const dir = project('adr-612-bracket-versionless-add-');
+    writeConfig(dir, 'bracket');
+    fs.writeFileSync(planning(dir, 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    const roadmapBefore = versionlessTwoMilestoneRoadmap();
+    fs.writeFileSync(planning(dir, 'ROADMAP.md'), roadmapBefore);
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-01-one'), { recursive: true });
+    fs.mkdirSync(planning(dir, 'phases', 'CK.03-01-later'), { recursive: true });
+
+    const ck03SectionBefore = roadmapBefore.slice(roadmapBefore.indexOf('## [CK.03]'));
+
+    const out = run(['phase', 'add', 'Two'], dir);
+
+    assert.equal(out.phase_number, 2);
+    assert.equal(out.directory, '.planning/phases/CK.02-02-two');
+    assert.equal(fs.existsSync(planning(dir, 'phases', 'CK.02-02-two')), true);
+
+    const roadmapAfter = fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8');
+    const ck03SectionAfter = roadmapAfter.slice(roadmapAfter.indexOf('## [CK.03]'));
+    assert.equal(ck03SectionAfter, ck03SectionBefore);
+
+    const ck02SectionAfter = roadmapAfter.slice(
+      roadmapAfter.indexOf('## [CK.02]'),
+      roadmapAfter.indexOf('## [CK.03]'),
+    );
+    assert.equal(ck02SectionAfter.includes('### [CK.02] 02: Two'), true);
+  });
+
+  test('phase add-batch scopes the insertion point to the active milestone when milestone headings carry no version token', () => {
+    const dir = project('adr-612-bracket-versionless-addbatch-');
+    writeConfig(dir, 'bracket');
+    fs.writeFileSync(planning(dir, 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    const roadmapBefore = versionlessTwoMilestoneRoadmap();
+    fs.writeFileSync(planning(dir, 'ROADMAP.md'), roadmapBefore);
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-01-one'), { recursive: true });
+    fs.mkdirSync(planning(dir, 'phases', 'CK.03-01-later'), { recursive: true });
+
+    const ck03SectionBefore = roadmapBefore.slice(roadmapBefore.indexOf('## [CK.03]'));
+
+    const out = run(['phase', 'add-batch', '--descriptions', '["Two","Three"]'], dir);
+
+    assert.deepEqual(out.phases.map((phase) => phase.phase_number), [2, 3]);
+    assert.deepEqual(
+      out.phases.map((phase) => phase.directory),
+      ['.planning/phases/CK.02-02-two', '.planning/phases/CK.02-03-three'],
+    );
+
+    const roadmapAfter = fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8');
+    const ck03SectionAfter = roadmapAfter.slice(roadmapAfter.indexOf('## [CK.03]'));
+    assert.equal(ck03SectionAfter, ck03SectionBefore);
+
+    const ck02SectionAfter = roadmapAfter.slice(
+      roadmapAfter.indexOf('## [CK.02]'),
+      roadmapAfter.indexOf('## [CK.03]'),
+    );
+    assert.equal(ck02SectionAfter.includes('### [CK.02] 02: Two'), true);
+    assert.equal(ck02SectionAfter.includes('### [CK.02] 03: Three'), true);
+  });
 });
 
 const LEGACY_ROADMAP_BYTES = '# Roadmap\n\n'
