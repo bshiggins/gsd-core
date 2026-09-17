@@ -122,6 +122,8 @@ const BASE_SITES = [
   // before rewriting ROADMAP phase sections.
   { file: 'phase.cts', site: 'cmdPhaseRemove phase heading matcher',
     baseline: B.LABEL_ONLY, src: 'Phase\\s+' },
+  { file: 'phase.cts', site: 'bracket phase-remove owned-line classifier',
+    baseline: B.LABEL_ONLY, src: 'Phase\\s+' },
   // #3309/#3310 moved the health reads out of verify.cts and into the parsed
   // planning snapshot consumed by the diagnostic rule table. Pin the same two
   // ROADMAP reads at their new owner so neither can silently narrow.
@@ -693,7 +695,7 @@ describe('#612 PR-2: every selector call site declares the right baseline (live 
   const EXPECTED = {
     'commands.cts': [1, 0],
     'init.cts': [0, 2],
-    'phase.cts': [0, 1],
+    'phase.cts': [0, 2],
     'roadmap.cts': [3, 3],
     'validate.cts': [1, 2],
     'state.cts': [0, 3],
