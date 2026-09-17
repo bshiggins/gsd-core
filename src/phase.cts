@@ -2720,26 +2720,34 @@ function updateRoadmapAfterBracketPhaseRemoval(
       if (deleted.ok) content = before + deleted.value + rest;
     }
 
-    // #4304 Blocker 3 fix: the display-id replace below is milestone-qualified
-    // ("[CK.02] 03" can never match "[CK.01] 03"), but the bare artifact-token
-    // replace that follows it is not — artifact filenames carry no milestone
-    // qualifier (the phase DIRECTORY does), so "03-01-PLAN.md" is textually
-    // indistinguishable from an earlier milestone's own "03-01-PLAN.md"
-    // reference. Confine both the token scan and both replaces below to the
-    // active milestone's own section, using the same raw offsets
-    // `currentMilestoneRawRanges` already derives for the read/scoping paths
-    // (mirrors cmdPhaseInsert's Blocker 2 fix), so a token collision with a
-    // sibling milestone's own artifact reference can never cross the section
-    // boundary. Falls back to whole-content replacement — the prior
-    // behaviour — only when the active milestone cannot be offset-scoped,
-    // mirroring cmdPhaseComplete's own null fallback for this same helper.
-    const bracketSectionRanges = currentMilestoneRawRanges(content, cwd, 'bracket');
-    const sectionStart = bracketSectionRanges ? bracketSectionRanges.primary.start : 0;
-    const sectionEnd = bracketSectionRanges ? bracketSectionRanges.primary.end : content.length;
-    let section = content.slice(sectionStart, sectionEnd);
+    // #4304 Blocker 3 fix (round 2) + round-3 correction: the display-id
+    // replace is milestone-qualified ("[CK.02] 03" can never match
+    // "[CK.01] 03"), and so is the dash/dir-token form ("CK.02-03") added in
+    // round 3 — both carry their own milestone and cannot collide with a
+    // different milestone's same-numbered reference, so BOTH now run over the
+    // WHOLE roadmap (`content`), not just the active section: a fully
+    // qualified reference living outside `ranges.primary` (a global Progress
+    // table AFTER a later sibling milestone, e.g. CK.03) must renumber too,
+    // which scoping it to the section — round 2's own fix — had missed. The
+    // BARE artifact-token replace stays scoped to the active milestone's own
+    // section (round 2's original finding: artifact filenames carry no
+    // milestone qualifier, so "03-01-PLAN.md" is textually indistinguishable
+    // from an earlier/later milestone's own "03-01-PLAN.md" reference) — its
+    // section bounds are re-derived after each iteration's qualified global
+    // replace (`currentMilestoneRawRanges`), since a qualified replace earlier
+    // in `content` than `sectionStart` could shift that offset, and a
+    // qualified replace WITHIN the section changes text the bare-token
+    // replace must still see fresh. Falls back to whole-content replacement
+    // for the bare-token pass only when the active milestone cannot be
+    // offset-scoped, mirroring cmdPhaseComplete's own null fallback for this
+    // same helper.
+    const tokenScanRanges = currentMilestoneRawRanges(content, cwd, 'bracket');
+    const tokenScanSection = tokenScanRanges
+      ? content.slice(tokenScanRanges.primary.start, tokenScanRanges.primary.end)
+      : content;
 
     const tokens = new Set<number>();
-    for (const rawToken of scanMilestonePhaseIds(section, 'bracket')) {
+    for (const rawToken of scanMilestonePhaseIds(tokenScanSection, 'bracket')) {
       const [phase, subphase, extra] = String(rawToken).split('.');
       if (extra || !/^\d+$/.test(phase) || (subphase !== undefined && !/^\d+$/.test(subphase))) continue;
       if (isDecimal) {
@@ -2760,10 +2768,25 @@ function updateRoadmapAfterBracketPhaseRemoval(
         : bracketPhaseId(context, token - 1);
       const oldDisplay = renderPhaseId(oldId);
       const newDisplay = renderPhaseId(newId);
-      section = section.replace(
+      content = content.replace(
         new RegExp(`${escapeRegex(oldDisplay)}(?!\\d)`, 'g'),
         () => newDisplay,
       );
+
+      // #4304 round-3: the dash/dir-token form (`CK.02-03`, `CK.02-03.1`) —
+      // same milestone-qualified safety as the display-id form above, added
+      // because a qualified reference can legitimately spell either form.
+      const oldDashId = `${oldId.project}.${oldId.milestone}-${oldId.phase}${oldId.subphase ? `.${oldId.subphase}` : ''}`;
+      const newDashId = `${newId.project}.${newId.milestone}-${newId.phase}${newId.subphase ? `.${newId.subphase}` : ''}`;
+      content = content.replace(
+        new RegExp(`${escapeRegex(oldDashId)}(?!\\d)`, 'g'),
+        () => newDashId,
+      );
+
+      const bracketSectionRanges = currentMilestoneRawRanges(content, cwd, 'bracket');
+      const sectionStart = bracketSectionRanges ? bracketSectionRanges.primary.start : 0;
+      const sectionEnd = bracketSectionRanges ? bracketSectionRanges.primary.end : content.length;
+      let section = content.slice(sectionStart, sectionEnd);
 
       const oldToken = bracketArtifactToken(oldId);
       const newToken = bracketArtifactToken(newId);
@@ -2776,8 +2799,8 @@ function updateRoadmapAfterBracketPhaseRemoval(
         ),
         () => newToken,
       );
+      content = content.slice(0, sectionStart) + section + content.slice(sectionEnd);
     }
-    content = content.slice(0, sectionStart) + section + content.slice(sectionEnd);
 
     platformWriteSync(roadmapPath, content);
     return contentChangedAfterNormalize(roadmapPath, originalContent, content);

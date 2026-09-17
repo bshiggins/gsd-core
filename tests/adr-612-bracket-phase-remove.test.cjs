@@ -413,4 +413,97 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(roadmapAfter.includes('### [CK.02] 02: Three'), true);
     assert.equal(roadmapAfter.includes('### [CK.02] 03: Three'), false);
   });
+
+  // #4304 round-3 Blocker 3: round 2 confined BOTH the display-id replace and
+  // the bare artifact-token replace to `ranges.primary`, but a fully
+  // qualified reference (a global Progress table AFTER a later sibling
+  // milestone, e.g. CK.03) carries its own milestone and cannot collide —
+  // scoping it too left it stale after a renumber.
+  test('renumbers fully qualified references in a global Progress table outside the active milestone section, while another milestone stays byte-identical', () => {
+    fs.writeFileSync(
+      planning('ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## [CK.01] v1.0 — Prior',
+        '',
+        '### [CK.01] 03: Prior Three',
+        '',
+        '**Goal:** untouched',
+        '**Plans:** `03-01-PLAN.md`, `03-01-SUMMARY.md`',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '### [CK.02] 02: Two',
+        '',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '',
+        '**Goal:** renumber',
+        '**Plans:** `03-01-PLAN.md`',
+        '',
+        '## [CK.03] v3.0 — Future',
+        '',
+        '### [CK.03] 01: Later',
+        '',
+        '**Goal:** untouched by the CK.02 removal',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.01] 03 | 0/1 | Prior |',
+        '| [CK.02] 02 | 0/1 | Planned |',
+        '| [CK.02] 03 | 0/1 | Planned |',
+        '| [CK.03] 01 | 0/1 | Future |',
+        '',
+      ].join('\n'),
+    );
+    // eslint-disable-next-line local/no-raw-rmsync-in-tests -- removing only the .planning/phases subdir within a still-live fixture (this test replaces seed()'s ROADMAP with its own, and the seeded phase dirs would otherwise leak in as unrelated rename candidates); helpers.cleanup() tears down the whole tmpDir, not a subdirectory, so it cannot substitute here.
+    fs.rmSync(planning('phases'), { recursive: true, force: true });
+    makePhaseDir('CK.01-03-prior-three', ['03-01-PLAN.md', '03-01-SUMMARY.md']);
+    makePhaseDir('CK.02-02-two', ['02-01-PLAN.md']);
+    makePhaseDir('CK.02-03-three', ['03-01-PLAN.md']);
+    makePhaseDir('CK.03-01-later', []);
+
+    const roadmapBefore = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    const ck01SectionBefore = roadmapBefore.slice(
+      roadmapBefore.indexOf('## [CK.01]'),
+      roadmapBefore.indexOf('## [CK.02]'),
+    );
+    const ck03SectionBefore = roadmapBefore.slice(
+      roadmapBefore.indexOf('## [CK.03]'),
+      roadmapBefore.indexOf('## Progress'),
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+
+    const roadmapAfter = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    const ck01SectionAfter = roadmapAfter.slice(
+      roadmapAfter.indexOf('## [CK.01]'),
+      roadmapAfter.indexOf('## [CK.02]'),
+    );
+    assert.equal(ck01SectionAfter, ck01SectionBefore);
+    assert.equal(fs.existsSync(planning('phases', 'CK.01-03-prior-three', '03-01-PLAN.md')), true);
+    assert.equal(fs.existsSync(planning('phases', 'CK.01-03-prior-three', '03-01-SUMMARY.md')), true);
+
+    const ck03SectionAfter = roadmapAfter.slice(
+      roadmapAfter.indexOf('## [CK.03]'),
+      roadmapAfter.indexOf('## Progress'),
+    );
+    assert.equal(ck03SectionAfter, ck03SectionBefore);
+
+    assert.equal(fs.existsSync(planning('phases', 'CK.02-02-three', '02-01-PLAN.md')), true);
+    assert.equal(roadmapAfter.includes('### [CK.02] 02: Three'), true);
+    assert.equal(roadmapAfter.includes('### [CK.02] 03: Three'), false);
+
+    const progressAfter = roadmapAfter.slice(roadmapAfter.indexOf('## Progress'));
+    assert.equal(progressAfter.includes('| [CK.02] 02 | 0/1 | Planned |'), true);
+    assert.equal(progressAfter.includes('| [CK.02] 03 | 0/1 | Planned |'), false);
+    assert.equal(progressAfter.includes('| [CK.01] 03 | 0/1 | Prior |'), true);
+    assert.equal(progressAfter.includes('| [CK.03] 01 | 0/1 | Future |'), true);
+    assert.equal((progressAfter.match(/^\| \[CK\.02\] 02 \|/gm) ?? []).length, 1);
+  });
 });
