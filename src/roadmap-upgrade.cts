@@ -20,9 +20,16 @@ import phaseIdMod = require('./phase-id.cjs');
 import phaseLocatorMod = require('./phase-locator.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningScopeMod = require('./planning-scope.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import frontmatterMod = require('./frontmatter.cjs');
 const { planningDir } = planningWorkspace;
 const { listAllPhaseDirs } = phaseLocatorMod;
 const { SCOPE } = planningScopeMod;
+// #4698 Blocker 1 (round 2): reuse the shared frontmatter reader/writer
+// (src/frontmatter.cts) rather than a bespoke YAML touch — `spliceFrontmatter`
+// already solves "change exactly one key, preserve every other key's raw text
+// byte-for-byte", which is exactly the contract a `depends_on` rewrite needs.
+const { extractFrontmatter, spliceFrontmatter } = frontmatterMod;
 const {
   BRACKET_ID_SRC,
   BRACKET_PROJECT_CODE_SRC,
@@ -94,12 +101,34 @@ interface ArtifactRename {
   newName: string;
 }
 
+/**
+ * #4698 Blocker 1 (round 2): a `depends_on` frontmatter rewrite inside one
+ * `*-PLAN.md` file of a renamed directory. `oldName` is the file's
+ * PRE-migration name (the key `applyMigration` snapshots against, so
+ * rollback restores it at the exact path it returns to once every rename in
+ * `performedRenames` — including this same directory's own — has been
+ * reversed); `finalName` is the name the SAME file carries once
+ * `computeArtifactRenames` has run for this directory (identical to
+ * `oldName` when this particular file's own name did not change). `from`/
+ * `to` are the full, byte-exact file contents before and after the rewrite —
+ * the same "whole value, not a diff" shape `RoadmapEdit` already uses for its
+ * `from`/`to` line text, so the dry-run JSON plan previews this rewrite the
+ * same way it previews a ROADMAP.md line edit.
+ */
+interface DependsOnRewrite {
+  oldName: string;
+  finalName: string;
+  from: string;
+  to: string;
+}
+
 interface PhaseRename {
   oldId: string;
   newId: string;
   oldDir: string;
   newDir: string;
   fileRenames?: ArtifactRename[];
+  dependsOnRewrites?: DependsOnRewrite[];
 }
 
 interface RoadmapEdit {
@@ -492,6 +521,126 @@ function computeArtifactRenames(
 }
 
 /**
+ * #4698 Blocker 1 (round 2): a directory rename changes the phase's on-disk
+ * token, and `computeArtifactRenames` (above) renames that directory's own
+ * artifact FILENAMES to match — but a SIBLING plan file's `depends_on`
+ * frontmatter that names one of those renamed files by its OLD
+ * phase-qualified id (`depends_on: ["03-01"]`, naming `03-01-PLAN.md`) keeps
+ * spelling the OLD token. The real dependency resolver
+ * (`computeDependencyLevels`, src/phase.cts) resolves `depends_on` tokens
+ * against `RawPlan.id`s derived from THIS SAME PHASE DIRECTORY's own
+ * filenames only (`cmdPhasePlanIndex` scans one phase directory at a time) —
+ * so once the sibling's filename changes, the stale token matches no plan id
+ * in the directory at all, the edge is dropped as "unresolved" (#3427), and
+ * the dependent plan fails readiness (`missingEvidence`) even after its
+ * predecessor completes — reproducing the reported defect exactly.
+ *
+ * Fix: for every root-level `*-PLAN.md` file in the directory being renamed,
+ * read its CURRENT (pre-migration) frontmatter — nothing has moved yet, this
+ * is still plan computation, the same contract `computeArtifactRenames`
+ * follows — and rewrite any `depends_on` entry whose token starts with this
+ * directory's own OLD token followed by `-<planNumber>`, to the NEW token. A
+ * bare in-phase short-form dependency (`"01"`, no phase prefix — #3897 rung
+ * 4) or a token naming a genuinely different phase is never touched: only a
+ * token whose PREFIX exactly matches the directory's own old token is
+ * rewritten, and only that prefix — the plan-number suffix is preserved
+ * verbatim.
+ *
+ * `depends_on` is the only frontmatter field this rewrites. It is the only
+ * field the real resolver reads for cross-plan identity: `parsePlanDocument`
+ * (src/plan-document.cts) reads `phase`/`plan` as scalar display fields, never
+ * assembling a `<phase>-<NN>` token from them, and a `*-SUMMARY.md`'s own
+ * `requires:` block is prose (a human-readable "what this phase needed"
+ * list) that `computeDependencyLevels` never parses — rewriting either would
+ * touch bytes the resolver does not read, not fix a real resolution gap.
+ *
+ * NESTED `plans/` ARTIFACTS ARE OUT OF SCOPE, for the identical reason
+ * `computeArtifactRenames` excludes them (see that function's docblock): a
+ * plain, non-recursive `readdirSync` of the phase directory's root already
+ * excludes `plans/`'s contents.
+ */
+function computeDependsOnRewrites(
+  oldDirPath: string,
+  sourceToken: string,
+  targetToken: string,
+  fileRenames: ArtifactRename[],
+): DependsOnRewrite[] {
+  if (!sourceToken || sourceToken === targetToken) return [];
+
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(oldDirPath, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const depTokenRe = new RegExp(`^${escapeRegex(sourceToken)}-`);
+  const renameByOldName = new Map(fileRenames.map((r) => [r.oldName, r.newName]));
+
+  const rewrites: DependsOnRewrite[] = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !/-PLAN\.md$/i.test(entry.name)) continue;
+
+    const filePath = path.join(oldDirPath, entry.name);
+    let content: string;
+    try {
+      content = fs.readFileSync(filePath, 'utf8');
+    } catch {
+      continue;
+    }
+
+    let fm: Record<string, unknown>;
+    try {
+      fm = extractFrontmatter(content, filePath);
+    } catch {
+      continue;
+    }
+
+    // Mirrors parsePlanDocument's own depends_on normalization exactly
+    // (src/plan-document.cts) — an array of strings, a single non-empty
+    // string coerced to a one-element array, or nothing.
+    const rawDeps = fm['depends_on'];
+    const deps: string[] | null = Array.isArray(rawDeps)
+      ? rawDeps.map(String)
+      : typeof rawDeps === 'string' && rawDeps.trim() !== ''
+        ? [rawDeps]
+        : null;
+    if (!deps || deps.length === 0) continue;
+
+    let changed = false;
+    const newDeps = deps.map((dep) => {
+      if (!depTokenRe.test(dep)) return dep;
+      changed = true;
+      return dep.replace(depTokenRe, `${targetToken}-`);
+    });
+    if (!changed) continue;
+
+    let newContent: string;
+    try {
+      newContent = spliceFrontmatter(content, { ...fm, depends_on: newDeps });
+    } catch (err) {
+      // A depends_on value the shared writer cannot faithfully re-serialize
+      // must never be silently dropped — refuse before any write, the same
+      // contract every other unrepresentable case in this file already
+      // follows (e.g. computeArtifactRenames' collision refusal above).
+      throw new Error(
+        `Cannot rewrite depends_on in ${JSON.stringify(entry.name)} for phase token change `
+        + `${JSON.stringify(sourceToken)} -> ${JSON.stringify(targetToken)}: ${(err as Error).message}`,
+      );
+    }
+
+    rewrites.push({
+      oldName: entry.name,
+      finalName: renameByOldName.get(entry.name) ?? entry.name,
+      from: content,
+      to: newContent,
+    });
+  }
+
+  return rewrites;
+}
+
+/**
  * #4698 Blocker 2: how many integer identity segments THIS mapping requires
  * a directory to match. An M-NN mapping with more segments (`2-04-01`, a
  * child) is strictly more specific than one with fewer (`2-04`, its parent)
@@ -701,16 +850,23 @@ function computeBracketPlan(cwd: string): MigrationPlan {
 
     const newDir = buildBracketDirName(code, hit.mapping, matchedSlug, dirName);
     if (newDir !== dirName) {
+      const oldDirPath = path.join(phasesDir, dirName);
+      // #4698 Blocker 3: rename this directory's own phase-qualified
+      // artifacts (computed against the OLD path — nothing has moved yet,
+      // this is still plan computation) so they keep matching their
+      // phase's new bracket token after the directory itself is renamed.
+      const fileRenames = computeArtifactRenames(dirName, oldDirPath, matchedToken, hit.mapping.token);
       phases.push({
         oldId: hit.mapping.sourceToken,
         newId: `${code}.${pad2(hit.mapping.milestoneInt)}-${hit.mapping.token}`,
         oldDir: dirName,
         newDir,
-        // #4698 Blocker 3: rename this directory's own phase-qualified
-        // artifacts (computed against the OLD path — nothing has moved yet,
-        // this is still plan computation) so they keep matching their
-        // phase's new bracket token after the directory itself is renamed.
-        fileRenames: computeArtifactRenames(dirName, path.join(phasesDir, dirName), matchedToken, hit.mapping.token),
+        fileRenames,
+        // #4698 Blocker 1 (round 2): rewrite depends_on references (in this
+        // same directory's own *-PLAN.md files) that name a sibling by the
+        // OLD token — see computeDependsOnRewrites' docblock. Also computed
+        // against the OLD path; nothing has moved yet.
+        dependsOnRewrites: computeDependsOnRewrites(oldDirPath, matchedToken, hit.mapping.token, fileRenames),
       });
     }
   }
@@ -1177,6 +1333,31 @@ function applyMigration(cwd: string, plan: MigrationPlan, options: { dryRun?: bo
           if (fs.existsSync(oldFilePath)) {
             retryRenameSync(oldFilePath, newFilePath);
             performedRenames.push({ oldPath: oldFilePath, newPath: newFilePath });
+          }
+        }
+
+        // #4698 Blocker 1 (round 2): rewrite depends_on references, AFTER
+        // the artifact renames above so `rewrite.finalName` already exists
+        // on disk at its final name. The backup is keyed by the file's
+        // ORIGINAL pre-migration absolute path (`oldPath`, this directory's
+        // own pre-rename path — still a valid STRING even though nothing
+        // lives there right now) rather than its current path: the rollback
+        // below reverses every entry in `performedRenames` (this directory's
+        // rename AND its file renames) BEFORE it ever consults
+        // `fileBackups`, so by the time that restore runs, this exact file
+        // is already back at `oldPath`/`rewrite.oldName` — which is the only
+        // path the backup can be keyed by for the restore to land correctly.
+        // Content, unlike a path, is never touched by the rename reversal,
+        // so keying by the post-rollback path is the only order that works.
+        for (const rewrite of phaseEntry.dependsOnRewrites ?? []) {
+          const currentPath = path.join(newPath, rewrite.finalName);
+          if (fs.existsSync(currentPath)) {
+            const originalPath = path.join(oldPath, rewrite.oldName);
+            if (!fileBackups.has(originalPath)) {
+              fileBackups.set(originalPath, { existed: true, content: rewrite.from });
+            }
+            fs.writeFileSync(currentPath, rewrite.to, 'utf8');
+            editedFiles.push(path.join('phases', phaseEntry.newDir, rewrite.finalName));
           }
         }
       }

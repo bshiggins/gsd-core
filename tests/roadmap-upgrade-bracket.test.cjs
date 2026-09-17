@@ -31,6 +31,13 @@ const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { computeMigrationPlan, applyMigration } = require('../gsd-core/bin/lib/roadmap-upgrade.cjs');
 const { readVerificationStatus } = require('../gsd-core/bin/lib/verification.cjs');
+// #4698 Blocker 1 (round 2): real production functions used to prove the
+// REAL dependency resolver (not a hand-rolled stand-in) resolves a
+// depends_on token this migrator rewrote. cmdPhasePlanIndex itself is not
+// used for this — see readyPlansViaRealResolver's own comment below.
+const { parsePlanDocument } = require('../gsd-core/bin/lib/plan-document.cjs');
+const { computeDependencyLevels, buildShortFormToId } = require('../gsd-core/bin/lib/phase.cjs');
+const { extractCanonicalPlanId } = require('../gsd-core/bin/lib/core-utils.cjs');
 
 const FIXTURE_ROOT = path.join(__dirname, 'fixtures', 'roadmap-upgrade-bracket');
 const COMMAND_TIMEOUT_MS = 60000;
@@ -122,6 +129,41 @@ function phaseDirs(cwd) {
   return fs.readdirSync(path.join(cwd, '.planning', 'phases'))
     .filter((entry) => fs.statSync(path.join(cwd, '.planning', 'phases', entry)).isDirectory())
     .sort();
+}
+
+/**
+ * #4698 Blocker 1 (round 2): builds rawPlans/planMap/canonicalToId from the
+ * REAL files on disk (via the REAL parsePlanDocument) and runs them through
+ * the REAL computeDependencyLevels/buildShortFormToId — the exact function
+ * pair the gate finding names, and the same one cmdPhasePlanIndex's own
+ * `ready_plans` is built from (src/phase.cts).
+ *
+ * cmdPhasePlanIndex itself is NOT exercised end-to-end here: its own
+ * directory lookup (`matchPhaseDirs(dirs, normalized)`, src/phase.cts) is
+ * called with no `convention` argument, so it cannot resolve a
+ * bracket-renamed directory (`GSD.02-01-deps`) by phase number at all — a
+ * separate, pre-existing gap in that command's own directory resolution,
+ * unrelated to any of the three #4698 Blockers this suite covers. Exercising
+ * the resolver directly, on the phase directory this test already knows the
+ * path to, avoids that unrelated gap while still proving the real fix with
+ * real production code.
+ */
+function readyPlansViaRealResolver(phaseDir) {
+  const files = fs.readdirSync(phaseDir).filter((f) => /-PLAN\.md$/i.test(f)).sort();
+  const rawPlans = files.map((f) => {
+    const id = f.replace(/-PLAN\.md$/i, '');
+    const doc = parsePlanDocument(fs.readFileSync(path.join(phaseDir, f), 'utf8'));
+    return {
+      id,
+      dependsOn: doc.dependsOn,
+      hasSummary: fs.existsSync(path.join(phaseDir, `${id}-SUMMARY.md`)),
+    };
+  });
+  const planMap = new Map(rawPlans.map((p) => [p.id.toLowerCase(), p]));
+  const canonicalToId = new Map(rawPlans.map((p) => [extractCanonicalPlanId(p.id).toLowerCase(), p.id]));
+  const shortFormToId = buildShortFormToId(rawPlans);
+  const { level, visited, order, unresolved } = computeDependencyLevels(rawPlans, planMap, canonicalToId, shortFormToId);
+  return { rawPlans, planMap, level, visited, order, unresolved };
 }
 
 describe('roadmap upgrade --convention bracket', () => {
@@ -888,6 +930,155 @@ describe('roadmap upgrade --convention bracket', () => {
         snapshotTree(planningPath),
         before,
         'directory renames AND their artifact renames must both be reversed, byte-for-byte',
+      );
+    });
+  });
+
+  // #4698 Blocker 1 (round 2, Astra pre-push gate round 2): computeArtifactRenames
+  // (#4698 Blocker 3, round 1) renames a phase's artifact FILENAMES when its
+  // directory's token changes, but a SIBLING plan's `depends_on` frontmatter
+  // that names the renamed file by its OLD phase-qualified id kept spelling
+  // the old token — the real dependency resolver (computeDependencyLevels,
+  // src/phase.cts) then reports the token unresolved and the dependent plan
+  // never reaches ready_plans, even once its predecessor completes.
+  describe('rewrites stale depends_on references inside renamed phase artifacts (#4698 Blocker 1, round 2)', () => {
+    function setupDependsOnRewriteFixture() {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      // Replace the roadmap with a single phase ("3") that is the ONLY phase
+      // in its own milestone — exactly the shape that makes assignBracketTokens
+      // renumber it to a DIFFERENT bracket token ("01"), the precondition for
+      // any artifact (and therefore any depends_on) rewrite to be needed at all.
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v2.0 — Deps milestone',
+          '',
+          '### Phase 3: Deps',
+          '',
+          '- [ ] **Phase 3:** Deps',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      cleanup(path.join(phasesDir, '01-alpha'));
+      cleanup(path.join(phasesDir, '02.1-beta'));
+      cleanup(path.join(phasesDir, '03-gamma'));
+      const depsDir = path.join(phasesDir, '03-deps');
+      fs.mkdirSync(depsDir, { recursive: true });
+      // Two plans in the SAME phase directory: 02 depends on 01 by its full
+      // phase-qualified id, mirroring templates/phase-prompt.md's own
+      // documented `depends_on: ["03-01"]` example for a same-phase sibling.
+      fs.writeFileSync(
+        path.join(depsDir, '03-01-PLAN.md'),
+        '---\nphase: "03"\nplan: "01"\ntype: standard\nwave: 1\ndepends_on: []\nautonomous: true\n---\n\n'
+        + '<objective>\nFirst plan.\n</objective>\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(depsDir, '03-01-SUMMARY.md'),
+        '---\nphase: "03"\nplan: "01"\nstatus: complete\n---\n\nDone.\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(depsDir, '03-02-PLAN.md'),
+        '---\nphase: "03"\nplan: "02"\ntype: standard\nwave: 2\ndepends_on: ["03-01"]\nautonomous: true\n---\n\n'
+        + '<objective>\nSecond plan, depends on the first.\n</objective>\n',
+        'utf8',
+      );
+      return { cwd, phasesDir, depsDir };
+    }
+
+    test('dry-run previews the depends_on rewrite (count and files) and writes zero bytes', () => {
+      const { cwd } = setupDependsOnRewriteFixture();
+      const before = snapshotTree(cwd, { skipGit: true });
+
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'depends_on rewrite dry-run preview');
+
+      const depsEntry = plan.phases.find((p) => p.oldDir === '03-deps');
+      assert.ok(depsEntry, 'fixture must produce the 03-deps rename');
+      assert.equal(depsEntry.newDir, 'GSD.02-01-deps');
+      assert.equal(depsEntry.dependsOnRewrites.length, 1, 'exactly one PLAN file needs a depends_on rewrite');
+      assert.equal(depsEntry.dependsOnRewrites[0].oldName, '03-02-PLAN.md');
+      assert.equal(depsEntry.dependsOnRewrites[0].finalName, '01-02-PLAN.md');
+      assert.deepEqual(parsePlanDocument(depsEntry.dependsOnRewrites[0].to).dependsOn, ['01-01']);
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'dry-run must write nothing');
+    });
+
+    test('a sibling plan id renamed by the migration is still resolved and reported ready by the real dependency resolver', () => {
+      const { cwd } = setupDependsOnRewriteFixture();
+
+      const result = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(result, 0, 'depends_on rewrite apply');
+
+      const newDepsDir = path.join(cwd, '.planning', 'phases', 'GSD.02-01-deps');
+      assert.equal(fs.existsSync(path.join(newDepsDir, '01-01-PLAN.md')), true, 'predecessor plan renamed');
+      assert.equal(fs.existsSync(path.join(newDepsDir, '01-02-PLAN.md')), true, 'dependent plan renamed');
+
+      const rewritten = fs.readFileSync(path.join(newDepsDir, '01-02-PLAN.md'), 'utf8');
+      assert.deepEqual(
+        parsePlanDocument(rewritten).dependsOn, ['01-01'],
+        'the REAL plan-document parser must read depends_on as naming the renamed sibling',
+      );
+      assert.doesNotMatch(rewritten, /03-01/, 'the stale phase-03 token must not survive anywhere in the file');
+      assert.match(rewritten, /Second plan, depends on the first\./, 'the rest of the file must be untouched');
+
+      const { level, unresolved } = readyPlansViaRealResolver(newDepsDir);
+      assert.deepEqual(unresolved, [], 'no depends_on token should be unresolved by the real resolver after the rewrite');
+      assert.equal(level.get('01-01'), 0, 'the predecessor is a DAG root');
+      assert.equal(
+        level.get('01-02'), 1,
+        'the dependent sits one level above its now-resolved predecessor — proving a real DAG edge exists, not a dropped one',
+      );
+
+      // Readiness itself: 01-01 has a SUMMARY (complete) and 01-02 does not —
+      // the textbook definition of "01-02 is ready to start" once its one
+      // dependency resolves AND that dependency has completion evidence.
+      const { planMap } = readyPlansViaRealResolver(newDepsDir);
+      assert.equal(planMap.get('01-01').hasSummary, true);
+      assert.equal(planMap.get('01-02').hasSummary, false);
+    });
+
+    test('a failure after the depends_on rewrite completes rolls it back byte-for-byte, alongside the renames', (t) => {
+      const { cwd } = setupDependsOnRewriteFixture();
+      const planningPath = path.join(cwd, '.planning');
+      const roadmapPath = path.join(planningPath, 'ROADMAP.md');
+
+      const plan = computeMigrationPlan(cwd, { convention: 'bracket' });
+      assert.equal(plan.alreadyMigrated, false);
+      const depsEntry = plan.phases.find((p) => p.oldDir === '03-deps');
+      assert.ok(depsEntry, 'fixture must produce the 03-deps rename');
+      assert.ok(depsEntry.dependsOnRewrites.length >= 1, 'fixture must produce at least one depends_on rewrite to reverse');
+
+      const before = snapshotTree(planningPath);
+
+      // Fail at the ROADMAP.md write — strictly AFTER step 1's directory
+      // renames, artifact renames, AND depends_on rewrites have already
+      // completed on disk for every phase.
+      const realWrite = fs.writeFileSync;
+      const writeMock = mock.method(fs, 'writeFileSync', (target, data, opts) => {
+        if (path.resolve(String(target)) === path.resolve(roadmapPath)) {
+          throw Object.assign(new Error('EIO: simulated write failure'), { code: 'EIO' });
+        }
+        return realWrite.call(fs, target, data, opts);
+      });
+      t.after(() => writeMock.mock.restore());
+
+      let caught;
+      try {
+        applyMigration(cwd, plan, { dryRun: false });
+      } catch (err) {
+        caught = err;
+      }
+
+      assert.ok(caught, 'a ROADMAP.md write failure must throw, not silently succeed');
+      assert.match(caught.message, /Migration failed and rolled back/);
+      assert.deepEqual(
+        snapshotTree(planningPath),
+        before,
+        'directory renames, artifact renames, AND the depends_on content rewrite must all be reversed, byte-for-byte',
       );
     });
   });

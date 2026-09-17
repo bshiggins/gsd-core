@@ -2021,7 +2021,10 @@ renames matching phase directories, and writes `phase_id_convention: "bracket"`.
 When a renamed directory's phase token changes, the bracket target also
 renames every phase-qualified artifact inside it (`03-VERIFICATION.md`,
 `03-01-PLAN.md`, and similar) to the new token, so existing plans and
-verification reports stay attached to their phase.
+verification reports stay attached to their phase, and rewrites any
+`depends_on` reference inside that same directory's plan files that named a
+renamed sibling by its old token (`depends_on: ["03-01"]` becomes
+`["01-01"]`), so the dependency still resolves after migration.
 
 | Flag | Required | Description |
 |------|----------|-------------|
