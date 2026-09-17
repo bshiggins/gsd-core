@@ -34,6 +34,7 @@ const {
   BRACKET_ID_SRC,
   BRACKET_PROJECT_CODE_SRC,
   normalizePhaseName,
+  OPTIONAL_PHASE_TAG_SOURCE,
   PHASE_NUMBER_TOKEN_SOURCE,
   stripProjectCodePrefix,
   toDir,
@@ -57,18 +58,67 @@ const MILESTONE_HEADING_RE = /^##\s+(?:\[[^\]]{1,200}\]\s+|Roadmap\s+|[✅🚧]\
 
 // Bracket headings are terminal migration targets. Both the bracket identity
 // and the following phase token come from the phase-id owner (#2128).
+// #4698 Blocker 3 (round 2): widened with (uncaptured) OPTIONAL_PHASE_TAG_SOURCE
+// so an ALREADY-migrated bracket heading that carries a tag
+// (`### [GSD.02] 05 (Cluster B): Name`) is still recognized as migrated —
+// this constant is exclusively bracket-owned (no shared consumer whose group
+// indices this would disturb), so it is safe to widen in place.
 const BRACKET_PHASE_HEADING_RE = new RegExp(
-  `^#{2,4}\\s*\\[${BRACKET_ID_SRC}\\][ \\t]*(?:Phase\\s+)?${PHASE_NUMBER_TOKEN_SOURCE}\\s*:`,
+  `^#{2,4}\\s*\\[${BRACKET_ID_SRC}\\][ \\t]*(?:Phase\\s+)?${PHASE_NUMBER_TOKEN_SOURCE}${OPTIONAL_PHASE_TAG_SOURCE}\\s*:`,
   'i',
 );
 
 // phase-id-owner: ADR-612 PR-3 exclusively owns the deprecated M-NN source grammar during the migration window.
+// M-NN has exactly one consumer (parseBracketSourcePhases, via
+// MNN_PHASE_HEADING_BRACKET_RE below) — the historical milestone-prefixed
+// target never recognizes M-NN input at all — so only the shared token
+// source lives here; the heading regex itself is bracket-path-owned.
 const MNN_SOURCE_TOKEN_SOURCE = '\\d+-\\d+(?:-\\d+)?';
-const MNN_PHASE_HEADING_RE = new RegExp(
-  `^(#{2,4})\\s*(?:\\[[^\\]]{1,200}\\]\\s*)?Phase\\s+(${MNN_SOURCE_TOKEN_SOURCE})\\s*:(.*)`,
+const PROJECT_CODE_RE = new RegExp(`^${BRACKET_PROJECT_CODE_SRC}$`);
+
+// #4698 Blocker 3 (round 2): bracket-source-parsing-OWNED copies of the
+// legacy/M-NN heading grammars above, widened with a CAPTURED
+// `OPTIONAL_PHASE_TAG_SOURCE` so a heading the runtime already supports —
+// `### Phase 2 (Cluster B): Beta`, the optional parenthetical tag between the
+// phase number and the colon (src/phase-id.cts, #1729) — is recognized here
+// too, instead of failing every grammar and vanishing from the plan silently
+// (the exact reported defect). `src/roadmap.cts`'s real bracket readers
+// compose `phaseHeadingPrefixSrcFor(...) + PHASE_NUMBER_TOKEN_SOURCE +
+// OPTIONAL_PHASE_TAG_SOURCE + ':'` for BOTH the bracket and label-only
+// intros (e.g. `src/roadmap.cts:184`) — so the bracket heading grammar DOES
+// have a tag slot, in this exact position, and this migrator must emit into
+// it rather than drop the tag or refuse it.
+//
+// LEGACY_PHASE_HEADING_BRACKET_RE is a SEPARATE constant from
+// LEGACY_PHASE_HEADING_RE (used by the historical milestone-prefixed
+// target's OWN parseRoadmapPhases and its own separate heading-rewrite regex
+// in computeMigrationPlan, both with an established, untouched group-index
+// contract) rather than widening that shared regex in place: widening
+// recognition there alone would newly COUNT a tagged heading that target's
+// own rewrite regex still cannot rewrite (a different, unfixed regex),
+// trading a silent skip for a silent half-migration. M-NN needs no such
+// pairing — it has exactly one consumer (this bracket-only source parser),
+// per MNN_SOURCE_TOKEN_SOURCE's own comment above.
+const LEGACY_PHASE_HEADING_BRACKET_RE = new RegExp(
+  `^(#{2,4})\\s*(?:\\[[^\\]]{1,200}\\]\\s*)?Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})(${OPTIONAL_PHASE_TAG_SOURCE})\\s*:(.*)`,
   'i',
 );
-const PROJECT_CODE_RE = new RegExp(`^${BRACKET_PROJECT_CODE_SRC}$`);
+const MNN_PHASE_HEADING_BRACKET_RE = new RegExp(
+  `^(#{2,4})\\s*(?:\\[[^\\]]{1,200}\\]\\s*)?Phase\\s+(${MNN_SOURCE_TOKEN_SOURCE})(${OPTIONAL_PHASE_TAG_SOURCE})\\s*:(.*)`,
+  'i',
+);
+
+// #4698 Blocker 3 (round 2), part (b): a line that STARTS like a phase
+// heading, or like a bracket-shaped heading, but is parsed by NONE of the
+// three recognized grammars above must never be silently skipped — that is
+// exactly how a tagged/malformed heading went unmigrated while the roadmap
+// still got stamped with the target convention (the reported defect's root
+// cause: partial conversion read as "done"). `computeBracketPlan` refuses
+// before any write when either pattern below matches a line that none of
+// BRACKET_PHASE_HEADING_RE / MNN_PHASE_HEADING_BRACKET_RE /
+// LEGACY_PHASE_HEADING_BRACKET_RE accepted.
+const PHASE_HEADING_LIKE_RE = /^#{2,4}\s*Phase\b/i;
+const BRACKET_HEADING_LIKE_RE = /^#{2,4}\s*\[[^\]]{1,200}\]/;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -283,6 +333,14 @@ interface BracketSourceEntry {
   source?: 'legacy' | 'mnn';
   milestoneInt?: number | null;
   sourceToken?: string;
+  /**
+   * #4698 Blocker 3 (round 2): the verbatim optional parenthetical tag text
+   * (e.g. `" (Cluster B)"`, including its own leading whitespace), or `''`
+   * when the heading carried none. Re-inserted before the colon when the
+   * bracket heading is emitted, in the exact slot the real bracket heading
+   * grammar accepts one (see LEGACY_PHASE_HEADING_BRACKET_RE's docblock).
+   */
+  headingTag?: string;
   headingTail?: string;
   hashes?: string;
 }
@@ -297,8 +355,11 @@ interface BracketMapping {
 
 const pad2 = (value: number): string => String(value).padStart(2, '0');
 
-function parseBracketSourcePhases(lines: string[]): BracketSourceEntry[] {
+function parseBracketSourcePhases(lines: string[]): { entries: BracketSourceEntry[]; unparsed: string[] } {
   const results: BracketSourceEntry[] = [];
+  // #4698 Blocker 3 (round 2), part (b): every phase-like/bracket-like line
+  // this loop could not place into any of the three recognized grammars.
+  const unparsed: string[] = [];
   let currentMilestoneInt: number | null = null;
 
   for (let i = 0; i < lines.length; i++) {
@@ -316,7 +377,7 @@ function parseBracketSourcePhases(lines: string[]): BracketSourceEntry[] {
 
     // M-NN must be tested before legacy. It is a convertible source under
     // bracket, not the terminal convention it is for the legacy migrator.
-    const mnnMatch = line.match(MNN_PHASE_HEADING_RE);
+    const mnnMatch = line.match(MNN_PHASE_HEADING_BRACKET_RE);
     if (mnnMatch) {
       const segments = mnnMatch[2].split('-');
       results.push({
@@ -325,13 +386,14 @@ function parseBracketSourcePhases(lines: string[]): BracketSourceEntry[] {
         source: 'mnn',
         milestoneInt: parseInt(segments[0], 10),
         sourceToken: mnnMatch[2],
-        headingTail: mnnMatch[3],
+        headingTag: mnnMatch[3] ?? '',
+        headingTail: mnnMatch[4],
         hashes: mnnMatch[1],
       });
       continue;
     }
 
-    const legacyMatch = line.match(LEGACY_PHASE_HEADING_RE);
+    const legacyMatch = line.match(LEGACY_PHASE_HEADING_BRACKET_RE);
     if (legacyMatch) {
       results.push({
         lineIndex: i,
@@ -339,13 +401,19 @@ function parseBracketSourcePhases(lines: string[]): BracketSourceEntry[] {
         source: 'legacy',
         milestoneInt: currentMilestoneInt,
         sourceToken: legacyMatch[2],
-        headingTail: legacyMatch[3],
+        headingTag: legacyMatch[3] ?? '',
+        headingTail: legacyMatch[4],
         hashes: legacyMatch[1],
       });
+      continue;
+    }
+
+    if (PHASE_HEADING_LIKE_RE.test(line) || BRACKET_HEADING_LIKE_RE.test(line)) {
+      unparsed.push(line);
     }
   }
 
-  return results;
+  return { entries: results, unparsed };
 }
 
 /**
@@ -752,7 +820,25 @@ function computeBracketPlan(cwd: string): MigrationPlan {
   }
 
   const lines = roadmapContent.split('\n');
-  const parsed = parseBracketSourcePhases(lines);
+  const { entries: parsed, unparsed } = parseBracketSourcePhases(lines);
+
+  // #4698 Blocker 3 (round 2), part (b): a heading that starts like a phase
+  // heading (or a bracket-shaped heading) but matched none of the three
+  // recognized grammars is never silently skipped — refuse before any write
+  // and list every offender verbatim, exactly like refuseMixedRoadmap below
+  // does for a textual mix. Checked before the "zero recognized headings"
+  // guard: a roadmap with some genuinely recognized headings AND one
+  // unparseable phase-like heading is the reported defect's exact shape, and
+  // this message is the more actionable of the two for that case.
+  if (unparsed.length > 0) {
+    throw new Error(
+      'Cannot safely migrate ROADMAP.md to the bracket convention: found heading(s) that start like a '
+      + 'phase heading but do not match any recognized grammar (legacy "### Phase N: Name", M-NN '
+      + '"### Phase M-NN: Name", or bracket "### [CODE.MM] NN: Name" — each optionally followed by a '
+      + '"(Tag)" before the colon). Refusing rather than silently skipping them. Unrecognized heading(s):\n'
+      + unparsed.map((l) => `  ${l}`).join('\n'),
+    );
+  }
 
   // #4698 Blocker 2: an unrecognized or partially-migrated roadmap must
   // refuse outright, never silently return a "successful" empty/partial plan.
@@ -915,7 +1001,11 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     const mapping = idMapping.get(entry.lineIndex);
     if (!mapping) continue;
     const oldLine = lines[entry.lineIndex];
-    const heading = `${entry.hashes} [${code}.${pad2(mapping.milestoneInt)}] ${mapping.token}:`;
+    // #4698 Blocker 3 (round 2): the tag (if any) is re-inserted right after
+    // the phase token and before the colon — the exact slot the real bracket
+    // heading grammar accepts one in (see LEGACY_PHASE_HEADING_BRACKET_RE's
+    // docblock).
+    const heading = `${entry.hashes} [${code}.${pad2(mapping.milestoneInt)}] ${mapping.token}${entry.headingTag ?? ''}:`;
     const newLine = heading + (entry.headingTail ?? '');
     if (newLine !== oldLine) {
       roadmapEdits.push({ lineIndex: entry.lineIndex, from: oldLine, to: newLine });
@@ -923,12 +1013,19 @@ function computeBracketPlan(cwd: string): MigrationPlan {
   }
 
   let currentMilestone: number | null = null;
+  // #4698 Blocker 3 (round 2): both checklist grammars gain the same
+  // captured OPTIONAL_PHASE_TAG_SOURCE the heading grammars above do, so a
+  // checklist bullet mirroring a tagged heading (`- [ ] **Phase 2 (Cluster
+  // B):** Beta`) still converts — the real checklist reader
+  // (src/phase.cts, e.g. line 3745) tolerates the identical tag in the
+  // identical position. Group 3 is now the tag; group 4 (previously group 3)
+  // is the colon-with-leading-space.
   const mnnChecklistRe = new RegExp(
-    `^(\\s*-\\s*\\[[ x]\\]\\s*\\*{0,2})Phase\\s+(${MNN_SOURCE_TOKEN_SOURCE})(\\s*:)`,
+    `^(\\s*-\\s*\\[[ x]\\]\\s*\\*{0,2})Phase\\s+(${MNN_SOURCE_TOKEN_SOURCE})(${OPTIONAL_PHASE_TAG_SOURCE})(\\s*:)`,
     'i',
   );
   const legacyChecklistRe = new RegExp(
-    `^(\\s*-\\s*\\[[ x]\\]\\s*\\*{0,2})Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})(\\s*:)`,
+    `^(\\s*-\\s*\\[[ x]\\]\\s*\\*{0,2})Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})(${OPTIONAL_PHASE_TAG_SOURCE})(\\s*:)`,
     'i',
   );
 
@@ -946,7 +1043,7 @@ function computeBracketPlan(cwd: string): MigrationPlan {
       const segments = mnnChecklist[2].split('-');
       const milestone = parseInt(segments[0], 10);
       const token = segments.slice(1).map((segment) => pad2(parseInt(segment, 10))).join('.');
-      const replacement = `${mnnChecklist[1]}[${code}.${pad2(milestone)}] ${token}${mnnChecklist[3]}`;
+      const replacement = `${mnnChecklist[1]}[${code}.${pad2(milestone)}] ${token}${mnnChecklist[3]}${mnnChecklist[4]}`;
       roadmapEdits.push({
         lineIndex: i,
         from: line,
@@ -972,7 +1069,7 @@ function computeBracketPlan(cwd: string): MigrationPlan {
       }
     }
     if (!token || resolvedMilestone === null) continue;
-    const replacement = `${legacyChecklist[1]}[${code}.${pad2(resolvedMilestone)}] ${token}${legacyChecklist[3]}`;
+    const replacement = `${legacyChecklist[1]}[${code}.${pad2(resolvedMilestone)}] ${token}${legacyChecklist[3]}${legacyChecklist[4]}`;
     roadmapEdits.push({
       lineIndex: i,
       from: line,

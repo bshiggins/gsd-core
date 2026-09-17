@@ -1159,4 +1159,93 @@ describe('roadmap upgrade --convention bracket', () => {
       assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'apply refusal must write nothing');
     });
   });
+
+  // #4698 Blocker 3 (round 2, Astra pre-push gate round 2): a heading the
+  // runtime already supports — an optional parenthetical tag between the
+  // phase number and the colon (`### Phase 2 (Cluster B): Beta`,
+  // OPTIONAL_PHASE_TAG_SOURCE, src/phase-id.cts #1729) — was not matched by
+  // this migrator's own legacy/M-NN heading regexes, so it was silently
+  // skipped while a different heading converted fine; the partial migration
+  // then stamped phase_id_convention and the next run reported "done".
+  describe('recognizes tagged phase headings and refuses unparsed ones (#4698 Blocker 3, round 2)', () => {
+    test('a supported parenthetical tag survives migration in the position the bracket grammar accepts', () => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v1.0 — Foundation',
+          '',
+          '### Phase 1: Alpha',
+          '',
+          '- [ ] **Phase 1:** Alpha',
+          '',
+          '### Phase 2 (Cluster B): Beta',
+          '',
+          '- [ ] **Phase 2 (Cluster B):** Beta',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      cleanup(path.join(phasesDir, '02.1-beta'));
+      cleanup(path.join(phasesDir, '03-gamma'));
+
+      const result = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(result, 0, 'tagged heading apply');
+
+      const roadmap = fs.readFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), 'utf8');
+      assert.match(roadmap, /### \[GSD\.01\] 01: Alpha/);
+      assert.match(
+        roadmap, /### \[GSD\.01\] 02 \(Cluster B\): Beta/,
+        'the tag must be preserved, in the position the real bracket heading grammar accepts one (src/roadmap.cts)',
+      );
+      assert.match(
+        roadmap, /- \[ \] \*\*\[GSD\.01\] 02 \(Cluster B\):\*\* Beta/,
+        'the checklist row must also convert and preserve the tag',
+      );
+
+      const config = JSON.parse(fs.readFileSync(path.join(cwd, '.planning', 'config.json'), 'utf8'));
+      assert.equal(config.phase_id_convention, 'bracket');
+
+      // Idempotent re-run: the tagged bracket heading must be recognized as
+      // already migrated, never refused as a textual mix and never rewritten
+      // again — the exact retry the reported defect made unreachable.
+      const afterFirst = snapshotTree(cwd, { skipGit: true });
+      const second = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(second, 0, 'second apply over an already-tagged bracket heading must be done, not refused');
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), afterFirst, 'second run must be a no-op');
+    });
+
+    test('a heading that starts like a phase heading but matches no grammar is refused, with nothing written', () => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v1.0 — Foundation',
+          '',
+          '### Phase 1: Alpha',
+          '',
+          '### Phase Two: NoNumber',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const before = snapshotTree(cwd, { skipGit: true });
+
+      const dryRun = runBracketUpgrade(cwd);
+      assertExited(dryRun, 1, 'unparseable phase-like heading (dry-run)');
+      assert.match(dryRun.stderr, /do not match any recognized grammar/);
+      assert.match(dryRun.stderr, /### Phase Two: NoNumber/);
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'dry-run refusal must write nothing');
+
+      const apply = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(apply, 1, 'unparseable phase-like heading (apply)');
+      assert.match(apply.stderr, /### Phase Two: NoNumber/);
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'apply refusal must write nothing');
+    });
+  });
 });
