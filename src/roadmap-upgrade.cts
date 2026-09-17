@@ -33,9 +33,11 @@ const { extractFrontmatter, spliceFrontmatter } = frontmatterMod;
 const {
   BRACKET_ID_SRC,
   BRACKET_PROJECT_CODE_SRC,
+  isBracketPhaseTokenRepresentable,
   normalizePhaseName,
   OPTIONAL_PHASE_TAG_SOURCE,
   PHASE_NUMBER_TOKEN_SOURCE,
+  phaseArtifactTokenSpan,
   stripProjectCodePrefix,
   toDir,
 } = phaseIdMod;
@@ -553,12 +555,11 @@ function matchBracketSourceDir(dirName: string, mapping: BracketMapping): { slug
  * token against each candidate filename and excludes anything that
  * disagrees — so a stale-prefixed artifact silently drops out of
  * bracket-convention reads (verification, plan/summary scans) the moment its
- * directory is renamed. Fix: rename every ROOT-LEVEL file (never anything
- * inside a nested `plans/` subdirectory — see the docblock note below) whose
- * name starts with the directory's OWN on-disk source token, spelled exactly
- * as that directory spells it, followed by `-`, `.`, or the end of the name,
- * to the new bracket artifact token — keeping the rest of the filename
- * unchanged.
+ * directory is renamed. Fix: ask `phaseArtifactTokenSpan`, the reader-owned
+ * membership seam, for the exact token span of every ROOT-LEVEL file (never
+ * anything inside a nested `plans/` subdirectory — see the docblock note
+ * below), then replace exactly that span with the new bracket artifact token
+ * while keeping the rest of the filename unchanged.
  *
  * NESTED `plans/` ARTIFACTS ARE OUT OF SCOPE: the #3139 nested layout writes
  * `plans/PLAN-<n>.md` / `plans/SUMMARY-<n>.md` with NO phase-token prefix at
@@ -589,16 +590,12 @@ function computeArtifactRenames(
     return [];
   }
 
-  // #4698 Blocker 2 (round 2): match either accepted spelling of the
-  // directory's own old token (see sourceTokenForms), not the literal
-  // on-disk spelling alone.
-  const tokenPrefixRe = new RegExp(`^(?:${sourceTokenForms(sourceToken).map(escapeRegex).join('|')})(?=[-.]|$)`);
-
   const fileNames = entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
   const renames: ArtifactRename[] = [];
   for (const fileName of fileNames) {
-    if (!tokenPrefixRe.test(fileName)) continue;
-    const newName = fileName.replace(tokenPrefixRe, targetToken);
+    const tokenSpan = phaseArtifactTokenSpan(fileName, dirName);
+    if (tokenSpan === null) continue;
+    const newName = fileName.slice(0, tokenSpan.start) + targetToken + fileName.slice(tokenSpan.end);
     if (newName === fileName) continue;
     renames.push({ oldName: fileName, newName });
   }
@@ -895,6 +892,17 @@ function computeBracketPlan(cwd: string): MigrationPlan {
   const code = projectCode;
 
   const sourcePhases = unconverted;
+
+  const unrepresentableLegacy = sourcePhases.filter(
+    (entry) => entry.source === 'legacy' && !isBracketPhaseTokenRepresentable(entry.sourceToken!),
+  );
+  if (unrepresentableLegacy.length > 0) {
+    throw new Error(
+      'Cannot migrate source phase token(s) whose identity axis the bracket grammar cannot represent. '
+      + 'Refusing rather than collapsing distinct phase identities:\n'
+      + unrepresentableLegacy.map((entry) => `  Phase ${entry.sourceToken}`).join('\n'),
+    );
+  }
 
   // Real single-milestone repositories may omit a `## vN.M` heading while
   // carrying project-prefixed phase directories. Resolve those legacy entries

@@ -31,6 +31,7 @@ const { runNode, OUTCOME } = require('./helpers/process-seam.cjs');
 const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { computeMigrationPlan, applyMigration } = require('../gsd-core/bin/lib/roadmap-upgrade.cjs');
 const { readVerificationStatus } = require('../gsd-core/bin/lib/verification.cjs');
+const { scopeToPhase } = require('../gsd-core/bin/lib/phase-id.cjs');
 // #4698 Blocker 1 (round 2): real production functions used to prove the
 // REAL dependency resolver (not a hand-rolled stand-in) resolves a
 // depends_on token this migrator rewrote. cmdPhasePlanIndex itself is not
@@ -1156,6 +1157,87 @@ describe('roadmap upgrade --convention bracket', () => {
 
       const apply = runBracketUpgrade(cwd, ['--apply']);
       assertExited(apply, 1, 'padded/unpadded collision (apply)');
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'apply refusal must write nothing');
+    });
+  });
+
+  describe('round 4: identifies migratable artifacts with the reader predicate', () => {
+    test('de-padded verification and letter-suffixed plan names migrate with the phase and remain reader-visible', () => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      const gammaDir = path.join(phasesDir, '03-gamma');
+      fs.renameSync(
+        path.join(gammaDir, '03-VERIFICATION.md'),
+        path.join(gammaDir, '3-VERIFICATION.md'),
+      );
+      fs.renameSync(
+        path.join(gammaDir, '03-01-PLAN.md'),
+        path.join(gammaDir, '03-01A-PLAN.md'),
+      );
+
+      assert.deepEqual(
+        scopeToPhase(['3-VERIFICATION.md', '03-01A-PLAN.md'], '03-gamma'),
+        ['3-VERIFICATION.md', '03-01A-PLAN.md'],
+        'the source reader must attribute both spellings to phase 03 before migration',
+      );
+
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'round 4 reader-predicate dry-run');
+      const gammaEntry = plan.phases.find((entry) => entry.oldDir === '03-gamma');
+      assert.ok(gammaEntry, 'fixture must produce the 03-gamma rename');
+      assert.deepEqual(
+        gammaEntry.fileRenames.sort((a, b) => a.oldName.localeCompare(b.oldName)),
+        [
+          { oldName: '03-01A-PLAN.md', newName: '01-01A-PLAN.md' },
+          { oldName: '3-VERIFICATION.md', newName: '01-VERIFICATION.md' },
+        ],
+        'the rename set must be exactly the source reader\'s phase-qualified files',
+      );
+
+      const result = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(result, 0, 'round 4 reader-predicate apply');
+
+      const migratedDir = path.join(phasesDir, 'GSD.02-01-gamma');
+      assert.deepEqual(
+        scopeToPhase(['01-VERIFICATION.md', '01-01A-PLAN.md'], 'GSD.02-01-gamma', 'bracket'),
+        ['01-VERIFICATION.md', '01-01A-PLAN.md'],
+        'the target reader must still attribute both renamed files to the migrated phase',
+      );
+      assert.equal(
+        readVerificationStatus(migratedDir, { convention: 'bracket' }).status,
+        'passed',
+        'the real completion reader must retain the de-padded verification evidence after migration',
+      );
+    });
+
+    test('a source phase token with a letter axis the bracket grammar cannot express is refused before any write', () => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        '# Roadmap\n\n## v2.0 — Variants\n\n### Phase 3A: Variant alpha\n',
+        'utf8',
+      );
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      cleanup(path.join(phasesDir, '01-alpha'));
+      cleanup(path.join(phasesDir, '02.1-beta'));
+      fs.renameSync(path.join(phasesDir, '03-gamma'), path.join(phasesDir, '03A-variant-alpha'));
+      fs.renameSync(
+        path.join(phasesDir, '03A-variant-alpha', '03-01-PLAN.md'),
+        path.join(phasesDir, '03A-variant-alpha', '03A-01-PLAN.md'),
+      );
+      fs.renameSync(
+        path.join(phasesDir, '03A-variant-alpha', '03-VERIFICATION.md'),
+        path.join(phasesDir, '03A-variant-alpha', '03A-VERIFICATION.md'),
+      );
+      const before = snapshotTree(cwd, { skipGit: true });
+
+      const dryRun = runBracketUpgrade(cwd);
+      assertExited(dryRun, 1, 'unrepresentable letter-axis phase (dry-run)');
+      assert.match(dryRun.stderr, /Phase 3A/);
+      assert.match(dryRun.stderr, /bracket grammar cannot represent/i);
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'dry-run refusal must write nothing');
+
+      const apply = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(apply, 1, 'unrepresentable letter-axis phase (apply)');
       assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'apply refusal must write nothing');
     });
   });
