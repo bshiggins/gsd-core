@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 
 let tmpDir;
 
@@ -36,6 +37,13 @@ function snapshotTree(root) {
   }
   visit(root);
   return snapshot;
+}
+
+function replaceSeed(roadmapLines, phaseDirs) {
+  fs.writeFileSync(planning('ROADMAP.md'), roadmapLines.join('\n'));
+  // eslint-disable-next-line local/no-raw-rmsync-in-tests -- this fixture helper replaces only seed()'s known .planning/phases subtree; helpers.cleanup() would destroy the whole live fixture.
+  fs.rmSync(planning('phases'), { recursive: true, force: true });
+  for (const [name, files] of phaseDirs) makePhaseDir(name, files);
 }
 
 function seed() {
@@ -547,5 +555,174 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(progressAfter.includes('| [CK.01] 03 | 0/1 | Prior |'), true);
     assert.equal(progressAfter.includes('| [CK.03] 01 | 0/1 | Future |'), true);
     assert.equal((progressAfter.match(/^\| \[CK\.02\] 02 \|/gm) ?? []).length, 1);
+  });
+
+  test('discovers and renumbers later phases in both the active primary and Phase Details ranges', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '- [ ] [CK.02] 02: Two',
+        '',
+        '## [CK.03] v3.0 — Future',
+        '',
+        '### [CK.03] 01: Future',
+        '**Goal:** untouched',
+        '',
+        '## [CK.02] v2.0 — Current (Phase Details)',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '**Plans:** `03-01-PLAN.md`',
+        '',
+      ],
+      [
+        ['CK.02-02-two', ['02-01-PLAN.md']],
+        ['CK.02-03-three', ['03-01-PLAN.md']],
+        ['CK.03-01-future', []],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+
+    assert.equal(fs.existsSync(planning('phases', 'CK.02-02-three', '02-01-PLAN.md')), true);
+    assert.equal(roadmap.includes('- [ ] [CK.02] 02: Two'), false);
+    assert.equal(roadmap.includes('### [CK.02] 02: Two'), false);
+    assert.equal(roadmap.includes('### [CK.02] 02: Three'), true);
+    assert.equal(roadmap.includes('### [CK.02] 03: Three'), false);
+    assert.equal(roadmap.includes('`02-01-PLAN.md`'), true);
+    assert.equal(roadmap.includes('## [CK.03] v3.0 — Future'), true);
+    assert.equal(out.roadmap_lines_rewritten > 0, true);
+    assert.deepEqual(out.references_left_untouched, []);
+  });
+
+  test('renumbers only complete qualified identities, preserving prefixed and subphase identities byte-for-byte', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '**Depends on:** CK.02-03',
+        'Boundary decoy: XCK.02-03-other',
+        'Subphase decoy: CK.02-03.1',
+        '',
+      ],
+      [
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', []],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+
+    assert.equal(roadmap.includes('**Depends on:** CK.02-02'), true);
+    assert.equal(roadmap.includes('Boundary decoy: XCK.02-03-other'), true);
+    assert.equal(roadmap.includes('Subphase decoy: CK.02-03.1'), true);
+    assert.equal(roadmap.includes('XCK.02-02-other'), false);
+    assert.equal(roadmap.includes('CK.02-02.1'), false);
+  });
+
+  test('renumbers bare artifact filenames without rewriting a filename owned by a directory path', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '**Plans:** `../CK.01-03-prior/03-01-PLAN.md`, `03-01-PLAN.md`, `03-01-SUMMARY.md`',
+        '',
+      ],
+      [
+        ['CK.01-03-prior', ['03-01-PLAN.md']],
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', ['03-01-PLAN.md', '03-01-SUMMARY.md']],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+
+    assert.equal(
+      roadmap.includes('**Plans:** `../CK.01-03-prior/03-01-PLAN.md`, `02-01-PLAN.md`, `02-01-SUMMARY.md`'),
+      true,
+    );
+    assert.equal(roadmap.includes('../CK.01-03-prior/02-01-PLAN.md'), false);
+    assert.equal(fs.existsSync(planning('phases', 'CK.01-03-prior', '03-01-PLAN.md')), true);
+  });
+
+  test('rewrites only owned roadmap line classes and reports untouched phase prose', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '- [ ] **[CK.02] 02: Two**',
+        '- [ ] [CK.02] 03 Three',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03 (FOLLOW-UP): Three',
+        '**Goal:** renumber',
+        '**Depends on:** [CK.02] 03',
+        '**Plans:** `03-01-PLAN.md`, `03-01-SUMMARY.md`',
+        'Qualified reference: CK.02-03',
+        'Phase 03 remains prose and must stay byte-identical.',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] 02 | 0/1 | Planned |',
+        '| [CK.02] 03 | 0/1 | Planned |',
+        '',
+      ],
+      [
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', ['03-01-PLAN.md', '03-01-SUMMARY.md']],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    const lines = splitLines(roadmap);
+    const proseLine = lines.indexOf('Phase 03 remains prose and must stay byte-identical.') + 1;
+
+    assert.equal(roadmap.includes('- [ ] **[CK.02] 02: Two**'), false);
+    assert.equal(roadmap.includes('- [ ] [CK.02] 02 Three'), true);
+    assert.equal(roadmap.includes('### [CK.02] 02 (FOLLOW-UP): Three'), true);
+    assert.equal(roadmap.includes('**Depends on:** [CK.02] 02'), true);
+    assert.equal(roadmap.includes('**Plans:** `02-01-PLAN.md`, `02-01-SUMMARY.md`'), true);
+    assert.equal(roadmap.includes('Qualified reference: CK.02-02'), true);
+    assert.equal(lines[proseLine - 1], 'Phase 03 remains prose and must stay byte-identical.');
+    assert.equal(roadmap.includes('| [CK.02] 02 | 0/1 | Planned |'), true);
+    assert.equal((roadmap.match(/^\| \[CK\.02\] 02 \|/gm) ?? []).length, 1);
+    assert.equal(out.roadmap_lines_rewritten, 9);
+    assert.deepEqual(out.references_left_untouched, [proseLine]);
   });
 });

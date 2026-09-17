@@ -97,7 +97,7 @@ import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
 import { transitionCore } from './state-transition.cjs';
-import { updateTableCell, deleteTableRow, escapeCell } from './markdown-table.cjs';
+import { updateTableCell, deleteTableRow, escapeCell, splitTableRow } from './markdown-table.cjs';
 import { deleteSection, updateBullet } from './markdown-sectionizer.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- uat-predicate.cjs is an export= CommonJS module
 import uatPredicate = require('./uat-predicate.cjs');
@@ -2664,25 +2664,174 @@ function renameBracketPhases(
   return { renamedDirs, renamedFiles, renamedFileCollisions };
 }
 
+type BracketRoadmapPhaseId = ReturnType<typeof parsePhaseId>;
+
+interface BracketRoadmapRewriteResult {
+  updated: boolean;
+  roadmapLinesRewritten: number;
+  referencesLeftUntouched: number[];
+}
+
+interface RoadmapLineRecord {
+  text: string;
+  eol: string;
+  start: number;
+  lineNumber: number;
+}
+
+type BracketOwnedLine = {
+  kind: 'heading' | 'checklist' | 'progress' | 'depends-on' | 'other';
+  id: BracketRoadmapPhaseId | null;
+};
+
+const BRACKET_OWNED_PHASE_INTRO_SRC = phaseHeadingPrefixSrcFor(
+  PHASE_HEADING_BASELINE.LABEL_ONLY,
+  'bracket',
+  true,
+);
+const BRACKET_OWNED_PHASE_TOKEN_CAPTURE_SRC = `(${PHASE_NUMBER_TOKEN_SOURCE})`;
+const BRACKET_OWNED_TAG_SRC = '(?:[ \\t]*\\([^)\\r\\n]{0,200}\\))?';
+const BRACKET_HEADING_LINE_RE = new RegExp(
+  `^ {0,3}#{2,4}[ \\t]*${BRACKET_OWNED_PHASE_INTRO_SRC}`
+  + `${BRACKET_OWNED_PHASE_TOKEN_CAPTURE_SRC}${BRACKET_OWNED_TAG_SRC}[ \\t]*:`,
+);
+const BRACKET_CHECKLIST_LINE_RE = new RegExp(
+  `^[ \\t]*[-*][ \\t]+\\[[ xX]\\][ \\t]+\\*{0,2}${BRACKET_OWNED_PHASE_INTRO_SRC}`
+  + `${BRACKET_OWNED_PHASE_TOKEN_CAPTURE_SRC}${BRACKET_OWNED_TAG_SRC}[ \\t]*:?\\*{0,2}(?:[ \\t]|$)`,
+);
+const BRACKET_CELL_ID_RE = new RegExp(
+  `^${BRACKET_OWNED_PHASE_INTRO_SRC}${BRACKET_OWNED_PHASE_TOKEN_CAPTURE_SRC}`
+  + `${BRACKET_OWNED_TAG_SRC}(?:[ \\t]*:|[ \\t]|$)`,
+);
+
+function splitRoadmapLineRecords(content: string): RoadmapLineRecord[] {
+  const records: RoadmapLineRecord[] = [];
+  const lineRe = /([^\r\n]*)(\r\n|\n|$)/g;
+  let match: RegExpExecArray | null;
+  let lineNumber = 1;
+  while ((match = lineRe.exec(content)) !== null) {
+    if (match[0] === '') break;
+    records.push({
+      text: match[1],
+      eol: match[2],
+      start: match.index,
+      lineNumber,
+    });
+    lineNumber += 1;
+  }
+  return records;
+}
+
+function phaseIdFromOwnedLineMatch(match: RegExpExecArray | null): BracketRoadmapPhaseId | null {
+  if (!match?.[1] || !match[2]) return null;
+  try {
+    return parsePhaseId(`[${match[1]}] ${match[2]}`);
+  } catch {
+    return null;
+  }
+}
+
+function classifyBracketOwnedLine(line: string): BracketOwnedLine {
+  const headingId = phaseIdFromOwnedLineMatch(BRACKET_HEADING_LINE_RE.exec(line));
+  if (headingId) return { kind: 'heading', id: headingId };
+
+  const checklistId = phaseIdFromOwnedLineMatch(BRACKET_CHECKLIST_LINE_RE.exec(line));
+  if (checklistId) return { kind: 'checklist', id: checklistId };
+
+  if (/^[ \\t]*\\|/.test(line)) {
+    const firstCell = splitTableRow(line)[0]?.replace(/^\\*\\*(.*)\\*\\*$/, '$1') ?? '';
+    const progressId = phaseIdFromOwnedLineMatch(BRACKET_CELL_ID_RE.exec(firstCell));
+    if (progressId) return { kind: 'progress', id: progressId };
+  }
+
+  if (/^[ \\t]*\\*\\*Depends on(?::\\*\\*|\\*\\*:)/i.test(line)) {
+    return { kind: 'depends-on', id: null };
+  }
+  return { kind: 'other', id: null };
+}
+
+function sameBracketPhaseId(a: BracketRoadmapPhaseId, b: BracketRoadmapPhaseId): boolean {
+  return a.project === b.project
+    && a.milestone === b.milestone
+    && a.phase === b.phase
+    && a.subphase === b.subphase;
+}
+
+function dashBracketPhaseId(id: BracketRoadmapPhaseId): string {
+  return `${id.project}.${id.milestone}-${id.phase}${id.subphase ? `.${id.subphase}` : ''}`;
+}
+
+function replaceQualifiedBracketReference(
+  line: string,
+  oldId: BracketRoadmapPhaseId,
+  newId: BracketRoadmapPhaseId,
+): string {
+  const boundary = 'A-Za-z0-9.-';
+  const oldDisplay = renderPhaseId(oldId);
+  const newDisplay = renderPhaseId(newId);
+  const oldDash = dashBracketPhaseId(oldId);
+  const newDash = dashBracketPhaseId(newId);
+  return line
+    .replace(
+      new RegExp(`(?<![${boundary}])${escapeRegex(oldDisplay)}(?![${boundary}])`, 'g'),
+      () => newDisplay,
+    )
+    .replace(
+      new RegExp(`(?<![${boundary}])${escapeRegex(oldDash)}(?![${boundary}])`, 'g'),
+      () => newDash,
+    );
+}
+
+function replaceBareBracketArtifactReference(
+  line: string,
+  oldId: BracketRoadmapPhaseId,
+  newId: BracketRoadmapPhaseId,
+): string {
+  const oldToken = bracketArtifactToken(oldId);
+  const newToken = bracketArtifactToken(newId);
+  const filename = `${escapeRegex(oldToken)}-\\d{2}`
+    + '(?:-[A-Za-z][A-Za-z0-9-]*)?-(?:PLAN|SUMMARY)\\.md';
+  return line.replace(
+    new RegExp(`(?<![A-Za-z0-9_./-])${filename}(?![A-Za-z0-9_.-])`, 'g'),
+    (match) => newToken + match.slice(oldToken.length),
+  );
+}
+
+function lineStartsInActiveMilestone(
+  lineStart: number,
+  ranges: ReturnType<typeof currentMilestoneRawRanges>,
+): boolean {
+  if (!ranges) return false;
+  return (lineStart >= ranges.primary.start && lineStart < ranges.primary.end)
+    || Boolean(ranges.details && lineStart >= ranges.details.start && lineStart < ranges.details.end);
+}
+
+function lineContainsTrackedBracketIdentity(
+  line: string,
+  removedId: BracketRoadmapPhaseId,
+  renumberedIds: BracketRoadmapPhaseId[],
+): boolean {
+  for (const id of renumberedIds) {
+    if (replaceQualifiedBracketReference(line, id, removedId) !== line) return true;
+    const token = bracketArtifactToken(id);
+    if (new RegExp(`\\bPhase[ \\t]+${escapeRegex(token)}(?![\\d.])`, 'i').test(line)) return true;
+  }
+  const removedToken = bracketArtifactToken(removedId);
+  return new RegExp(`\\bPhase[ \\t]+${escapeRegex(removedToken)}(?![\\d.])`, 'i').test(line);
+}
+
 function updateRoadmapAfterBracketPhaseRemoval(
   roadmapPath: string,
   removedInt: number,
   removedSubphase: number | undefined,
   context: BracketWriteContext,
   cwd: string,
-): boolean {
+): BracketRoadmapRewriteResult {
   return withPlanningLock(cwd, () => {
     const originalContent = fs.readFileSync(roadmapPath, 'utf-8');
-    // #4304 Blocker 1: removedInt/removedSubphase are now the caller's
-    // already-validated, already-canonical values (see cmdPhaseRemove) —
-    // this function no longer re-derives them from a targetPhase string,
-    // which broke for a qualified id like `CK.02-02` (isDecimal was true
-    // because the MILESTONE half contains a dot, and `removedSubphase` was
-    // read off the wrong segment).
     const isDecimal = removedSubphase !== undefined;
-    const targetDisplay = renderPhaseId(
-      bracketPhaseId(context, removedInt, removedSubphase),
-    );
+    const targetId = bracketPhaseId(context, removedInt, removedSubphase);
+    const targetDisplay = renderPhaseId(targetId);
     let content = deleteSection(
       originalContent,
       (heading) => {
@@ -2693,117 +2842,73 @@ function updateRoadmapAfterBracketPhaseRemoval(
         return /^(?:\s*\([^\r\n)]{0,200}\))?\s*:/.test(remainder);
       },
     );
-
-    // Remove a summary checkbox for the same fully-qualified identity. The id
-    // itself is owner-rendered above; this line classifier only recognizes the
-    // markdown checkbox wrapper around it.
-    content = content
-      .split('\n')
-      .filter((line) => !/^\s*[-*]\s+\[[ xX]\]/.test(line) || !line.includes(`${targetDisplay}:`))
-      .join('\n');
-
-    const progressHeadingMatch = content.match(/^##[ \t]+Progress\b/im);
-    if (progressHeadingMatch && progressHeadingMatch.index !== undefined) {
-      const headingOffset = progressHeadingMatch.index;
-      const before = content.slice(0, headingOffset);
-      const fromHeading = content.slice(headingOffset);
-      const nextHeadingOffset = fromHeading.search(/\n#{1,2}[ \t]/);
-      const progressSection = nextHeadingOffset >= 0
-        ? fromHeading.slice(0, nextHeadingOffset)
-        : fromHeading;
-      const rest = nextHeadingOffset >= 0 ? fromHeading.slice(nextHeadingOffset) : '';
-      const targetCell = new RegExp(`^${escapeRegex(targetDisplay)}(?:\\s|:|$)`);
-      const deleted = deleteTableRow(
-        progressSection,
-        (row) => targetCell.test((Object.values(row)[0] ?? '').trim()),
-      );
-      if (deleted.ok) content = before + deleted.value + rest;
-    }
-
-    // #4304 Blocker 3 fix (round 2) + round-3 correction: the display-id
-    // replace is milestone-qualified ("[CK.02] 03" can never match
-    // "[CK.01] 03"), and so is the dash/dir-token form ("CK.02-03") added in
-    // round 3 — both carry their own milestone and cannot collide with a
-    // different milestone's same-numbered reference, so BOTH now run over the
-    // WHOLE roadmap (`content`), not just the active section: a fully
-    // qualified reference living outside `ranges.primary` (a global Progress
-    // table AFTER a later sibling milestone, e.g. CK.03) must renumber too,
-    // which scoping it to the section — round 2's own fix — had missed. The
-    // BARE artifact-token replace stays scoped to the active milestone's own
-    // section (round 2's original finding: artifact filenames carry no
-    // milestone qualifier, so "03-01-PLAN.md" is textually indistinguishable
-    // from an earlier/later milestone's own "03-01-PLAN.md" reference) — its
-    // section bounds are re-derived after each iteration's qualified global
-    // replace (`currentMilestoneRawRanges`), since a qualified replace earlier
-    // in `content` than `sectionStart` could shift that offset, and a
-    // qualified replace WITHIN the section changes text the bare-token
-    // replace must still see fresh. Falls back to whole-content replacement
-    // for the bare-token pass only when the active milestone cannot be
-    // offset-scoped, mirroring cmdPhaseComplete's own null fallback for this
-    // same helper.
-    const tokenScanRanges = currentMilestoneRawRanges(content, cwd, 'bracket');
-    const tokenScanSection = tokenScanRanges
-      ? content.slice(tokenScanRanges.primary.start, tokenScanRanges.primary.end)
-      : content;
-
+    let roadmapLinesRewritten = content === originalContent ? 0 : 1;
+    const ranges = currentMilestoneRawRanges(content, cwd, 'bracket');
     const tokens = new Set<number>();
-    for (const rawToken of scanMilestonePhaseIds(tokenScanSection, 'bracket')) {
-      const [phase, subphase, extra] = String(rawToken).split('.');
-      if (extra || !/^\d+$/.test(phase) || (subphase !== undefined && !/^\d+$/.test(subphase))) continue;
+    for (const line of splitRoadmapLineRecords(content)) {
+      if (!lineStartsInActiveMilestone(line.start, ranges)) continue;
+      const { id } = classifyBracketOwnedLine(line.text);
+      if (!id || id.project !== context.project || id.milestone !== context.milestone) continue;
       if (isDecimal) {
-        if (Number(phase) === removedInt && subphase !== undefined && Number(subphase) > removedSubphase) {
-          tokens.add(Number(subphase));
+        if (Number(id.phase) === removedInt
+          && id.subphase !== undefined
+          && Number(id.subphase) > removedSubphase) {
+          tokens.add(Number(id.subphase));
         }
-      } else if (Number(phase) > removedInt && !isSentinelPhaseId(Number(phase))) {
-        tokens.add(Number(phase));
+      } else if (Number(id.phase) > removedInt && !isSentinelPhaseId(Number(id.phase))) {
+        tokens.add(Number(id.phase));
       }
     }
 
-    for (const token of [...tokens].sort((a, b) => a - b)) {
-      const oldId = isDecimal
+    const mappings = [...tokens].sort((a, b) => a - b).map((token) => ({
+      oldId: isDecimal
         ? bracketPhaseId(context, removedInt, token)
-        : bracketPhaseId(context, token);
-      const newId = isDecimal
+        : bracketPhaseId(context, token),
+      newId: isDecimal
         ? bracketPhaseId(context, removedInt, token - 1)
-        : bracketPhaseId(context, token - 1);
-      const oldDisplay = renderPhaseId(oldId);
-      const newDisplay = renderPhaseId(newId);
-      content = content.replace(
-        new RegExp(`${escapeRegex(oldDisplay)}(?!\\d)`, 'g'),
-        () => newDisplay,
-      );
+        : bracketPhaseId(context, token - 1),
+    }));
 
-      // #4304 round-3: the dash/dir-token form (`CK.02-03`, `CK.02-03.1`) —
-      // same milestone-qualified safety as the display-id form above, added
-      // because a qualified reference can legitimately spell either form.
-      const oldDashId = `${oldId.project}.${oldId.milestone}-${oldId.phase}${oldId.subphase ? `.${oldId.subphase}` : ''}`;
-      const newDashId = `${newId.project}.${newId.milestone}-${newId.phase}${newId.subphase ? `.${newId.subphase}` : ''}`;
-      content = content.replace(
-        new RegExp(`${escapeRegex(oldDashId)}(?!\\d)`, 'g'),
-        () => newDashId,
-      );
+    const rewritten: string[] = [];
+    for (const line of splitRoadmapLineRecords(content)) {
+      const active = lineStartsInActiveMilestone(line.start, ranges);
+      const owned = classifyBracketOwnedLine(line.text);
+      if (owned.id
+        && sameBracketPhaseId(owned.id, targetId)
+        && (owned.kind === 'progress' || (active && owned.kind === 'checklist'))) {
+        roadmapLinesRewritten += 1;
+        continue;
+      }
 
-      const bracketSectionRanges = currentMilestoneRawRanges(content, cwd, 'bracket');
-      const sectionStart = bracketSectionRanges ? bracketSectionRanges.primary.start : 0;
-      const sectionEnd = bracketSectionRanges ? bracketSectionRanges.primary.end : content.length;
-      let section = content.slice(sectionStart, sectionEnd);
-
-      const oldToken = bracketArtifactToken(oldId);
-      const newToken = bracketArtifactToken(newId);
-      const artifactTail = isDecimal ? '' : '(?:\\.\\d+)?';
-      section = section.replace(
-        new RegExp(
-          `(?<![\\d.])${escapeRegex(oldToken)}(?=${artifactTail}-\\d{2}`
-          + '(?:-[A-Za-z][A-Za-z0-9-]*)?-(?:PLAN|SUMMARY)\\.md)',
-          'g',
-        ),
-        () => newToken,
-      );
-      content = content.slice(0, sectionStart) + section + content.slice(sectionEnd);
+      let next = line.text;
+      for (const { oldId, newId } of mappings) {
+        next = replaceQualifiedBracketReference(next, oldId, newId);
+        if (active) next = replaceBareBracketArtifactReference(next, oldId, newId);
+      }
+      if (next !== line.text) roadmapLinesRewritten += 1;
+      rewritten.push(next + line.eol);
     }
+    content = rewritten.join('');
 
     platformWriteSync(roadmapPath, content);
-    return contentChangedAfterNormalize(roadmapPath, originalContent, content);
+    const persistedContent = fs.readFileSync(roadmapPath, 'utf-8');
+    const persistedRanges = currentMilestoneRawRanges(persistedContent, cwd, 'bracket');
+    const referencesLeftUntouched: number[] = [];
+    for (const line of splitRoadmapLineRecords(persistedContent)) {
+      if (!lineStartsInActiveMilestone(line.start, persistedRanges)) continue;
+      if (lineContainsTrackedBracketIdentity(
+        line.text,
+        targetId,
+        mappings.map(({ oldId }) => oldId),
+      )) {
+        referencesLeftUntouched.push(line.lineNumber);
+      }
+    }
+    return {
+      updated: contentChangedAfterNormalize(roadmapPath, originalContent, content),
+      roadmapLinesRewritten,
+      referencesLeftUntouched,
+    };
   });
 }
 
@@ -2970,21 +3075,24 @@ function cmdPhaseRemove(
     error(`Failed to renumber phase directories after removing phase ${targetPhase}: ${msg}`);
   }
 
-  const roadmapUpdated = removeContext
+  const bracketRoadmapRewrite = removeContext
     ? updateRoadmapAfterBracketPhaseRemoval(
-        roadmapPath,
-        removedInt,
-        removedSubphase,
-        removeContext,
-        cwd,
-      )
+      roadmapPath,
+      removedInt,
+      removedSubphase,
+      removeContext,
+      cwd,
+    )
+    : null;
+  const roadmapUpdated = bracketRoadmapRewrite
+    ? bracketRoadmapRewrite.updated
     : updateRoadmapAfterPhaseRemoval(
-        roadmapPath,
-        targetPhase,
-        isDecimal,
-        parseInt(normalized, 10),
-        cwd,
-      );
+      roadmapPath,
+      targetPhase,
+      isDecimal,
+      parseInt(normalized, 10),
+      cwd,
+    );
 
   const statePath = path.join(planningDir(cwd), 'STATE.md');
   let stateUpdated = false;
@@ -3075,6 +3183,12 @@ function cmdPhaseRemove(
       // change, not hardcoded regardless of whether ROADMAP.md's content
       // actually changed.
       roadmap_updated: roadmapUpdated,
+      ...(bracketRoadmapRewrite
+        ? {
+            roadmap_lines_rewritten: bracketRoadmapRewrite.roadmapLinesRewritten,
+            references_left_untouched: bracketRoadmapRewrite.referencesLeftUntouched,
+          }
+        : {}),
       state_updated: stateUpdated,
     },
     raw,
