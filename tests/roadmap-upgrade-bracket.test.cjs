@@ -1242,6 +1242,87 @@ describe('roadmap upgrade --convention bracket', () => {
     });
   });
 
+  describe('round 4: attributes legacy phases through reader milestone sections', () => {
+    test('the shipped archived-details plus current-section shape keeps each phase in its own milestone', () => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## Milestones',
+          '',
+          '- ✅ **v1.0 Foundation** - Phases 1-2 (shipped)',
+          '- 🚧 **v2.0 Current** - Phase 3 (in progress)',
+          '',
+          '## Phases',
+          '',
+          '<details>',
+          '<summary>✅ v1.0 Foundation (Phases 1-2) - SHIPPED</summary>',
+          '',
+          '### Phase 1: Alpha',
+          '',
+          '### Phase 2.1: Beta',
+          '',
+          '</details>',
+          '',
+          '### 🚧 v2.0 Current (In Progress)',
+          '',
+          '#### Phase 3: Gamma',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'round 4 milestone-section dry-run');
+      assert.deepEqual(
+        plan.phases.map(({ oldDir, newDir }) => ({ oldDir, newDir })),
+        [
+          { oldDir: '01-alpha', newDir: 'GSD.01-01-alpha' },
+          { oldDir: '02.1-beta', newDir: 'GSD.01-02-beta' },
+          { oldDir: '03-gamma', newDir: 'GSD.02-01-gamma' },
+        ],
+        'STATE v2.0 must not pull the archived v1.0 phases into milestone 02',
+      );
+      assert.ok(plan.roadmapEdits.some(({ to }) => to === '### [GSD.01] 01: Alpha'));
+      assert.ok(plan.roadmapEdits.some(({ to }) => to === '### [GSD.01] 02: Beta'));
+      assert.ok(plan.roadmapEdits.some(({ to }) => to === '#### [GSD.02] 01: Gamma'));
+    });
+
+    test('two milestone sections plus a phase outside every attributable section refuses before any write', () => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '### Phase 9: Orphan',
+          '',
+          '## v1.0 — Foundation',
+          '',
+          '### Phase 1: Alpha',
+          '',
+          '## v2.0 — Current',
+          '',
+          '### Phase 3: Gamma',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const before = snapshotTree(cwd, { skipGit: true });
+
+      const dryRun = runBracketUpgrade(cwd);
+      assertExited(dryRun, 1, 'phase outside multiple milestone sections (dry-run)');
+      assert.match(dryRun.stderr, /Cannot attribute legacy phase heading/i);
+      assert.match(dryRun.stderr, /Phase 9/);
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'dry-run refusal must write nothing');
+
+      const apply = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(apply, 1, 'phase outside multiple milestone sections (apply)');
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'apply refusal must write nothing');
+    });
+  });
+
   // #4698 Blocker 3 (round 2, Astra pre-push gate round 2): a heading the
   // runtime already supports — an optional parenthetical tag between the
   // phase number and the colon (`### Phase 2 (Cluster B): Beta`,

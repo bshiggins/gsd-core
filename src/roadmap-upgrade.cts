@@ -22,6 +22,8 @@ import phaseLocatorMod = require('./phase-locator.cjs');
 import planningScopeMod = require('./planning-scope.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatterMod = require('./frontmatter.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import roadmapParserMod = require('./roadmap-parser.cjs');
 const { planningDir } = planningWorkspace;
 const { listAllPhaseDirs } = phaseLocatorMod;
 const { SCOPE } = planningScopeMod;
@@ -30,6 +32,7 @@ const { SCOPE } = planningScopeMod;
 // already solves "change exactly one key, preserve every other key's raw text
 // byte-for-byte", which is exactly the contract a `depends_on` rewrite needs.
 const { extractFrontmatter, spliceFrontmatter } = frontmatterMod;
+const { milestoneSections } = roadmapParserMod;
 const {
   BRACKET_ID_SRC,
   BRACKET_PROJECT_CODE_SRC,
@@ -904,10 +907,50 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     );
   }
 
+  const lineOffsets: number[] = [];
+  let nextLineOffset = 0;
+  for (const line of lines) {
+    lineOffsets.push(nextLineOffset);
+    nextLineOffset += line.length + 1;
+  }
+  const sections = milestoneSections(roadmapContent) as Array<{
+    start: number;
+    end: number;
+    milestoneInt: number | null;
+  }>;
+  const sectionsForOffset = (offset: number): typeof sections => sections
+    .filter((section) => section.start <= offset && offset < section.end)
+    .sort((a, b) => (a.end - a.start) - (b.end - b.start));
+  const phaseBearingSections = new Set(
+    sourcePhases.flatMap((entry) => sectionsForOffset(lineOffsets[entry.lineIndex] ?? -1)),
+  );
+
+  const unattributedLegacy: BracketSourceEntry[] = [];
+  for (const entry of sourcePhases) {
+    if (entry.source !== 'legacy') continue;
+    const containing = sectionsForOffset(lineOffsets[entry.lineIndex] ?? -1);
+    const attributed = containing.find((section) => section.milestoneInt !== null);
+    if (attributed?.milestoneInt !== null && attributed?.milestoneInt !== undefined) {
+      entry.milestoneInt = attributed.milestoneInt;
+    } else if (phaseBearingSections.size > 1) {
+      unattributedLegacy.push(entry);
+    }
+  }
+  if (unattributedLegacy.length > 0) {
+    throw new Error(
+      'Cannot attribute legacy phase heading(s) to a readable milestone section in a multi-milestone '
+      + 'ROADMAP. Refusing rather than applying the current STATE milestone to ambiguous history:\n'
+      + unattributedLegacy.map((entry) => `  Phase ${entry.sourceToken}`).join('\n'),
+    );
+  }
+
   // Real single-milestone repositories may omit a `## vN.M` heading while
   // carrying project-prefixed phase directories. Resolve those legacy entries
   // from STATE.md instead of silently producing an empty migration plan.
-  if (sourcePhases.some((entry) => entry.source === 'legacy' && entry.milestoneInt == null)) {
+  if (
+    phaseBearingSections.size <= 1
+    && sourcePhases.some((entry) => entry.source === 'legacy' && entry.milestoneInt == null)
+  ) {
     let fallbackMilestone: number | null = null;
     try {
       const state = fs.readFileSync(path.join(pDir, 'STATE.md'), 'utf8');
@@ -1067,7 +1110,9 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     const legacyChecklist = line.match(legacyChecklistRe);
     if (!legacyChecklist) continue;
     const key = legacyLookupKey(legacyChecklist[2]);
-    let resolvedMilestone = currentMilestone;
+    const sectionMilestone = sectionsForOffset(lineOffsets[i] ?? -1)
+      .find((section) => section.milestoneInt !== null)?.milestoneInt ?? null;
+    let resolvedMilestone = sectionMilestone ?? currentMilestone;
     let token = resolvedMilestone === null
       ? undefined
       : milestoneLegacyMap.get(resolvedMilestone)?.get(key);

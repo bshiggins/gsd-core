@@ -589,6 +589,63 @@ function sliceMilestoneWindow(content: string, version: string): string | null {
   return content.slice(selected.index, computeMilestoneSectionEnd(content, selected[0], selected.index));
 }
 
+interface MilestoneSection {
+  start: number;
+  end: number;
+  version: string | null;
+  milestoneInt: number | null;
+}
+
+/**
+ * Enumerate the milestone section ranges recognized by the ROADMAP readers.
+ * Markdown boundaries reuse the reader's heading tokenizer, milestone-signal
+ * vocabulary, name/version extractor, and section-end owner. Collapsed
+ * archives reuse the same `<details><summary>` shape handled by
+ * `extractCurrentMilestoneScoped`.
+ */
+function milestoneSections(content: string): MilestoneSection[] {
+  const sections: MilestoneSection[] = [];
+  const headings = tokenizeHeadings(content);
+
+  for (const heading of headings) {
+    if (heading.level < 1 || heading.level > 3) continue;
+    if (/^Phase\s+\S/i.test(heading.text)) continue;
+    if (!MILESTONE_HEADING_SIGNAL_PATTERN.test(heading.text)) continue;
+
+    const extracted = extractMilestoneHeadingName(heading.text);
+    const version = extracted?.version ?? null;
+    const versionMajor = version?.match(/^v(\d+)/i);
+    const milestoneInt = versionMajor ? parseInt(versionMajor[1], 10) : null;
+    const lineEnd = content.indexOf('\n', heading.offset);
+    const fullLine = content.slice(heading.offset, lineEnd === -1 ? content.length : lineEnd);
+    sections.push({
+      start: heading.offset,
+      end: computeMilestoneSectionEnd(content, fullLine, heading.offset, undefined, headings),
+      version,
+      milestoneInt: milestoneInt !== null && Number.isSafeInteger(milestoneInt) ? milestoneInt : null,
+    });
+  }
+
+  const detailsPattern = /<details\b[^>]*>[\s\S]*?<\/details>/gi;
+  let detailsMatch: RegExpExecArray | null;
+  while ((detailsMatch = detailsPattern.exec(content)) !== null) {
+    const summary = detailsMatch[0].match(/<summary[^>]*>([^<]*)<\/summary>/i)?.[1]?.trim() ?? '';
+    if (!MILESTONE_HEADING_SIGNAL_PATTERN.test(summary)) continue;
+    const extracted = extractMilestoneHeadingName(summary);
+    const version = extracted?.version ?? null;
+    const versionMajor = version?.match(/^v(\d+)/i);
+    const milestoneInt = versionMajor ? parseInt(versionMajor[1], 10) : null;
+    sections.push({
+      start: detailsMatch.index,
+      end: detailsMatch.index + detailsMatch[0].length,
+      version,
+      milestoneInt: milestoneInt !== null && Number.isSafeInteger(milestoneInt) ? milestoneInt : null,
+    });
+  }
+
+  return sections.sort((a, b) => a.start - b.start || a.end - b.end);
+}
+
 /**
  * #3184: counts RAW phase references — a `#{2,4} Phase <id>:` heading
  * (fence-aware via `tokenizeHeadings`) or a `#2199` bullet entry — BEFORE any
@@ -2238,6 +2295,7 @@ export = {
   // own doc comment. milestone.cts's destructive-consumer guard consumes
   // this instead of composing locate+select+section-end itself.
   sliceMilestoneWindow,
+  milestoneSections,
   hasVersionedMilestones,
   hasMilestoneSectioning,
   // #3642: the >=1 sibling buildStateFrontmatter's unbounded branch consumes.
