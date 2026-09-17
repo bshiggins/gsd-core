@@ -2826,38 +2826,25 @@ function cmdPhaseRemove(
     ? bracketWriteContext(cwd, loadConfig(cwd))
     : null;
 
-  // #4304 Blocker 1 fix: a bracket project's `phase remove` argument may be a
-  // bare number (`02`, `02.1`), the on-disk qualified id (`CK.02-02`,
-  // `CK.02-02.1`), or the display form (`[CK.02] 02`) — the same shapes the
-  // ROADMAP and directory names themselves carry. `normalizePhaseName` leaves
-  // a qualified/display string untouched (it only knows the bare grammar), so
-  // parsing it through `parsePhaseId` — the SAME canonical parser the
-  // read/emit paths already trust — resolves it to a real
-  // {project, milestone, phase, subphase} tuple instead of a string
-  // `matchPhaseDirs` merely happens to pattern-match. The milestone is
-  // checked against the ACTIVE write context and every numeric value is
-  // derived here, BEFORE any deletion, so a qualified id naming another
-  // milestone — or one whose numbers cannot be rendered by the bracket
-  // convention — is refused with the phase directory still present, rather
-  // than deleted and then crashing on `parseInt(normalized, 10)` producing
-  // NaN (the prior defect: fs.rmSync ran unconditionally before this parse
-  // was ever attempted). A non-bracket project never reaches the
-  // `removeContext` branch below, so `normalized`/`isDecimal` stay exactly
-  // `normalizePhaseName(targetPhase)` / `targetPhase.includes('.')`,
-  // byte-identical to before — as does the bare form under bracket, since
-  // `parsePhaseId` rejects it (no project-code prefix) and leaves this
-  // fallback untouched.
-  let normalized = normalizePhaseName(targetPhase);
-  let isDecimal = targetPhase.includes('.');
+  // #4304 round 4: canonicalize every bracket argument before directory
+  // matching or any write. Bare tokens use phase-id-display's adapter; a
+  // qualified/display token uses phase-id.cts's strict parser. A rejected
+  // spelling has no parseInt fallback, so it cannot partially name a real
+  // phase and reach the destructive path.
+  let normalized: string;
+  let isDecimal: boolean;
+  let removedInt: number;
+  let removedSubphase: number | undefined;
   if (removeContext) {
-    type QualifiedRemoveId = { project: string; milestone: string; phase: string; subphase?: string };
-    let qualifiedId: QualifiedRemoveId | null;
-    try {
-      qualifiedId = parsePhaseId(targetPhase);
-    } catch {
-      qualifiedId = null;
-    }
-    if (qualifiedId) {
+    const isQualified = targetPhase.startsWith('[') || targetPhase.includes('-');
+    if (isQualified) {
+      let qualifiedId: ReturnType<typeof parsePhaseId> | null = null;
+      try {
+        qualifiedId = parsePhaseId(targetPhase);
+      } catch {
+        error(`Phase ${targetPhase} cannot be resolved to a bracket phase number`);
+        return;
+      }
       if (qualifiedId.project !== removeContext.project || qualifiedId.milestone !== removeContext.milestone) {
         error(
           `Phase ${targetPhase} belongs to milestone [${qualifiedId.project}.${qualifiedId.milestone}], `
@@ -2868,35 +2855,24 @@ function cmdPhaseRemove(
       isDecimal = qualifiedId.subphase !== undefined;
       normalized = isDecimal ? `${qualifiedId.phase}.${qualifiedId.subphase}` : qualifiedId.phase;
     } else {
-      // #4304 round-3 Blocker 1: a BARE argument still goes through
-      // `normalizePhaseName`'s LEGACY grammar, which pads only the leading
-      // integer, not a decimal subphase segment — `1.1` normalizes to
-      // `01.1`, not `01.01` — so it can never match a bracket directory's
-      // own {phaseToken}.{phaseToken} naming (`CK.02-01.01-first`).
-      // Re-canonicalize through the SAME adapter (`phaseToken`) the
-      // directories, ROADMAP headings, and renumbering all already use, so
-      // the string used for directory matching and the numbers derived from
-      // it below can never disagree with each other or with the directory
-      // they name. `phaseToken` accepts the whole dotted string in one call
-      // (`'1.1'`, `'01.1'`, and `'1.01'` all canonicalize to `'01.01'`) and
-      // returns null for anything it cannot render (a "custom" id
-      // `normalizePhaseName` passed through unchanged) — left as-is in that
-      // case, falling through to the existing safety-net refusal below.
-      const canonicalToken = phaseToken(normalized);
-      if (canonicalToken !== null) {
-        normalized = canonicalToken;
-        isDecimal = canonicalToken.includes('.');
+      const canonicalToken = phaseToken(targetPhase);
+      if (canonicalToken === null) {
+        error(`Phase ${targetPhase} cannot be resolved to a bracket phase number`);
+        return;
       }
+      normalized = canonicalToken;
+      isDecimal = canonicalToken.includes('.');
     }
-  }
-  const removedInt = parseInt(normalized, 10);
-  const removedSubphase = isDecimal ? parseInt(normalized.split('.')[1], 10) : undefined;
-  if (removeContext && (!Number.isSafeInteger(removedInt) || (isDecimal && !Number.isSafeInteger(removedSubphase!)))) {
-    // Every validation must run before any deletion (see above) — a target
-    // that cannot be rendered by the bracket convention at all (a malformed
-    // custom id `normalizePhaseName` passed through unchanged) is refused
-    // here rather than reaching fs.rmSync and crashing afterward.
-    error(`Phase ${targetPhase} cannot be resolved to a bracket phase number`);
+    const [phasePart, subphasePart] = normalized.split('.');
+    removedInt = Number(phasePart);
+    removedSubphase = subphasePart === undefined ? undefined : Number(subphasePart);
+  } else {
+    // Legacy and milestone-prefixed paths retain their original permissive
+    // normalization and parseInt behavior byte-for-byte.
+    normalized = normalizePhaseName(targetPhase);
+    isDecimal = targetPhase.includes('.');
+    removedInt = parseInt(normalized, 10);
+    removedSubphase = isDecimal ? parseInt(normalized.split('.')[1], 10) : undefined;
   }
 
   const subdirs = readSubdirectories(phasesDir, true);

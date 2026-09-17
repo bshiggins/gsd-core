@@ -16,6 +16,28 @@ function makePhaseDir(name, files = []) {
   for (const file of files) fs.writeFileSync(path.join(dir, file), '# artifact\n');
 }
 
+function snapshotTree(root) {
+  const snapshot = [];
+  function visit(dir, relativeDir = '') {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const relative = path.join(relativeDir, entry.name);
+      const absolute = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        snapshot.push({ type: 'directory', path: relative });
+        visit(absolute, relative);
+      } else {
+        snapshot.push({
+          type: 'file',
+          path: relative,
+          bytes: fs.readFileSync(absolute).toString('base64'),
+        });
+      }
+    }
+  }
+  visit(root);
+  return snapshot;
+}
+
 function seed() {
   fs.writeFileSync(
     planning('config.json'),
@@ -215,6 +237,26 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(fs.existsSync(planning('phases', 'CK.01-02-prior-decoy')), true);
     assert.equal(fs.readFileSync(planning('ROADMAP.md'), 'utf8'), roadmapBefore);
     assert.deepEqual(fs.readdirSync(planning('phases')).sort(), dirsBefore);
+  });
+
+  test('refuses a nested bracket phase argument before mutating any planning file or directory', () => {
+    const before = snapshotTree(planning());
+
+    const result = runGsdTools(['phase', 'remove', '1.1.1', '--force'], tmpDir);
+
+    assert.equal(result.success, false, result.output);
+    assert.match(result.error, /cannot be resolved to a bracket phase number/i);
+    assert.deepEqual(snapshotTree(planning()), before);
+  });
+
+  test('refuses a nonnumeric bracket phase argument before mutating any planning file or directory', () => {
+    const before = snapshotTree(planning());
+
+    const result = runGsdTools(['phase', 'remove', 'abc', '--force'], tmpDir);
+
+    assert.equal(result.success, false, result.output);
+    assert.match(result.error, /cannot be resolved to a bracket phase number/i);
+    assert.deepEqual(snapshotTree(planning()), before);
   });
 
   // #4304 round-3 Blocker 1: `normalizePhaseName` (the legacy grammar) pads
