@@ -2025,7 +2025,7 @@ function cmdPhaseInsert(
       // the untouched whole-document search for every non-bracket
       // convention, which never had this cross-milestone ambiguity.
       const bracketSectionRanges = bracketContext
-        ? currentMilestoneRawRanges(rawContent, cwd)
+        ? currentMilestoneRawRanges(rawContent, cwd, 'bracket')
         : null;
       const searchStart = bracketSectionRanges ? bracketSectionRanges.primary.start : 0;
       const searchEnd = bracketSectionRanges ? bracketSectionRanges.primary.end : rawContent.length;
@@ -2725,7 +2725,7 @@ function updateRoadmapAfterBracketPhaseRemoval(
     // boundary. Falls back to whole-content replacement — the prior
     // behaviour — only when the active milestone cannot be offset-scoped,
     // mirroring cmdPhaseComplete's own null fallback for this same helper.
-    const bracketSectionRanges = currentMilestoneRawRanges(content, cwd);
+    const bracketSectionRanges = currentMilestoneRawRanges(content, cwd, 'bracket');
     const sectionStart = bracketSectionRanges ? bracketSectionRanges.primary.start : 0;
     const sectionEnd = bracketSectionRanges ? bracketSectionRanges.primary.end : content.length;
     let section = content.slice(sectionStart, sectionEnd);

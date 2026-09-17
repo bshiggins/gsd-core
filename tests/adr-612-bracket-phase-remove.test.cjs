@@ -285,4 +285,71 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(roadmapAfter.includes('### [CK.02] 02: Three'), true);
     assert.equal(roadmapAfter.includes('### [CK.02] 03: Three'), false);
   });
+
+  // #4304 follow-up: the ADR-612 canonical milestone heading carries no vX.Y
+  // token at all (`## [GSD.09] Hidden`) — currentMilestoneRawRanges must
+  // scope the artifact-token rewrite for this shape too, not only the
+  // vX.Y-bearing shape every other fixture in this file uses.
+  test('confines artifact-token renumbering to the active milestone when milestone headings carry no version token', () => {
+    fs.writeFileSync(
+      planning('ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## [CK.01] Prior',
+        '',
+        '### [CK.01] 03: Prior Three',
+        '',
+        '**Goal:** untouched',
+        '**Plans:** `03-01-PLAN.md`, `03-01-SUMMARY.md`',
+        '',
+        '## [CK.02] Current',
+        '',
+        '### [CK.02] 02: Two',
+        '',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '',
+        '**Goal:** renumber',
+        '**Plans:** `03-01-PLAN.md`',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.01] 03 | 0/1 | Prior |',
+        '| [CK.02] 02 | 0/1 | Planned |',
+        '| [CK.02] 03 | 0/1 | Planned |',
+        '',
+      ].join('\n'),
+    );
+    // eslint-disable-next-line local/no-raw-rmsync-in-tests -- removing only the .planning/phases subdir within a still-live fixture (this test replaces seed()'s ROADMAP with its own, and the seeded phase dirs would otherwise leak in as unrelated rename candidates); helpers.cleanup() tears down the whole tmpDir, not a subdirectory, so it cannot substitute here.
+    fs.rmSync(planning('phases'), { recursive: true, force: true });
+    makePhaseDir('CK.01-03-prior-three', ['03-01-PLAN.md', '03-01-SUMMARY.md']);
+    makePhaseDir('CK.02-02-two', ['02-01-PLAN.md']);
+    makePhaseDir('CK.02-03-three', ['03-01-PLAN.md']);
+
+    const roadmapBefore = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    const ck01SectionBefore = roadmapBefore.slice(
+      roadmapBefore.indexOf('## [CK.01]'),
+      roadmapBefore.indexOf('## [CK.02]'),
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+
+    const roadmapAfter = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    const ck01SectionAfter = roadmapAfter.slice(
+      roadmapAfter.indexOf('## [CK.01]'),
+      roadmapAfter.indexOf('## [CK.02]'),
+    );
+    assert.equal(ck01SectionAfter, ck01SectionBefore);
+    assert.equal(fs.existsSync(planning('phases', 'CK.01-03-prior-three', '03-01-PLAN.md')), true);
+    assert.equal(fs.existsSync(planning('phases', 'CK.01-03-prior-three', '03-01-SUMMARY.md')), true);
+
+    assert.equal(fs.existsSync(planning('phases', 'CK.02-02-three', '02-01-PLAN.md')), true);
+    assert.equal(roadmapAfter.includes('### [CK.02] 02: Three'), true);
+    assert.equal(roadmapAfter.includes('### [CK.02] 03: Three'), false);
+  });
 });
