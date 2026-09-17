@@ -217,6 +217,67 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(fs.readdirSync(planning('phases')).sort(), dirsBefore);
   });
 
+  // #4304 round-3 Blocker 1: `normalizePhaseName` (the legacy grammar) pads
+  // only a decimal query's leading integer, not its subphase segment — "1.1"
+  // normalizes to "01.1", not the bracket directory's own "01.01" — so the
+  // bare-argument path never matched CK.02-01.01-first, yet still deleted the
+  // ROADMAP section and renumbered 01.02 to 01.01, leaving the undeleted
+  // 01.01 directory and the renamed-from-01.02 directory both claiming
+  // subphase 01.01.
+  test('removes a phase using an unpadded bracket subphase argument, identically to the padded form', () => {
+    const result = runGsdTools(['phase', 'remove', '1.1', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+
+    assert.equal(out.directory_deleted, 'CK.02-01.01-first-insert');
+    assert.equal(fs.existsSync(planning('phases', 'CK.02-01.01-first-insert')), false);
+    assert.equal(fs.existsSync(planning('phases', 'CK.02-01.01-second-insert')), true);
+    assert.equal(
+      fs.existsSync(planning('phases', 'CK.02-01.01-second-insert', '01.01-01-PLAN.md')),
+      true,
+    );
+    assert.equal(fs.existsSync(planning('phases', 'CK.02-02-two')), true);
+
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    assert.equal(roadmap.includes('First Insert'), false);
+    assert.equal(roadmap.includes('### [CK.02] 01.01: Second Insert'), true);
+    assert.equal(roadmap.includes('### [CK.02] 01.02: Second Insert'), false);
+    assert.equal(roadmap.includes('`01.01-01-PLAN.md`'), true);
+    assert.equal(roadmap.includes('| [CK.02] 01.02 |'), false);
+    assert.equal((roadmap.match(/^\| \[CK\.02\] 01\.01 \|/gm) ?? []).length, 1);
+    assert.equal(roadmap.includes('### [CK.02] 02: Two'), true);
+  });
+
+  test('padded and unpadded spellings of the same bracket subphase id produce byte-identical results', () => {
+    const dirUnpadded = createTempProject('adr-612-remove-unpadded-');
+    const dirPadded = createTempProject('adr-612-remove-padded-');
+    const savedTmpDir = tmpDir;
+    try {
+      tmpDir = dirUnpadded;
+      seed();
+      const resultUnpadded = runGsdTools(['phase', 'remove', '1.1', '--force'], dirUnpadded);
+      assert.equal(resultUnpadded.success, true, resultUnpadded.error || resultUnpadded.output);
+
+      tmpDir = dirPadded;
+      seed();
+      const resultPadded = runGsdTools(['phase', 'remove', '01.01', '--force'], dirPadded);
+      assert.equal(resultPadded.success, true, resultPadded.error || resultPadded.output);
+    } finally {
+      tmpDir = savedTmpDir;
+    }
+
+    const roadmapUnpadded = fs.readFileSync(path.join(dirUnpadded, '.planning', 'ROADMAP.md'), 'utf8');
+    const roadmapPadded = fs.readFileSync(path.join(dirPadded, '.planning', 'ROADMAP.md'), 'utf8');
+    assert.equal(roadmapUnpadded, roadmapPadded);
+
+    const dirsUnpadded = fs.readdirSync(path.join(dirUnpadded, '.planning', 'phases')).sort();
+    const dirsPadded = fs.readdirSync(path.join(dirPadded, '.planning', 'phases')).sort();
+    assert.deepEqual(dirsUnpadded, dirsPadded);
+
+    cleanup(dirUnpadded);
+    cleanup(dirPadded);
+  });
+
   // #4304 Blocker 3: the artifact-token rewrite (`03-01-PLAN.md` -> `02-01-PLAN.md`)
   // ran as a global replace with no milestone qualifier, so an EARLIER
   // milestone's own same-numbered artifact reference was corrupted even

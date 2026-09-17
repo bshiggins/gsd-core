@@ -2836,6 +2836,26 @@ function cmdPhaseRemove(
       }
       isDecimal = qualifiedId.subphase !== undefined;
       normalized = isDecimal ? `${qualifiedId.phase}.${qualifiedId.subphase}` : qualifiedId.phase;
+    } else {
+      // #4304 round-3 Blocker 1: a BARE argument still goes through
+      // `normalizePhaseName`'s LEGACY grammar, which pads only the leading
+      // integer, not a decimal subphase segment — `1.1` normalizes to
+      // `01.1`, not `01.01` — so it can never match a bracket directory's
+      // own {phaseToken}.{phaseToken} naming (`CK.02-01.01-first`).
+      // Re-canonicalize through the SAME adapter (`phaseToken`) the
+      // directories, ROADMAP headings, and renumbering all already use, so
+      // the string used for directory matching and the numbers derived from
+      // it below can never disagree with each other or with the directory
+      // they name. `phaseToken` accepts the whole dotted string in one call
+      // (`'1.1'`, `'01.1'`, and `'1.01'` all canonicalize to `'01.01'`) and
+      // returns null for anything it cannot render (a "custom" id
+      // `normalizePhaseName` passed through unchanged) — left as-is in that
+      // case, falling through to the existing safety-net refusal below.
+      const canonicalToken = phaseToken(normalized);
+      if (canonicalToken !== null) {
+        normalized = canonicalToken;
+        isDecimal = canonicalToken.includes('.');
+      }
     }
   }
   const removedInt = parseInt(normalized, 10);
