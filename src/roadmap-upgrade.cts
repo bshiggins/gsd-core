@@ -83,11 +83,15 @@ const PROJECT_CODE_RE = new RegExp(`^${BRACKET_PROJECT_CODE_SRC}$`);
 // phase number and the colon (src/phase-id.cts, #1729) — is recognized here
 // too, instead of failing every grammar and vanishing from the plan silently
 // (the exact reported defect). `src/roadmap.cts`'s real bracket readers
-// compose `phaseHeadingPrefixSrcFor(...) + PHASE_NUMBER_TOKEN_SOURCE +
-// OPTIONAL_PHASE_TAG_SOURCE + ':'` for BOTH the bracket and label-only
-// intros (e.g. `src/roadmap.cts:184`) — so the bracket heading grammar DOES
-// have a tag slot, in this exact position, and this migrator must emit into
-// it rather than drop the tag or refuse it.
+// compose the phaseHeadingPrefixSrcFor selector's result with
+// PHASE_NUMBER_TOKEN_SOURCE + OPTIONAL_PHASE_TAG_SOURCE + ':' for BOTH the
+// bracket and label-only intros (e.g. `src/roadmap.cts:184`) — so the
+// bracket heading grammar DOES have a tag slot, in this exact position, and
+// this migrator must emit into it rather than drop the tag or refuse it.
+// (Named here only for the reader tracing the claim, never called: this file
+// does not consume that convention-gated selector, so scripts/lint-phase-id-
+// drift.cjs's closed selector-consumer census must not, and does not, count
+// it as one — see tests/adr-612-bracket-heading-selection.test.cjs.)
 //
 // LEGACY_PHASE_HEADING_BRACKET_RE is a SEPARATE constant from
 // LEGACY_PHASE_HEADING_RE (used by the historical milestone-prefixed
