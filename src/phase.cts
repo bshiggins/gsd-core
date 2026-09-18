@@ -1493,6 +1493,28 @@ function collectSiblingWorktreePhaseNums(
   }
 }
 
+/**
+ * #4304 round 5 (B4): `toDir` throws a raw `Error` for a description whose
+ * slug sanitizes to empty (e.g. a description that transliterates to
+ * nothing) or is all-digit. An uncaught throw from inside a mutation loop
+ * is worse than a refusal — it can leave earlier iterations' directories
+ * already created with no clean error surface. This wraps that one call so
+ * every bracket phase-directory allocation refuses through `error(...)`
+ * (clean stderr message, controlled exit) instead of crashing.
+ */
+function bracketDirNameOrRefuse(
+  id: { project: string; milestone: string; phase: string; subphase?: string },
+  slug: string,
+  description: string,
+): string {
+  try {
+    return toDir(id, slug);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return error(`Cannot create a phase directory for "${description}": ${msg}`);
+  }
+}
+
 function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: string): void {
   if (!description) {
     error('description required for phase add');
@@ -1524,7 +1546,7 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
       const usedPhaseNums = collectBracketPhaseNumbers(content, phasesOnDisk, bracketContext);
       collectSiblingWorktreePhaseNums(cwd, usedPhaseNums, bracketContext);
       _newPhaseId = (usedPhaseNums.size > 0 ? Math.max(...usedPhaseNums) : 0) + 1;
-      _dirName = toDir(bracketPhaseId(bracketContext, _newPhaseId), slug);
+      _dirName = bracketDirNameOrRefuse(bracketPhaseId(bracketContext, _newPhaseId), slug, description);
     } else if (customId || config.phase_naming === 'custom') {
       _newPhaseId = customId || slug.toUpperCase();
       if (!_newPhaseId) error('--id required when phase_naming is "custom"');
@@ -1711,7 +1733,18 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
         if (num > maxPhase) maxPhase = num;
       }
     }
-    const added: Record<string, unknown>[] = [];
+    // #4304 round 5 (B4): compute and validate every item's slug/dirName
+    // BEFORE the first `platformEnsureDir` — a bracket `toDir` failure
+    // (e.g. a description that sanitizes to an empty slug) must refuse the
+    // whole batch with zero directories created, not throw mid-loop after
+    // earlier items already created theirs. This first pass touches no
+    // disk.
+    const validated: {
+      description: string;
+      slug: string;
+      newPhaseId: number | string;
+      dirName: string;
+    }[] = [];
     for (const description of descriptions) {
       const slug = generateSlugInternal(description) || '';
       let newPhaseId: number | string;
@@ -1719,7 +1752,7 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
       if (bracketContext) {
         maxPhase += 1;
         newPhaseId = maxPhase;
-        dirName = toDir(bracketPhaseId(bracketContext, newPhaseId), slug);
+        dirName = bracketDirNameOrRefuse(bracketPhaseId(bracketContext, newPhaseId), slug, description);
       } else if (config.phase_naming === 'custom') {
         newPhaseId = slug.toUpperCase();
         dirName = `${prefix}${newPhaseId}-${slug}`;
@@ -1728,6 +1761,11 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
         newPhaseId = maxPhase;
         dirName = `${prefix}${String(newPhaseId).padStart(2, '0')}-${slug}`;
       }
+      validated.push({ description, slug, newPhaseId, dirName });
+    }
+
+    const added: Record<string, unknown>[] = [];
+    for (const { description, slug, newPhaseId, dirName } of validated) {
       const dirPath = path.join(planningDir(cwd), 'phases', dirName);
       platformEnsureDir(dirPath);
       platformWriteSync(path.join(dirPath, '.gitkeep'), '');

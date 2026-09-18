@@ -289,6 +289,63 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.equal(roadmap.includes('### [CK.02] 03: Beta'), true);
   });
 
+  // #4304 round-5 Blocker 4: the per-description loop computed a phase
+  // number, called toDir (which THROWS "slug sanitizes to empty" for a
+  // description that transliterates to nothing), and immediately created
+  // that item's directory — all inside one loop iteration. An item further
+  // down the batch whose description sanitizes to empty therefore left
+  // every EARLIER item's directory already created on disk with no ROADMAP
+  // write at all, contradicting the function's own "all-or-nothing, ...
+  // no phase directories created" comment.
+  test('phase add-batch validates every item before the first directory is created', () => {
+    const dir = project('adr-612-bracket-addbatch-partial-');
+    writeBracketFixture(dir);
+    const dirsBefore = fs.readdirSync(planning(dir, 'phases')).sort();
+    const roadmapBefore = fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8');
+
+    const result = runGsdTools(
+      [
+        'phase',
+        'add-batch',
+        '--descriptions',
+        JSON.stringify(['Alpha work', 'Beta work', '日本語のみ', 'Delta work', 'Epsilon work']),
+      ],
+      dir,
+    );
+
+    assert.equal(result.success, false, result.output);
+    assert.match(result.error, /slug sanitizes to empty|Cannot create a phase directory/);
+    assert.deepEqual(fs.readdirSync(planning(dir, 'phases')).sort(), dirsBefore);
+    assert.equal(fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8'), roadmapBefore);
+  });
+
+  test('phase add-batch still creates all five directories with one ROADMAP write when every item validates', () => {
+    const dir = project('adr-612-bracket-addbatch-full-');
+    writeBracketFixture(dir);
+
+    const out = run(
+      ['phase', 'add-batch', '--descriptions', JSON.stringify(['Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon'])],
+      dir,
+    );
+
+    assert.deepEqual(out.phases.map((phase) => phase.phase_number), [2, 3, 4, 5, 6]);
+    assert.deepEqual(
+      fs.readdirSync(planning(dir, 'phases')).sort(),
+      [
+        'CK.02-01-foundation',
+        'CK.02-02-alpha',
+        'CK.02-03-beta',
+        'CK.02-04-gamma',
+        'CK.02-05-delta',
+        'CK.02-06-epsilon',
+      ],
+    );
+    const roadmap = fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8');
+    for (const name of ['Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon']) {
+      assert.equal(roadmap.includes(`: ${name}`), true);
+    }
+  });
+
   test('phase insert emits the next canonical bracket subphase', () => {
     const dir = project();
     writeBracketFixture(dir);
