@@ -1692,4 +1692,166 @@ describe('roadmap upgrade --convention bracket', () => {
       assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'apply refusal must write nothing');
     });
   });
+
+  // #4144 round 5 Blocker 3: computeDependsOnRewrites indexed only the FULL
+  // filename-derived plan id (`03-01-setup`), but the real resolver
+  // (computeDependencyLevels / resolveDependencyId, src/phase.cts) also
+  // resolves a depends_on token against extractCanonicalPlanId's shorter
+  // alias (core-utils.cts) — `03-01-setup-PLAN.md` is reachable as `03-01`
+  // as well as its full slugged id. A depends_on referencing a renamed plan
+  // by that canonical alias silently stopped resolving after the rename
+  // (the rewrite map had no entry for it), producing a dropped edge the real
+  // resolver reports unresolved.
+  describe('rewrites depends_on through every alias the real resolver accepts (#4144 round 5 Blocker 3)', () => {
+    test('indexes the canonical alias a depends_on reference uses, not just the full filename-derived id', () => {
+      const phaseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-bracket-canonical-alias-dependency-'));
+      tempRoots.push(phaseDir);
+      const predecessor = '---\nphase: "03"\nplan: "01"\ndepends_on: []\n---\n\nSetup.\n';
+      // Referenced by its CANONICAL ALIAS ("03-01"), not its full slugged id
+      // ("03-01-setup") — the real resolver's canonicalToId map (built from
+      // extractCanonicalPlanId) accepts both spellings.
+      const byAlias = '---\nphase: "03"\nplan: "02"\ndepends_on: ["03-01"]\n---\n\nFollowup.\n';
+      // Referenced by its FULL id — proving that path still rewrites
+      // alongside the new alias path, not instead of it.
+      const byFullId = '---\nphase: "03"\nplan: "03"\ndepends_on: ["03-01-setup"]\n---\n\nFull.\n';
+      fs.writeFileSync(path.join(phaseDir, '03-01-setup-PLAN.md'), predecessor, 'utf8');
+      fs.writeFileSync(path.join(phaseDir, '03-02-followup-PLAN.md'), byAlias, 'utf8');
+      fs.writeFileSync(path.join(phaseDir, '03-03-full-PLAN.md'), byFullId, 'utf8');
+
+      const rewrites = computeDependsOnRewrites(
+        phaseDir,
+        '03',
+        '01',
+        [
+          { oldName: '03-01-setup-PLAN.md', newName: '01-01-setup-PLAN.md' },
+          { oldName: '03-02-followup-PLAN.md', newName: '01-02-followup-PLAN.md' },
+          { oldName: '03-03-full-PLAN.md', newName: '01-03-full-PLAN.md' },
+        ],
+      );
+
+      const byOldName = new Map(rewrites.map((r) => [r.oldName, r]));
+      assert.equal(rewrites.length, 2, 'exactly the alias reference and the full-id reference need rewriting');
+      assert.deepEqual(
+        parsePlanDocument(byOldName.get('03-02-followup-PLAN.md').to).dependsOn,
+        ['01-01'],
+        'the canonical-alias reference must rewrite to the SAME alias of the renamed file, not its full id',
+      );
+      assert.deepEqual(
+        parsePlanDocument(byOldName.get('03-03-full-PLAN.md').to).dependsOn,
+        ['01-01-setup'],
+        'a dependency referenced by its full id must still rewrite to the full id',
+      );
+    });
+
+    function setupCanonicalAliasDependsOnFixture() {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v2.0 — Deps milestone',
+          '',
+          '### Phase 3: Deps',
+          '',
+          '- [ ] **Phase 3:** Deps',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      cleanup(path.join(phasesDir, '01-alpha'));
+      cleanup(path.join(phasesDir, '02.1-beta'));
+      cleanup(path.join(phasesDir, '03-gamma'));
+      const depsDir = path.join(phasesDir, '03-deps');
+      fs.mkdirSync(depsDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(depsDir, '03-01-setup-PLAN.md'),
+        '---\nphase: "03"\nplan: "01"\ntype: standard\nwave: 1\ndepends_on: []\nautonomous: true\n---\n\n'
+        + '<objective>\nSetup plan.\n</objective>\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(depsDir, '03-01-setup-SUMMARY.md'),
+        '---\nphase: "03"\nplan: "01"\nstatus: complete\n---\n\nDone.\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(depsDir, '03-02-followup-PLAN.md'),
+        '---\nphase: "03"\nplan: "02"\ntype: standard\nwave: 2\ndepends_on: ["03-01"]\nautonomous: true\n---\n\n'
+        + '<objective>\nFollowup plan, depends on setup by its canonical alias.\n</objective>\n',
+        'utf8',
+      );
+      return { cwd, phasesDir, depsDir };
+    }
+
+    test('a plan referenced by its canonical alias (not its full slugged id) still resolves after the rename', () => {
+      const { cwd } = setupCanonicalAliasDependsOnFixture();
+
+      const result = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(result, 0, 'canonical-alias depends_on rewrite apply');
+
+      const newDepsDir = path.join(cwd, '.planning', 'phases', 'GSD.02-01-deps');
+      assert.equal(fs.existsSync(path.join(newDepsDir, '01-01-setup-PLAN.md')), true, 'predecessor plan renamed');
+      assert.equal(fs.existsSync(path.join(newDepsDir, '01-02-followup-PLAN.md')), true, 'dependent plan renamed');
+
+      const rewritten = fs.readFileSync(path.join(newDepsDir, '01-02-followup-PLAN.md'), 'utf8');
+      assert.deepEqual(
+        parsePlanDocument(rewritten).dependsOn,
+        ['01-01'],
+        'the REAL plan-document parser must read depends_on as the renamed predecessor\'s own canonical alias',
+      );
+      assert.doesNotMatch(rewritten, /03-01/, 'the stale phase-03 token must not survive anywhere in the file');
+      assert.match(rewritten, /Followup plan, depends on setup by its canonical alias\./, 'the rest of the file must be untouched');
+
+      const { level, unresolved } = readyPlansViaRealResolver(newDepsDir);
+      assert.deepEqual(unresolved, [], 'no depends_on token should be unresolved by the real resolver after the rewrite');
+      assert.equal(level.get('01-01-setup'), 0, 'the predecessor is a DAG root');
+      assert.equal(
+        level.get('01-02-followup'), 1,
+        'the dependent sits one level above its now-resolved predecessor — a real DAG edge exists via the canonical alias, not a dropped one',
+      );
+    });
+
+    test('a failure after the alias depends_on rewrite completes rolls it back byte-for-byte, alongside the renames', (t) => {
+      const { cwd } = setupCanonicalAliasDependsOnFixture();
+      const planningPath = path.join(cwd, '.planning');
+      const roadmapPath = path.join(planningPath, 'ROADMAP.md');
+
+      const plan = computeMigrationPlan(cwd, { convention: 'bracket' });
+      assert.equal(plan.alreadyMigrated, false);
+      const depsEntry = plan.phases.find((p) => p.oldDir === '03-deps');
+      assert.ok(depsEntry, 'fixture must produce the 03-deps rename');
+      assert.ok(
+        depsEntry.dependsOnRewrites.length >= 1,
+        'fixture must produce at least one depends_on rewrite to reverse',
+      );
+
+      const before = snapshotTree(planningPath);
+
+      const realWrite = fs.writeFileSync;
+      const writeMock = mock.method(fs, 'writeFileSync', (target, data, opts) => {
+        if (path.resolve(String(target)) === path.resolve(roadmapPath)) {
+          throw Object.assign(new Error('EIO: simulated write failure'), { code: 'EIO' });
+        }
+        return realWrite.call(fs, target, data, opts);
+      });
+      t.after(() => writeMock.mock.restore());
+
+      let caught;
+      try {
+        applyMigration(cwd, plan, { dryRun: false });
+      } catch (err) {
+        caught = err;
+      }
+
+      assert.ok(caught, 'a ROADMAP.md write failure must throw, not silently succeed');
+      assert.match(caught.message, /Migration failed and rolled back/);
+      assert.deepEqual(
+        snapshotTree(planningPath),
+        before,
+        'directory renames, artifact renames, AND the canonical-alias depends_on rewrite must all be reversed, byte-for-byte',
+      );
+    });
+  });
 });

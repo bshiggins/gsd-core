@@ -25,6 +25,8 @@ import frontmatterMod = require('./frontmatter.cjs');
 import roadmapParserMod = require('./roadmap-parser.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseMod = require('./phase.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import coreUtilsMod = require('./core-utils.cjs');
 const { planningDir } = planningWorkspace;
 const { listAllPhaseDirs } = phaseLocatorMod;
 const { SCOPE } = planningScopeMod;
@@ -35,6 +37,10 @@ const { SCOPE } = planningScopeMod;
 const { extractFrontmatter, spliceFrontmatter } = frontmatterMod;
 const { milestoneSections, isPhaseHeadingText } = roadmapParserMod;
 const { normalizeDependencyToken } = phaseMod;
+// #4144 round 5 Blocker 3: the single owner of the canonical short-alias
+// derivation the real resolver's own canonicalToId map is built from
+// (src/phase.cts) — reused here rather than re-derived.
+const { extractCanonicalPlanId } = coreUtilsMod;
 const {
   BRACKET_ID_SRC,
   BRACKET_PROJECT_CODE_SRC,
@@ -720,19 +726,36 @@ function computeDependsOnRewrites(
 
   const renameByOldName = new Map(fileRenames.map((r) => [r.oldName, r.newName]));
   const renamedPlanIdByToken = new Map<string, string>();
-  for (const rename of fileRenames) {
-    if (!/-PLAN\.md$/i.test(rename.oldName) || !/-PLAN\.md$/i.test(rename.newName)) continue;
-    const oldPlanId = rename.oldName.replace(/-PLAN\.md$/i, '');
-    const newPlanId = rename.newName.replace(/-PLAN\.md$/i, '');
-    const comparisonToken = normalizeDependencyToken(oldPlanId);
+  const registerDependencyAlias = (oldAlias: string, newAlias: string): void => {
+    const comparisonToken = normalizeDependencyToken(oldAlias);
     const existing = renamedPlanIdByToken.get(comparisonToken);
-    if (existing !== undefined && existing !== newPlanId) {
+    if (existing !== undefined && existing !== newAlias) {
       throw new Error(
         `Cannot migrate depends_on references in ${JSON.stringify(path.basename(oldDirPath))}: `
         + `renamed plan IDs collide when compared by the dependency resolver.`,
       );
     }
-    renamedPlanIdByToken.set(comparisonToken, newPlanId);
+    renamedPlanIdByToken.set(comparisonToken, newAlias);
+  };
+  for (const rename of fileRenames) {
+    if (!/-PLAN\.md$/i.test(rename.oldName) || !/-PLAN\.md$/i.test(rename.newName)) continue;
+    const oldPlanId = rename.oldName.replace(/-PLAN\.md$/i, '');
+    const newPlanId = rename.newName.replace(/-PLAN\.md$/i, '');
+    registerDependencyAlias(oldPlanId, newPlanId);
+
+    // #4144 round 5 Blocker 3: the real resolver (computeDependencyLevels /
+    // resolveDependencyId, src/phase.cts) also resolves a depends_on token
+    // against extractCanonicalPlanId's shorter alias (core-utils.cts) — a
+    // plan slugged as `03-01-setup-PLAN.md` is reachable as `03-01` as well
+    // as its full id. Index that alias too, mapped to the SAME alias of the
+    // renamed file — reusing extractCanonicalPlanId rather than re-deriving
+    // it — or a depends_on naming a renamed plan by its canonical alias
+    // (instead of its full slugged id) silently stops resolving after the
+    // rename.
+    registerDependencyAlias(
+      extractCanonicalPlanId(rename.oldName),
+      extractCanonicalPlanId(rename.newName),
+    );
   }
 
   const rewrites: DependsOnRewrite[] = [];
