@@ -27,6 +27,8 @@ import roadmapParserMod = require('./roadmap-parser.cjs');
 import phaseMod = require('./phase.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import coreUtilsMod = require('./core-utils.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import markdownSectionizerMod = require('./markdown-sectionizer.cjs');
 const { planningDir } = planningWorkspace;
 const { listAllPhaseDirs } = phaseLocatorMod;
 const { SCOPE } = planningScopeMod;
@@ -41,6 +43,10 @@ const { normalizeDependencyToken } = phaseMod;
 // derivation the real resolver's own canonicalToId map is built from
 // (src/phase.cts) — reused here rather than re-derived.
 const { extractCanonicalPlanId } = coreUtilsMod;
+// #4144 round 5 Blocker 4: the readers' own fence-scanning engine
+// (tokenizeHeadings is built on this same seam) — reused here instead of a
+// third independent fence parser.
+const { scanFencedBlocks } = markdownSectionizerMod;
 const {
   BRACKET_ID_SRC,
   BRACKET_PROJECT_CODE_SRC,
@@ -391,14 +397,35 @@ interface BracketMapping {
 
 const pad2 = (value: number): string => String(value).padStart(2, '0');
 
+/**
+ * #4144 round 5 Blocker 4 (Warn): the line indices `parseBracketSourcePhases`
+ * must never classify as a heading of any kind because a fenced code block
+ * covers them — mirrors the READERS' own fence-awareness (tokenizeHeadings,
+ * markdown-sectionizer.cts, used at roadmap-parser.cts:689) via the SAME
+ * `scanFencedBlocks` engine, rather than a third fence parser. Both fence
+ * delimiter lines themselves are included (harmless: neither is a phase
+ * heading), and an unterminated trailing fence covers to the end of the
+ * document, matching `scanFencedBlocks`' own EOF-still-open semantics.
+ */
+function fencedLineIndices(lines: string[]): Set<number> {
+  const fenced = new Set<number>();
+  for (const block of scanFencedBlocks(lines)) {
+    const end = block.closeLineIdx === -1 ? lines.length - 1 : block.closeLineIdx;
+    for (let i = block.openLineIdx; i <= end; i++) fenced.add(i);
+  }
+  return fenced;
+}
+
 function parseBracketSourcePhases(lines: string[]): { entries: BracketSourceEntry[]; unparsed: string[] } {
   const results: BracketSourceEntry[] = [];
   // #4698 Blocker 3 (round 2), part (b): every phase-like/bracket-like line
   // this loop could not place into any of the three recognized grammars.
   const unparsed: string[] = [];
   let currentMilestoneInt: number | null = null;
+  const fenced = fencedLineIndices(lines);
 
   for (let i = 0; i < lines.length; i++) {
+    if (fenced.has(i)) continue;
     const line = lines[i];
     const milestoneMatch = line.match(MILESTONE_HEADING_RE);
     if (milestoneMatch) {

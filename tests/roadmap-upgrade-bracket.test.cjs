@@ -1854,4 +1854,98 @@ describe('roadmap upgrade --convention bracket', () => {
       );
     });
   });
+
+  // #4144 round 5 Blocker 4 (Warn): parseBracketSourcePhases walked raw
+  // lines with no fence awareness, so a fenced markdown EXAMPLE containing a
+  // `### Phase N: Name`-shaped line was parsed as a real phase and consumed
+  // a counter value — the readers use fence-aware `tokenizeHeadings`
+  // (markdown-sectionizer.cts, used at roadmap-parser.cts:689) for exactly
+  // this reason. Fix: skip every line inside a fenced code block using
+  // `scanFencedBlocks`, the same fence-scanning engine, before testing it
+  // against any of the milestone/bracket/M-NN/legacy/unparsed grammars.
+  describe('skips fenced headings the way the readers do (#4144 round 5 Blocker 4)', () => {
+    test('a fenced example phase heading is never converted, counted, or refused, and the real phase keeps 01', () => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      cleanup(path.join(phasesDir, '02.1-beta'));
+      cleanup(path.join(phasesDir, '03-gamma'));
+
+      const fencedLines = [
+        '```markdown',
+        '### Phase 99: Example only',
+        '## Phase Details',
+        '### Phase Two: NoNumber',
+        '```',
+      ];
+      const roadmap = [
+        '# Roadmap',
+        '',
+        '## v1.0 — Foundation',
+        '',
+        'Example syntax for the phase-heading convention:',
+        '',
+        ...fencedLines,
+        '',
+        '### Phase 1: Alpha',
+        '',
+        '- [ ] **Phase 1:** Alpha',
+        '',
+      ].join('\n');
+      fs.writeFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), roadmap, 'utf8');
+
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'fenced example dry-run');
+      assert.deepEqual(
+        plan.roadmapEdits.map(({ from, to }) => ({ from, to })),
+        [
+          { from: '### Phase 1: Alpha', to: '### [GSD.01] 01: Alpha' },
+          { from: '- [ ] **Phase 1:** Alpha', to: '- [ ] **[GSD.01] 01:** Alpha' },
+        ],
+        'the fenced "### Phase 99" line must never be edited, counted, or reserved — Alpha gets 01, not 02',
+      );
+
+      const result = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(result, 0, 'fenced example apply');
+
+      const migrated = fs.readFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), 'utf8');
+      const migratedLines = splitLines(migrated);
+      for (const line of fencedLines) {
+        assert.ok(migratedLines.includes(line), `fenced line ${JSON.stringify(line)} must survive byte-identical`);
+      }
+      assert.match(migrated, /^### \[GSD\.01\] 01: Alpha$/m);
+    });
+
+    test('a fence containing only unparseable/phase-like headings does not trigger the unparsed-heading refusal', () => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      cleanup(path.join(phasesDir, '02.1-beta'));
+      cleanup(path.join(phasesDir, '03-gamma'));
+
+      const roadmap = [
+        '# Roadmap',
+        '',
+        '## v1.0 — Foundation',
+        '',
+        '```markdown',
+        '### Phase AUTH-101: Custom ID',
+        '### Phase Two: NoNumber',
+        '## Phase Details',
+        '```',
+        '',
+        '### Phase 1: Alpha',
+        '',
+        '- [ ] **Phase 1:** Alpha',
+        '',
+      ].join('\n');
+      fs.writeFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), roadmap, 'utf8');
+
+      const result = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(result, 0, 'fenced malformed headings must never trigger the unparsed-heading refusal');
+
+      const migrated = fs.readFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), 'utf8');
+      assert.match(migrated, /### Phase AUTH-101: Custom ID/, 'fenced malformed heading survives untouched');
+      assert.match(migrated, /### Phase Two: NoNumber/, 'fenced malformed heading survives untouched');
+      assert.match(migrated, /## Phase Details/, 'fenced section heading survives untouched');
+      assert.match(migrated, /^### \[GSD\.01\] 01: Alpha$/m);
+    });
+  });
 });
