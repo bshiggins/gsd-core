@@ -2614,11 +2614,77 @@ function renameBracketArtifactFiles(
   }
 }
 
+type BracketRoadmapPhaseId = ReturnType<typeof parsePhaseId>;
+type BracketRenumberMapping = { oldId: BracketRoadmapPhaseId; newId: BracketRoadmapPhaseId };
+
+/**
+ * #4304 round 5 (B2): the ONE identity mapping shared by the disk rename
+ * (renameBracketPhases, below) and the ROADMAP rewrite
+ * (updateRoadmapAfterBracketPhaseRemoval) — disk and ROADMAP can never
+ * disagree because both consume this same computation instead of each
+ * deriving its own. Identities are collected from the same directory scan
+ * renameBracketPhases uses to find rename candidates, unioned with every
+ * heading/checklist/progress line inside the active milestone's own ranges
+ * (primary + Phase Details): a phase can exist in ROADMAP with no directory
+ * yet, or on disk with no matching ROADMAP line, and either source alone
+ * can miss a decimal sub-phase identity. Integer removal maps every phase
+ * N > removed to N-1 (a sub-phase's own number is unchanged); sub-phase
+ * removal maps every sub-phase S > removed within the target phase to S-1.
+ * The result is sorted with decimal (sub-phase-bearing) identities before
+ * bare ones, then ascending by phase/subphase, so applying every entry to
+ * the same line in sequence never re-matches a value an earlier entry just
+ * wrote (a lower phase's new value is never a later entry's old value).
+ */
+function computeBracketRenumberMapping(
+  phasesDir: string,
+  roadmapContent: string,
+  ranges: ReturnType<typeof currentMilestoneRawRanges>,
+  context: BracketWriteContext,
+  removedInt: number,
+  removedSubphase: number | undefined,
+): BracketRenumberMapping[] {
+  const identities = new Map<string, { phase: number; subphase?: number }>();
+  const record = (phase: number, subphase?: number): void => {
+    identities.set(`${phase}.${subphase ?? ''}`, { phase, subphase });
+  };
+
+  for (const { id } of bracketIdsInContext(phasesDir, context)) {
+    record(Number(id.phase), id.subphase === undefined ? undefined : Number(id.subphase));
+  }
+  for (const line of splitRoadmapLineRecords(roadmapContent)) {
+    if (!lineStartsInActiveMilestone(line.start, ranges)) continue;
+    const { id } = classifyBracketOwnedLine(line.text);
+    if (!id || id.project !== context.project || id.milestone !== context.milestone) continue;
+    record(Number(id.phase), id.subphase === undefined ? undefined : Number(id.subphase));
+  }
+
+  const filtered = [...identities.values()].filter(({ phase, subphase }) => {
+    if (removedSubphase !== undefined) {
+      return phase === removedInt && subphase !== undefined && subphase > removedSubphase;
+    }
+    return phase > removedInt && !isSentinelPhaseId(phase);
+  });
+
+  filtered.sort((a, b) => {
+    const aHasSub = a.subphase === undefined ? 0 : 1;
+    const bHasSub = b.subphase === undefined ? 0 : 1;
+    if (aHasSub !== bHasSub) return bHasSub - aHasSub;
+    if (a.phase !== b.phase) return a.phase - b.phase;
+    return (a.subphase ?? 0) - (b.subphase ?? 0);
+  });
+
+  return filtered.map(({ phase, subphase }) => ({
+    oldId: bracketPhaseId(context, phase, subphase),
+    newId: removedSubphase !== undefined
+      ? bracketPhaseId(context, phase, (subphase as number) - 1)
+      : bracketPhaseId(context, phase - 1, subphase),
+  }));
+}
+
 function renameBracketPhases(
   phasesDir: string,
-  removedInt: number,
   context: BracketWriteContext,
-  removedSubphase?: number,
+  mapping: BracketRenumberMapping[],
 ): {
   renamedDirs: { from: string; to: string }[];
   renamedFiles: { from: string; to: string }[];
@@ -2627,15 +2693,14 @@ function renameBracketPhases(
   const renamedDirs: { from: string; to: string }[] = [];
   const renamedFiles: { from: string; to: string }[] = [];
   const renamedFileCollisions: { from: string; to: string; displaced_to: string | null }[] = [];
+
+  const mappingKey = (phase: unknown, subphase: unknown): string =>
+    `${Number(phase)}.${subphase === undefined ? '' : Number(subphase)}`;
+  const byKey = new Map<string, BracketRoadmapPhaseId>();
+  for (const { oldId, newId } of mapping) byKey.set(mappingKey(oldId.phase, oldId.subphase), newId);
+
   const candidates = bracketIdsInContext(phasesDir, context)
-    .filter(({ id }) => {
-      if (removedSubphase !== undefined) {
-        return Number(id.phase) === removedInt
-          && id.subphase !== undefined
-          && Number(id.subphase) > removedSubphase;
-      }
-      return Number(id.phase) > removedInt && !isSentinelPhaseId(Number(id.phase));
-    })
+    .filter(({ id }) => byKey.has(mappingKey(id.phase, id.subphase)))
     .sort((a, b) => {
       const phaseDelta = Number(a.id.phase) - Number(b.id.phase);
       return phaseDelta !== 0
@@ -2644,11 +2709,7 @@ function renameBracketPhases(
     });
 
   for (const item of candidates) {
-    const newId = bracketPhaseId(
-      context,
-      removedSubphase === undefined ? Number(item.id.phase) - 1 : item.id.phase,
-      removedSubphase === undefined ? item.id.subphase : Number(item.id.subphase) - 1,
-    );
+    const newId = byKey.get(mappingKey(item.id.phase, item.id.subphase))!;
     const newDirName = toDir(newId, item.slug);
     retryRenameSync(path.join(phasesDir, item.dir), path.join(phasesDir, newDirName));
     renamedDirs.push({ from: item.dir, to: newDirName });
@@ -2663,8 +2724,6 @@ function renameBracketPhases(
 
   return { renamedDirs, renamedFiles, renamedFileCollisions };
 }
-
-type BracketRoadmapPhaseId = ReturnType<typeof parsePhaseId>;
 
 interface BracketRoadmapRewriteResult {
   updated: boolean;
@@ -2822,11 +2881,11 @@ function updateRoadmapAfterBracketPhaseRemoval(
   removedInt: number,
   removedSubphase: number | undefined,
   context: BracketWriteContext,
+  mapping: BracketRenumberMapping[],
   cwd: string,
 ): BracketRoadmapRewriteResult {
   return withPlanningLock(cwd, () => {
     const originalContent = fs.readFileSync(roadmapPath, 'utf-8');
-    const isDecimal = removedSubphase !== undefined;
     const targetId = bracketPhaseId(context, removedInt, removedSubphase);
     const targetDisplay = renderPhaseId(targetId);
     let content = deleteSection(
@@ -2841,30 +2900,6 @@ function updateRoadmapAfterBracketPhaseRemoval(
     );
     let roadmapLinesRewritten = content === originalContent ? 0 : 1;
     const ranges = currentMilestoneRawRanges(content, cwd, 'bracket');
-    const tokens = new Set<number>();
-    for (const line of splitRoadmapLineRecords(content)) {
-      if (!lineStartsInActiveMilestone(line.start, ranges)) continue;
-      const { id } = classifyBracketOwnedLine(line.text);
-      if (!id || id.project !== context.project || id.milestone !== context.milestone) continue;
-      if (isDecimal) {
-        if (Number(id.phase) === removedInt
-          && id.subphase !== undefined
-          && Number(id.subphase) > removedSubphase) {
-          tokens.add(Number(id.subphase));
-        }
-      } else if (Number(id.phase) > removedInt && !isSentinelPhaseId(Number(id.phase))) {
-        tokens.add(Number(id.phase));
-      }
-    }
-
-    const mappings = [...tokens].sort((a, b) => a - b).map((token) => ({
-      oldId: isDecimal
-        ? bracketPhaseId(context, removedInt, token)
-        : bracketPhaseId(context, token),
-      newId: isDecimal
-        ? bracketPhaseId(context, removedInt, token - 1)
-        : bracketPhaseId(context, token - 1),
-    }));
 
     const rewritten: string[] = [];
     for (const line of splitRoadmapLineRecords(content)) {
@@ -2878,7 +2913,7 @@ function updateRoadmapAfterBracketPhaseRemoval(
       }
 
       let next = line.text;
-      for (const { oldId, newId } of mappings) {
+      for (const { oldId, newId } of mapping) {
         next = replaceQualifiedBracketReference(next, oldId, newId);
         if (active) next = replaceBareBracketArtifactReference(next, oldId, newId);
       }
@@ -2896,7 +2931,7 @@ function updateRoadmapAfterBracketPhaseRemoval(
       if (lineContainsTrackedBracketIdentity(
         line.text,
         targetId,
-        mappings.map(({ oldId }) => oldId),
+        mapping.map(({ oldId }) => oldId),
       )) {
         referencesLeftUntouched.push(line.lineNumber);
       }
@@ -3025,6 +3060,25 @@ function cmdPhaseRemove(
     }
   }
 
+  // #4304 round 5 (B2): compute the ONE renumber mapping shared by the disk
+  // rename and the ROADMAP rewrite before either runs, from the roadmap
+  // content as it stands right now (only the target directory is about to
+  // be deleted below; deletion does not change which OTHER identities the
+  // scan finds). Both consumers below apply this exact mapping so they
+  // cannot independently diverge on a decimal sub-phase identity.
+  const bracketMapping = (() => {
+    if (!removeContext) return [];
+    const roadmapContentBeforeRename = fs.readFileSync(roadmapPath, 'utf-8');
+    return computeBracketRenumberMapping(
+      phasesDir,
+      roadmapContentBeforeRename,
+      currentMilestoneRawRanges(roadmapContentBeforeRename, cwd, 'bracket'),
+      removeContext,
+      removedInt,
+      removedSubphase,
+    );
+  })();
+
   if (targetDir) fs.rmSync(path.join(phasesDir, targetDir), { recursive: true, force: true });
 
   let renamedDirs: { from: string; to: string }[] = [];
@@ -3037,9 +3091,8 @@ function cmdPhaseRemove(
       // which is NaN for a qualified id like `CK.02-02`.
       const renamed = renameBracketPhases(
         phasesDir,
-        removedInt,
         removeContext,
-        removedSubphase,
+        bracketMapping,
       );
       renamedDirs = renamed.renamedDirs;
       renamedFiles = renamed.renamedFiles;
@@ -3078,6 +3131,7 @@ function cmdPhaseRemove(
       removedInt,
       removedSubphase,
       removeContext,
+      bracketMapping,
       cwd,
     )
     : null;

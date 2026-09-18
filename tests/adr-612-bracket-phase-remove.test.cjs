@@ -803,4 +803,82 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(roadmap.includes('| **[CK.02] 03** | 0/1 | Planned |'), false);
     assert.equal((roadmap.match(/^\| \*\*\[CK\.02\] 02\*\* \|/gm) ?? []).length, 1);
   });
+
+  // #4304 round-5 Blocker 2: renameBracketPhases renames a later phase's
+  // sub-phase directories and artifact files on disk (03.01 -> 02.01), but
+  // updateRoadmapAfterBracketPhaseRemoval's own token collection tracked
+  // only bare integer phase numbers, so a decimal identity like
+  // `[CK.02] 03.01` never got a renumber mapping entry and every ROADMAP
+  // spelling of it (checklist, heading, progress row, bare artifact token)
+  // was left pointing at the pre-renumber id while disk had already moved.
+  // Both consumers must now come from the same identity mapping.
+  test('renumbers a later phase\'s sub-phase on disk and in ROADMAP from one mapping', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '- [ ] [CK.02] 03.01: Three Sub',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '**Plans:** `03-01-PLAN.md`',
+        '',
+        '### [CK.02] 03.01: Three Sub',
+        '**Goal:** renumber sub',
+        '**Depends on:** [CK.02] 03',
+        '**Plans:** `03.01-01-PLAN.md`',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] 01 | 0/1 | Planned |',
+        '| [CK.02] 02 | 0/1 | Planned |',
+        '| [CK.02] 03 | 0/1 | Planned |',
+        '| [CK.02] 03.01 | 0/1 | Planned |',
+        '',
+      ],
+      [
+        ['CK.02-01-one', ['01-01-PLAN.md']],
+        ['CK.02-02-two', ['02-01-PLAN.md']],
+        ['CK.02-03-three', ['03-01-PLAN.md']],
+        ['CK.02-03.01-three-sub', ['03.01-01-PLAN.md']],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+
+    assert.deepEqual(
+      fs.readdirSync(planning('phases')).sort(),
+      ['CK.02-01-one', 'CK.02-02-three', 'CK.02-02.01-three-sub'],
+    );
+    assert.equal(fs.existsSync(planning('phases', 'CK.02-02-three', '02-01-PLAN.md')), true);
+    assert.equal(
+      fs.existsSync(planning('phases', 'CK.02-02.01-three-sub', '02.01-01-PLAN.md')),
+      true,
+    );
+
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    assert.equal(roadmap.includes('- [ ] [CK.02] 02.01: Three Sub'), true);
+    assert.equal(roadmap.includes('### [CK.02] 02.01: Three Sub'), true);
+    assert.equal(roadmap.includes('**Depends on:** [CK.02] 02'), true);
+    assert.equal(roadmap.includes('**Plans:** `02.01-01-PLAN.md`'), true);
+    assert.equal(roadmap.includes('| [CK.02] 02.01 | 0/1 | Planned |'), true);
+    assert.equal(roadmap.includes('03.01'), false);
+    assert.equal(roadmap.includes('### [CK.02] 03: Three'), false);
+    assert.deepEqual(out.references_left_untouched, []);
+  });
 });
