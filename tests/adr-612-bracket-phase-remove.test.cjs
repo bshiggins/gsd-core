@@ -725,4 +725,82 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(out.roadmap_lines_rewritten, 9);
     assert.deepEqual(out.references_left_untouched, [proseLine]);
   });
+
+  // #4304 round-5 Blocker 1: classifyBracketOwnedLine's table-row guard and
+  // bold-cell strip were regex LITERALS written with doubled backslashes
+  // (`/^[ \\t]*\\|/`, `/^\\*\\*(.*)\\*\\*$/`), so the guard matched every
+  // line (an empty alternation branch) and any prose line beginning with the
+  // removed phase's display id was misclassified 'progress' and deleted
+  // anywhere in the document — the preamble, another milestone's section, a
+  // trailing '## Notes' section, all outside the active milestone. Free
+  // prose is never an owned line class and must survive byte-identical; a
+  // genuine (optionally bold) pipe-table row whose first cell is the
+  // target's complete identity is the only thing removed, wherever it sits.
+  test('leaves free prose byte-identical everywhere and deletes only genuine (bold or plain) progress rows', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '[CK.02] 02 mentioned before any milestone heading must stay untouched.',
+        '',
+        '## [CK.01] v1.0 — Prior',
+        '',
+        '[CK.02] 02 referenced from another milestone section must stay untouched.',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '',
+        '## Notes',
+        '',
+        '[CK.02] 02 was descoped; its work moved to the auth epic.',
+        '[CK.02] 02: descoped (colon form)',
+        '[CK.02] 02',
+        'Keep: see [CK.02] 02 for history.',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| **[CK.02] 02** | 0/1 | Planned |',
+        '| **[CK.02] 03** | 0/1 | Planned |',
+        '',
+      ],
+      [
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', []],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+
+    assert.equal(
+      roadmap.includes('[CK.02] 02 mentioned before any milestone heading must stay untouched.'),
+      true,
+    );
+    assert.equal(
+      roadmap.includes('[CK.02] 02 referenced from another milestone section must stay untouched.'),
+      true,
+    );
+    assert.equal(
+      roadmap.includes('[CK.02] 02 was descoped; its work moved to the auth epic.'),
+      true,
+    );
+    assert.equal(roadmap.includes('[CK.02] 02: descoped (colon form)'), true);
+    assert.equal(roadmap.split('\n').includes('[CK.02] 02'), true);
+    assert.equal(roadmap.includes('Keep: see [CK.02] 02 for history.'), true);
+
+    assert.equal(roadmap.includes('| **[CK.02] 02** | 0/1 | Planned |'), true);
+    assert.equal(roadmap.includes('| **[CK.02] 03** | 0/1 | Planned |'), false);
+    assert.equal((roadmap.match(/^\| \*\*\[CK\.02\] 02\*\* \|/gm) ?? []).length, 1);
+  });
 });

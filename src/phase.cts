@@ -2680,7 +2680,7 @@ interface RoadmapLineRecord {
 }
 
 type BracketOwnedLine = {
-  kind: 'heading' | 'checklist' | 'progress' | 'depends-on' | 'other';
+  kind: 'heading' | 'checklist' | 'progress' | 'other';
   id: BracketRoadmapPhaseId | null;
 };
 
@@ -2738,15 +2738,12 @@ function classifyBracketOwnedLine(line: string): BracketOwnedLine {
   const checklistId = phaseIdFromOwnedLineMatch(BRACKET_CHECKLIST_LINE_RE.exec(line));
   if (checklistId) return { kind: 'checklist', id: checklistId };
 
-  if (/^[ \\t]*\\|/.test(line)) {
-    const firstCell = splitTableRow(line)[0]?.replace(/^\\*\\*(.*)\\*\\*$/, '$1') ?? '';
+  if (/^[ \t]*\|/.test(line)) {
+    const firstCell = splitTableRow(line)[0]?.replace(/^\*\*(.*)\*\*$/, '$1') ?? '';
     const progressId = phaseIdFromOwnedLineMatch(BRACKET_CELL_ID_RE.exec(firstCell));
     if (progressId) return { kind: 'progress', id: progressId };
   }
 
-  if (/^[ \\t]*\\*\\*Depends on(?::\\*\\*|\\*\\*:)/i.test(line)) {
-    return { kind: 'depends-on', id: null };
-  }
   return { kind: 'other', id: null };
 }
 
