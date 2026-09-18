@@ -1616,4 +1616,80 @@ describe('roadmap upgrade --convention bracket', () => {
       assert.equal(isPhaseHeadingText('Phase Notes'), false);
     });
   });
+
+  // #4144 round 5 Blocker 2: `assignBracketTokens` ran ONE counter per
+  // milestone for legacy phases and never consulted a PRESERVED M-NN token's
+  // own integer identity — so `### Phase 2-01: Alpha` (M-NN, preserved as
+  // `01`) and a later `### Phase 3: Beta` (legacy, counter-assigned) under
+  // the SAME milestone both resolved to `[GSD.02] 01`, and the planner wrote
+  // that collision to disk without refusing (matchPhaseDirs then returns
+  // both directories for the one token). Fix: a preserved M-NN token now
+  // RESERVES its own leading integer segment against that milestone's
+  // legacy counter, and any remaining (milestone, token) collision — two
+  // preserved M-NN spellings of the same integer included — is refused
+  // before any write, naming every colliding heading.
+  describe('reserves preserved M-NN tokens before assigning legacy counters (#4144 round 5 Blocker 2)', () => {
+    test('a preserved M-NN token and a legacy phase in the same milestone no longer collide', () => {
+      const cwd = materializeFixture('mnn-legacy-reservation');
+
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'M-NN/legacy reservation dry-run');
+      assert.deepEqual(
+        plan.phases.map(({ oldDir, newDir }) => ({ oldDir, newDir })).sort((a, b) => a.oldDir.localeCompare(b.oldDir)),
+        [
+          { oldDir: '03-beta', newDir: 'GSD.02-02-beta' },
+          { oldDir: '05-eta', newDir: 'GSD.03-01-eta' },
+          { oldDir: 'GSD-02-01-alpha', newDir: 'GSD.02-01-alpha' },
+          { oldDir: 'GSD-03-04-01-zeta', newDir: 'GSD.03-04.01-zeta' },
+        ].sort((a, b) => a.oldDir.localeCompare(b.oldDir)),
+      );
+      assert.ok(plan.roadmapEdits.some(({ to }) => to === '### [GSD.02] 01: Alpha'));
+      assert.ok(
+        plan.roadmapEdits.some(({ to }) => to === '### [GSD.02] 02: Beta'),
+        'the legacy phase must skip the M-NN-reserved value 01 and take the next free counter, 02',
+      );
+      assert.ok(plan.roadmapEdits.some(({ to }) => to === '### [GSD.03] 04.01: Zeta'));
+      assert.ok(
+        plan.roadmapEdits.some(({ to }) => to === '### [GSD.03] 01: Eta'),
+        'a lone legacy phase in a milestone whose only reservation is 04 still starts counting at 01',
+      );
+
+      const result = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(result, 0, 'M-NN/legacy reservation apply');
+      assert.deepEqual(
+        phaseDirs(cwd),
+        ['GSD.02-01-alpha', 'GSD.02-02-beta', 'GSD.03-01-eta', 'GSD.03-04.01-zeta'],
+        'all four phases must land in their own distinct directory — no collision',
+      );
+    });
+
+    test('two preserved M-NN spellings of the same integer collide and are refused before any write, both named', () => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v2.0 — Collision',
+          '',
+          '### Phase 2-01: Alpha',
+          '',
+          '### Phase 2-1: Also Alpha',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const before = snapshotTree(cwd, { skipGit: true });
+
+      const dryRun = runBracketUpgrade(cwd);
+      assertExited(dryRun, 1, 'M-NN token collision (dry-run)');
+      assert.match(dryRun.stderr, /same bracket token/i);
+      assert.match(dryRun.stderr, /### Phase 2-01: Alpha/);
+      assert.match(dryRun.stderr, /### Phase 2-1: Also Alpha/);
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'dry-run refusal must write nothing');
+
+      const apply = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(apply, 1, 'M-NN token collision (apply)');
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'apply refusal must write nothing');
+    });
+  });
 });

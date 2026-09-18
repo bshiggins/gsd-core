@@ -447,40 +447,92 @@ function parseBracketSourcePhases(lines: string[]): { entries: BracketSourceEntr
 }
 
 /**
- * Resolve bracket target tokens. Legacy phases receive the same deterministic
- * per-milestone sequence as the existing migrator. M-NN sources preserve their
- * integer identity while moving the milestone into the bracket:
- * `2-01` → `01`; `2-04-01` → `04.01`.
+ * Resolve bracket target tokens. M-NN sources preserve their integer
+ * identity while moving the milestone into the bracket: `2-01` → `01`;
+ * `2-04-01` → `04.01`. Legacy phases receive a deterministic per-milestone
+ * counter — but #4144 round 5 Blocker 2: a preserved M-NN token is NEVER
+ * reassignable, so it must RESERVE its own leading integer segment against
+ * that same milestone's legacy counter before any legacy phase is numbered,
+ * or the two axes can silently collide (`2-01` preserved as `01` and a
+ * later legacy `Phase 3` also counter-assigned `01`, under the same
+ * milestone). `lines` is the raw ROADMAP.md source, used only to name each
+ * colliding heading verbatim in the refusal below — never to re-derive
+ * identity.
+ *
+ * Two passes, in `entries`' own document order (never re-sorted):
+ *   1. Every preserved M-NN entry gets its own deterministic token AND
+ *      reserves that token's leading integer segment for its milestone.
+ *   2. Every legacy entry gets the next per-milestone counter value pass 1
+ *      did not reserve.
+ * A generic post-pass then refuses, before any write, if two entries under
+ * the same milestone still resolved to the same final token — covering both
+ * "two preserved M-NN spellings of the same integer" (`2-01` and `2-1`, both
+ * `01`) and any other collision pass 1/2 failed to keep disjoint.
  */
-function assignBracketTokens(entries: BracketSourceEntry[]): Map<number, BracketMapping> {
-  const milestoneCounters = new Map<number, number>();
+function assignBracketTokens(entries: BracketSourceEntry[], lines: string[]): Map<number, BracketMapping> {
   const mappings = new Map<number, BracketMapping>();
 
+  // Pass 1: preserved M-NN tokens.
+  const reservedByMilestone = new Map<number, Set<number>>();
   for (const entry of entries) {
-    if (entry.alreadyMigrated || entry.milestoneInt === null || entry.milestoneInt === undefined) continue;
+    if (entry.alreadyMigrated || entry.source !== 'mnn') continue;
+    if (entry.milestoneInt === null || entry.milestoneInt === undefined) continue;
 
-    if (entry.source === 'mnn') {
-      const segments = entry.sourceToken!.split('-');
-      const token = segments.slice(1).map((segment) => pad2(parseInt(segment, 10))).join('.');
-      mappings.set(entry.lineIndex, {
-        lineIndex: entry.lineIndex,
-        milestoneInt: entry.milestoneInt,
-        token,
-        source: 'mnn',
-        sourceToken: entry.sourceToken!,
-      });
-      continue;
+    const segments = entry.sourceToken!.split('-');
+    const token = segments.slice(1).map((segment) => pad2(parseInt(segment, 10))).join('.');
+    const leadingReserved = parseInt(segments[1], 10);
+    if (!reservedByMilestone.has(entry.milestoneInt)) {
+      reservedByMilestone.set(entry.milestoneInt, new Set<number>());
     }
+    reservedByMilestone.get(entry.milestoneInt)!.add(leadingReserved);
 
-    const counter = (milestoneCounters.get(entry.milestoneInt) ?? 0) + 1;
-    milestoneCounters.set(entry.milestoneInt, counter);
     mappings.set(entry.lineIndex, {
       lineIndex: entry.lineIndex,
       milestoneInt: entry.milestoneInt,
-      token: pad2(counter),
+      token,
+      source: 'mnn',
+      sourceToken: entry.sourceToken!,
+    });
+  }
+
+  // Pass 2: legacy phases, walking the next per-milestone counter value that
+  // pass 1 did not reserve.
+  const nextCandidateByMilestone = new Map<number, number>();
+  for (const entry of entries) {
+    if (entry.alreadyMigrated || entry.source !== 'legacy') continue;
+    if (entry.milestoneInt === null || entry.milestoneInt === undefined) continue;
+
+    const reserved = reservedByMilestone.get(entry.milestoneInt) ?? new Set<number>();
+    let candidate = nextCandidateByMilestone.get(entry.milestoneInt) ?? 1;
+    while (reserved.has(candidate)) candidate++;
+    nextCandidateByMilestone.set(entry.milestoneInt, candidate + 1);
+
+    mappings.set(entry.lineIndex, {
+      lineIndex: entry.lineIndex,
+      milestoneInt: entry.milestoneInt,
+      token: pad2(candidate),
       source: 'legacy',
       sourceToken: entry.sourceToken!,
     });
+  }
+
+  const byMilestoneToken = new Map<string, BracketMapping[]>();
+  for (const mapping of mappings.values()) {
+    const key = `${mapping.milestoneInt}::${mapping.token}`;
+    if (!byMilestoneToken.has(key)) byMilestoneToken.set(key, []);
+    byMilestoneToken.get(key)!.push(mapping);
+  }
+  const colliding = [...byMilestoneToken.values()]
+    .filter((group) => group.length > 1)
+    .flat()
+    .sort((a, b) => a.lineIndex - b.lineIndex);
+  if (colliding.length > 0) {
+    throw new Error(
+      'Cannot safely migrate ROADMAP.md to the bracket convention: two phase headings under the same '
+      + 'milestone would resolve to the same bracket token. Refusing rather than colliding distinct phase '
+      + 'identities:\n'
+      + colliding.map((mapping) => `  ${lines[mapping.lineIndex]}`).join('\n'),
+    );
   }
 
   return mappings;
@@ -972,7 +1024,7 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     );
   }
 
-  const idMapping = assignBracketTokens(sourcePhases);
+  const idMapping = assignBracketTokens(sourcePhases, lines);
 
   const milestoneLegacyMap = new Map<number, Map<string, string>>();
   for (const mapping of idMapping.values()) {
