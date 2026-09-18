@@ -35,7 +35,14 @@ const {
   computeDependsOnRewrites,
 } = require('../gsd-core/bin/lib/roadmap-upgrade.cjs');
 const { readVerificationStatus } = require('../gsd-core/bin/lib/verification.cjs');
-const { scopeToPhase } = require('../gsd-core/bin/lib/phase-id.cjs');
+const { scopeToPhase, matchPhaseDirs } = require('../gsd-core/bin/lib/phase-id.cjs');
+// #4144 round 5 Blocker 1: hasPhaseEntries and its exported single-owner
+// phase-heading predicate — the READERS' OWN phase-heading grammar the
+// bracket migrator's "phase-like but unparsed" refusal must be gated on
+// (see the describe block below).
+const { hasPhaseEntries, isPhaseHeadingText } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
+const { extractFencedBlock } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 // #4698 Blocker 1 (round 2): real production functions used to prove the
 // REAL dependency resolver (not a hand-rolled stand-in) resolves a
 // depends_on token this migrator rewrote. cmdPhasePlanIndex itself is not
@@ -67,6 +74,55 @@ function materializeFixture(name) {
   gitOrThrow(['add', '.gitignore', 'README.md'], { cwd });
   gitOrThrow(['commit', '--quiet', '-m', 'fixture baseline'], { cwd });
   return cwd;
+}
+
+/**
+ * #4144 round 5 Blocker 1: a git-initialized fixture repo with an EMPTY
+ * `.planning/` tree (no static `fixtures/roadmap-upgrade-bracket/<name>/`
+ * directory to copy from) — for a ROADMAP.md built at test time from
+ * `gsd-core/templates/roadmap.md` itself, so the regression test tracks the
+ * real shipped template rather than a frozen duplicate of it. Mirrors
+ * materializeFixture's own git scaffolding exactly, minus the `fs.cpSync`.
+ */
+function materializeEmptyFixture(label) {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), `gsd-bracket-${label}-`));
+  tempRoots.push(cwd);
+  fs.mkdirSync(path.join(cwd, '.planning', 'phases'), { recursive: true });
+  fs.writeFileSync(path.join(cwd, '.gitignore'), '.planning/\n', 'utf8');
+  fs.writeFileSync(path.join(cwd, 'README.md'), '# Fixture repository\n', 'utf8');
+
+  gitOrThrow(['init', '--quiet'], { cwd });
+  gitOrThrow(['config', 'user.email', 'fixture@example.invalid'], { cwd });
+  gitOrThrow(['config', 'user.name', 'Fixture Author'], { cwd });
+  gitOrThrow(['add', '.gitignore', 'README.md'], { cwd });
+  gitOrThrow(['commit', '--quiet', '-m', 'fixture baseline'], { cwd });
+  return cwd;
+}
+
+/**
+ * #4144 round 5 Blocker 1: the fenced `markdown` roadmap example from
+ * `gsd-core/templates/roadmap.md` (the "Initial Roadmap (v1.0 Greenfield)"
+ * block, which contains the literal `## Phase Details` heading the reported
+ * regression is about), with its name placeholders filled in. Extracted via
+ * `extractFencedBlock` — the same fence-scanning seam the readers use — so
+ * this is the ACTUAL shipped template content, not a hand-copied excerpt
+ * that could silently drift from it.
+ */
+function buildTemplateRoadmap() {
+  const templatePath = path.join(__dirname, '..', 'gsd-core', 'templates', 'roadmap.md');
+  const templateContent = fs.readFileSync(templatePath, 'utf8');
+  const block = extractFencedBlock(templateContent, 'markdown');
+  assert.ok(block, 'gsd-core/templates/roadmap.md must still contain its fenced `markdown` roadmap example');
+  return block
+    .replaceAll('[Project Name]', 'Nimbus')
+    .replaceAll('Phase 1: [Name]', 'Phase 1: Alpha')
+    .replaceAll('Phase 2: [Name]', 'Phase 2: Beta')
+    .replaceAll('Phase 3: [Name]', 'Phase 3: Gamma')
+    .replaceAll('Phase 4: [Name]', 'Phase 4: Delta')
+    .replaceAll('| 1. [Name] |', '| 1. Alpha |')
+    .replaceAll('| 2. [Name] |', '| 2. Beta |')
+    .replaceAll('| 3. [Name] |', '| 3. Gamma |')
+    .replaceAll('| 4. [Name] |', '| 4. Delta |');
 }
 
 function runBracketUpgrade(cwd, extraArgs = []) {
@@ -1447,6 +1503,117 @@ describe('roadmap upgrade --convention bracket', () => {
       assertExited(apply, 1, 'unparseable phase-like heading (apply)');
       assert.match(apply.stderr, /### Phase Two: NoNumber/);
       assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'apply refusal must write nothing');
+    });
+  });
+
+  // #4144 round 5 Blocker 1 (Astra pass on PR 4773, regression from round 3):
+  // gsd-core/templates/roadmap.md's own shipped "## Phase Details" section
+  // heading (no phase number, no colon) was classified as an unrecognized
+  // "phase-like" heading by PHASE_HEADING_LIKE_RE (a bare `/^#{2,4}\s*Phase\b/i`
+  // — anything starting with the word "Phase"), and the round-2 unparsed-
+  // heading refusal then aborted migration of every roadmap built from the
+  // template verbatim. The readers' OWN phase-heading grammar
+  // (roadmap-parser.cts's hasPhaseEntries, now exported as
+  // `isPhaseHeadingText`) requires a phase NUMBER token and a trailing colon
+  // — "## Phase Details" satisfies neither — so gating the refusal on that
+  // predicate instead lets an ordinary section heading pass through
+  // untouched while still refusing anything the readers themselves would
+  // treat as a phase heading the migrator's three grammars cannot parse.
+  describe('refuses only headings the readers\' own phase-heading grammar accepts (#4144 round 5 Blocker 1)', () => {
+    test('a roadmap built from the shipped template migrates cleanly and keeps `## Phase Details` byte-identical', () => {
+      const cwd = materializeEmptyFixture('template-roadmap');
+      const roadmap = buildTemplateRoadmap();
+      assert.match(
+        roadmap, /^## Phase Details$/m,
+        'sanity: the template must still carry the literal section heading this regression is about',
+      );
+      fs.writeFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), roadmap, 'utf8');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'config.json'),
+        JSON.stringify({ project_code: 'NIM', phase_id_convention: null }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'STATE.md'),
+        '---\nmilestone: v1.0\n---\n\n# Project State\n',
+        'utf8',
+      );
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      for (const dir of ['01-alpha', '02-beta', '02.1-critical-fix', '03-gamma', '04-delta']) {
+        fs.mkdirSync(path.join(phasesDir, dir), { recursive: true });
+      }
+
+      const result = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(result, 0, 'template-built roadmap apply');
+
+      const migrated = fs.readFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), 'utf8');
+      assert.ok(
+        splitLines(migrated).includes('## Phase Details'),
+        '`## Phase Details` must survive the migration byte-identical, never treated as an unparsed phase-like heading',
+      );
+      assert.match(migrated, /^### \[NIM\.01\] 01: Alpha$/m);
+      assert.match(
+        migrated, /^### \[NIM\.01\] 03: Critical Fix \(INSERTED\)$/m,
+        'the decimal-inserted legacy phase converts too, counter-assigned like every other legacy phase',
+      );
+      assert.match(migrated, /^### \[NIM\.01\] 05: Delta$/m);
+
+      // Readable by the real bracket-aware roadmap reader, not merely present as text.
+      assert.equal(hasPhaseEntries(migrated, 'bracket'), true);
+
+      // Readable by the real directory matcher too.
+      const dirsAfter = fs.readdirSync(phasesDir);
+      const match = matchPhaseDirs(dirsAfter, 'NIM.01-03', 'bracket');
+      assert.deepEqual(match.matches, ['NIM.01-03-critical-fix']);
+    });
+
+    test('`## Phase Details`, `## Phase Lifecycle`, and `### Phase Notes` are not phase-like and pass through untouched', () => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      const before = fs.readFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), 'utf8');
+      const withExtras = before
+        + '\n## Phase Details\n\nSee below.\n\n## Phase Lifecycle\n\nDraft -> Active -> Shipped.\n\n'
+        + '### Phase Notes\n\nMisc notes.\n';
+      fs.writeFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), withExtras, 'utf8');
+
+      const result = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(result, 0, 'benign non-colon Phase-word headings must not abort migration');
+
+      const migrated = fs.readFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), 'utf8');
+      const migratedLines = splitLines(migrated);
+      for (const heading of ['## Phase Details', '## Phase Lifecycle', '### Phase Notes']) {
+        assert.ok(migratedLines.includes(heading), `${heading} must survive byte-identical`);
+      }
+    });
+
+    test('a heading the readers do treat as phase-like, but none of the three grammars accept, is still refused', () => {
+      // "### Phase Two: NoNumber" above already covers a token-free custom
+      // heading; this covers the OTHER shape the readers' grammar accepts —
+      // a non-numeric custom id token ("AUTH-101") with a colon — which none
+      // of BRACKET_PHASE_HEADING_RE / MNN_PHASE_HEADING_BRACKET_RE /
+      // LEGACY_PHASE_HEADING_BRACKET_RE accept (all three require a
+      // digit-led PHASE_NUMBER_TOKEN_SOURCE or MNN_SOURCE_TOKEN_SOURCE).
+      const cwd = materializeFixture('legacy-multi-milestone');
+      const before = fs.readFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), 'utf8');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        before + '\n### Phase AUTH-101: Custom ID\n',
+        'utf8',
+      );
+      const snapshot = snapshotTree(cwd, { skipGit: true });
+
+      const result = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(result, 1, 'still-unrecognized custom-id heading must refuse');
+      assert.match(result.stderr, /do not match any recognized grammar/);
+      assert.match(result.stderr, /### Phase AUTH-101: Custom ID/);
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), snapshot, 'refusal must write nothing');
+    });
+
+    test('the exported reader phase-heading predicate draws exactly the boundary the migrator must respect', () => {
+      assert.equal(isPhaseHeadingText('Phase 1: Alpha'), true);
+      assert.equal(isPhaseHeadingText('Phase AUTH-101: Custom ID'), true);
+      assert.equal(isPhaseHeadingText('Phase Details'), false);
+      assert.equal(isPhaseHeadingText('Phase Lifecycle'), false);
+      assert.equal(isPhaseHeadingText('Phase Notes'), false);
     });
   });
 });

@@ -33,7 +33,7 @@ const { SCOPE } = planningScopeMod;
 // already solves "change exactly one key, preserve every other key's raw text
 // byte-for-byte", which is exactly the contract a `depends_on` rewrite needs.
 const { extractFrontmatter, spliceFrontmatter } = frontmatterMod;
-const { milestoneSections } = roadmapParserMod;
+const { milestoneSections, isPhaseHeadingText } = roadmapParserMod;
 const { normalizeDependencyToken } = phaseMod;
 const {
   BRACKET_ID_SRC,
@@ -125,10 +125,29 @@ const MNN_PHASE_HEADING_BRACKET_RE = new RegExp(
 // exactly how a tagged/malformed heading went unmigrated while the roadmap
 // still got stamped with the target convention (the reported defect's root
 // cause: partial conversion read as "done"). `computeBracketPlan` refuses
-// before any write when either pattern below matches a line that none of
+// before any write when either check below matches a line that none of
 // BRACKET_PHASE_HEADING_RE / MNN_PHASE_HEADING_BRACKET_RE /
 // LEGACY_PHASE_HEADING_BRACKET_RE accepted.
-const PHASE_HEADING_LIKE_RE = /^#{2,4}\s*Phase\b/i;
+//
+// #4144 round 5 Blocker 1 (regression from round 3): the "phase-like" half
+// of that refusal used to be a bare `/^#{2,4}\s*Phase\b/i` — anything
+// starting with the word "Phase" — which also caught
+// gsd-core/templates/roadmap.md's own shipped `## Phase Details` section
+// heading (no phase number, no colon) and aborted migration of every
+// roadmap built from that template. The refusal may only fire for a heading
+// the READERS' OWN phase-heading grammar (roadmap-parser.cts's
+// hasPhaseEntries, exported as `isPhaseHeadingText`) would itself treat as a
+// phase heading — reusing that single owner rather than a second, looser
+// grammar here. `isPhaseLikeHeadingLine` strips the `#{2,4}` markers a raw
+// source line still carries (tokenizeHeadings' own `h.text` already has
+// them stripped; a source line handed to this scanner does not) before
+// testing.
+const HEADING_HASH_PREFIX_RE = /^#{2,4}[ \t]*/;
+const isPhaseLikeHeadingLine = (line: string): boolean => {
+  const match = HEADING_HASH_PREFIX_RE.exec(line);
+  if (!match) return false;
+  return isPhaseHeadingText(line.slice(match[0].length));
+};
 const BRACKET_HEADING_LIKE_RE = /^#{2,4}\s*\[[^\]]{1,200}\]/;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -419,7 +438,7 @@ function parseBracketSourcePhases(lines: string[]): { entries: BracketSourceEntr
       continue;
     }
 
-    if (PHASE_HEADING_LIKE_RE.test(line) || BRACKET_HEADING_LIKE_RE.test(line)) {
+    if (isPhaseLikeHeadingLine(line) || BRACKET_HEADING_LIKE_RE.test(line)) {
       unparsed.push(line);
     }
   }

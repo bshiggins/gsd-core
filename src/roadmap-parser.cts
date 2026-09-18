@@ -679,16 +679,38 @@ const BRACKET_PHASE_ENTRY_HEADING_RE = new RegExp(
   'i',
 );
 
+// #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal
+// mirror of OPTIONAL_PHASE_TAG_SOURCE). Hoisted out of hasPhaseEntries (#4144
+// round 5 Blocker 1) so a consumer OUTSIDE this file's own phase-entry count —
+// the bracket roadmap migrator's "phase-like but unparsed" refusal
+// (src/roadmap-upgrade.cts) — can ask "is this heading text a phase heading
+// by the readers' own rules" without re-deriving the pattern. A heading with
+// no phase-number token and no trailing colon (`## Phase Details`, `##
+// Phase Lifecycle`, `### Phase Notes`) is NOT a phase heading by this
+// grammar — it is an ordinary section heading that happens to start with the
+// word "Phase".
+const PHASE_HEADING_TEXT_RE = /^(?:\[[^\]]{1,200}\]\s*)?Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]{0,200}\))?\s*:/i;
+
+/**
+ * #4144 round 5 Blocker 1: whether `headingText` — a heading's text with its
+ * leading `#{1,6}` markers and surrounding whitespace already stripped
+ * (`tokenizeHeadings`'s own `h.text`, or the equivalent for a line a caller
+ * already knows is a `#{2,4}` heading) — is a phase heading by the readers'
+ * own grammar. The single owner of this test; `hasPhaseEntries` below is
+ * itself just the first caller.
+ */
+function isPhaseHeadingText(headingText: string): boolean {
+  return PHASE_HEADING_TEXT_RE.test(headingText);
+}
+
 function hasPhaseEntries(markdown: string, phaseIdConvention?: string | null): boolean {
-  // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
   // #3641: the widened grammar engages ONLY when the resolved convention is
   // 'bracket' — a project that has not opted in runs the legacy pattern
   // alone, byte-identically.
-  const phaseHeadingPattern = /^(?:\[[^\]]{1,200}\]\s*)?Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]{0,200}\))?\s*:/i;
   const bracketMode = phaseIdConvention === 'bracket';
   for (const h of tokenizeHeadings(markdown)) {
     if (h.level < 2 || h.level > 4) continue;
-    if (phaseHeadingPattern.test(h.text)) return true;
+    if (isPhaseHeadingText(h.text)) return true;
     if (bracketMode && BRACKET_PHASE_ENTRY_HEADING_RE.test(h.text)) return true;
   }
   // #3184 review finding: the bullet fallback must be fence-aware too, or a
@@ -2315,6 +2337,11 @@ export = {
   // owner (and its convention gate) instead of a private inline copy.
   extractPhaseFieldMultiline,
   hasPhaseEntries,
+  // #4144 round 5 Blocker 1: the readers' own phase-heading grammar, so the
+  // bracket roadmap migrator's "phase-like but unparsed" refusal
+  // (src/roadmap-upgrade.cts) can gate on it instead of a private, looser
+  // "starts with the word Phase" regex.
+  isPhaseHeadingText,
 };
 
 
