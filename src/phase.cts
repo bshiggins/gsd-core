@@ -1949,9 +1949,6 @@ function cmdPhaseInsert(
     const _dirName = bracketId ? toDir(bracketId, slug) : `${pfx}${_decimalPhase}-${slug}`;
     const dirPath = path.join(planningDir(cwd), 'phases', _dirName);
 
-    platformEnsureDir(dirPath);
-    platformWriteSync(path.join(dirPath, '.gitkeep'), '');
-
     let updatedContent: string;
 
     if (isBulletStyle) {
@@ -2032,18 +2029,44 @@ function cmdPhaseInsert(
       // cmdPhaseComplete's own null fallback for this same helper), and stays
       // the untouched whole-document search for every non-bracket
       // convention, which never had this cross-milestone ambiguity.
+      //
+      // #4304 round 5 (B3): the pre-flight headingMatch check above ran
+      // against extractCurrentMilestone's content, which (for a bracket
+      // repo) merges the primary section with a later "(Phase Details)"
+      // section carrying the same milestone identity — so it can pass even
+      // when the target's own detail heading lives ONLY in that Phase
+      // Details range, separated from primary by an unrelated sibling
+      // milestone. Search the SAME two raw ranges the round-3 remove fix
+      // discovers (primary, then details) instead of primary alone, so a
+      // heading the pre-flight check can see is also found here.
       const bracketSectionRanges = bracketContext
         ? currentMilestoneRawRanges(rawContent, cwd, 'bracket')
         : null;
-      const searchStart = bracketSectionRanges ? bracketSectionRanges.primary.start : 0;
-      const searchEnd = bracketSectionRanges ? bracketSectionRanges.primary.end : rawContent.length;
-      const searchWindow = rawContent.slice(searchStart, searchEnd);
-      const headerMatch = searchWindow.match(headerPattern);
+      const headerSearchRanges = bracketSectionRanges
+        ? [
+          bracketSectionRanges.primary,
+          ...(bracketSectionRanges.details ? [bracketSectionRanges.details] : []),
+        ]
+        : [{ start: 0, end: rawContent.length }];
+
+      let searchStart = headerSearchRanges[0].start;
+      let searchEnd = headerSearchRanges[0].end;
+      let headerMatch: RegExpMatchArray | null = null;
+      for (const range of headerSearchRanges) {
+        const searchWindow = rawContent.slice(range.start, range.end);
+        const match = searchWindow.match(headerPattern);
+        if (match) {
+          headerMatch = match;
+          searchStart = range.start;
+          searchEnd = range.end;
+          break;
+        }
+      }
       if (!headerMatch) {
         error(`Could not find Phase ${afterPhase} header`);
       }
 
-      const headerIdx = searchStart + searchWindow.indexOf(headerMatch![0]);
+      const headerIdx = searchStart + rawContent.slice(searchStart, searchEnd).indexOf(headerMatch![0]);
       const afterHeader = rawContent.slice(headerIdx + headerMatch![0].length, searchEnd);
       const nextPhaseMatch = afterHeader.match(
         new RegExp(`\\r?\\n#{2,4}\\s+${headingIntro}\\d[\\d.]*`, 'i'),
@@ -2059,6 +2082,14 @@ function cmdPhaseInsert(
       updatedContent =
         rawContent.slice(0, insertIdx) + phaseEntry + rawContent.slice(insertIdx);
     }
+
+    // #4304 round 5 (B3): every validation above — the pre-flight heading
+    // check, the header/bullet-line search, and computing `updatedContent`
+    // — must succeed (or `error()` out, which never returns) before the new
+    // phase's directory is created. A failing insert now leaves `.planning`
+    // byte-identical.
+    platformEnsureDir(dirPath);
+    platformWriteSync(path.join(dirPath, '.gitkeep'), '');
 
     platformWriteSync(roadmapPath, updatedContent);
     return { decimalPhase: _decimalPhase, dirName: _dirName };

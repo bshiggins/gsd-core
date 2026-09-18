@@ -165,6 +165,110 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.deepEqual(fs.readdirSync(planning(dir, 'phases')), []);
   });
 
+  // #4304 round-5 Blocker 3: the pre-flight headingMatch check ran against
+  // extractCurrentMilestone's content, which merges the primary section with
+  // a later "(Phase Details)" section sharing the same milestone identity —
+  // so it passed even when the target's own detail heading lives ONLY in
+  // that Phase Details section, separated from primary by an unrelated
+  // sibling milestone. The actual header search that followed was scoped to
+  // bracketSectionRanges.primary alone, so it failed AFTER platformEnsureDir
+  // had already created the new phase's directory: a partial write. The
+  // header search must check both ranges the round-3 remove fix already
+  // discovers (primary and Phase Details), and every validation — locating
+  // the header and computing the ROADMAP edit — must happen before any
+  // directory is created.
+  function snapshotTree(root) {
+    const snapshot = [];
+    (function visit(dir, rel) {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+        const relPath = path.join(rel, entry.name);
+        const absPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          snapshot.push({ type: 'directory', path: relPath });
+          visit(absPath, relPath);
+        } else {
+          snapshot.push({ type: 'file', path: relPath, bytes: fs.readFileSync(absPath).toString('base64') });
+        }
+      }
+    })(root, '');
+    return snapshot;
+  }
+
+  test('phase insert finds the target heading in the Phase Details range across an intervening sibling milestone', () => {
+    const dir = project('adr-612-bracket-insert-details-');
+    writeConfig(dir, 'bracket');
+    fs.writeFileSync(planning(dir, 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    fs.writeFileSync(
+      planning(dir, 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '',
+        '## [CK.03] v3.0 — Future',
+        '',
+        '### [CK.03] 01: Future',
+        '**Goal:** untouched',
+        '',
+        '## [CK.02] v2.0 — Current (Phase Details)',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** keep',
+        '',
+      ].join('\n'),
+    );
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-01-one'), { recursive: true });
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-02-two'), { recursive: true });
+    fs.mkdirSync(planning(dir, 'phases', 'CK.03-01-future'), { recursive: true });
+
+    const result = runGsdTools(['phase', 'insert', '1', 'Urgent fix'], dir);
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+
+    assert.equal(out.phase_number, '01.01');
+    assert.equal(fs.existsSync(planning(dir, 'phases', 'CK.02-01.01-urgent-fix')), true);
+
+    const roadmap = fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8');
+    assert.equal(roadmap.includes('### [CK.02] 01.01: Urgent fix (INSERTED)'), true);
+    const detailsSection = roadmap.slice(roadmap.indexOf('(Phase Details)'));
+    assert.equal(
+      detailsSection.indexOf('### [CK.02] 01.01: Urgent fix')
+        < detailsSection.indexOf('### [CK.02] 02: Two'),
+      true,
+    );
+  });
+
+  test('an insert that fails to locate its header leaves the planning tree byte-identical', () => {
+    const dir = project('adr-612-bracket-insert-refuse-');
+    writeConfig(dir, 'bracket');
+    fs.writeFileSync(planning(dir, 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    fs.writeFileSync(
+      planning(dir, 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '- [ ] [CK.02] 09: Nine',
+        '',
+      ].join('\n'),
+    );
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-09-nine'), { recursive: true });
+    const before = snapshotTree(planning(dir));
+
+    const result = runGsdTools(['phase', 'insert', '9', 'Urgent fix'], dir);
+
+    assert.equal(result.success, false, result.output);
+    assert.match(result.error, /missing a detail section|Could not find Phase 9 header/);
+    assert.deepEqual(snapshotTree(planning(dir)), before);
+  });
+
   test('phase add-batch allocates consecutive bracket ids', () => {
     const dir = project();
     writeBracketFixture(dir);
