@@ -1896,6 +1896,49 @@ function scanExistingBracketDecimalPhaseNumbers(
   return decimalSet;
 }
 
+/**
+ * #4304 round 6 (I1): the ONE bracket-argument canonicalization `phase
+ * remove` and `phase insert` both need, extracted from cmdPhaseRemove (round
+ * 4) so insert accepts every form remove does instead of maintaining a
+ * second, narrower copy that could silently disagree with it. A bare token
+ * (`2`, `02`, `002`) canonicalizes through phase-id-display's `phaseToken`
+ * adapter; a qualified/display token (`CK.02-02`, `[CK.02] 02`) canonicalizes
+ * through phase-id.cts's strict `parsePhaseId`, refusing before any mutation
+ * when it names a different milestone. `actionVerb` (e.g. "remove", "insert
+ * after") only varies the refusal wording.
+ */
+function canonicalizeBracketPhaseArgument(
+  context: BracketWriteContext,
+  targetPhase: string,
+  actionVerb: string,
+): { normalized: string; isDecimal: boolean } {
+  const isQualified = targetPhase.startsWith('[') || targetPhase.includes('-');
+  if (isQualified) {
+    let qualifiedId: ReturnType<typeof parsePhaseId> | null = null;
+    try {
+      qualifiedId = parsePhaseId(targetPhase);
+    } catch {
+      error(`Phase ${targetPhase} cannot be resolved to a bracket phase number`);
+      return { normalized: '', isDecimal: false };
+    }
+    if (qualifiedId.project !== context.project || qualifiedId.milestone !== context.milestone) {
+      error(
+        `Phase ${targetPhase} belongs to milestone [${qualifiedId.project}.${qualifiedId.milestone}], `
+        + `but the active milestone is [${context.project}.${context.milestone}]. `
+        + `Refusing to ${actionVerb} a phase outside the active milestone.`,
+      );
+    }
+    const isDecimal = qualifiedId.subphase !== undefined;
+    return { normalized: isDecimal ? `${qualifiedId.phase}.${qualifiedId.subphase}` : qualifiedId.phase, isDecimal };
+  }
+  const canonicalToken = phaseToken(targetPhase);
+  if (canonicalToken === null) {
+    error(`Phase ${targetPhase} cannot be resolved to a bracket phase number`);
+    return { normalized: '', isDecimal: false };
+  }
+  return { normalized: canonicalToken, isDecimal: canonicalToken.includes('.') };
+}
+
 function cmdPhaseInsert(
   cwd: string,
   afterPhase: string,
@@ -1922,19 +1965,17 @@ function cmdPhaseInsert(
     const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
     const content = extractCurrentMilestone(rawContent, cwd);
 
-    // #4304 round 5 (W4): canonicalize a bare bracket argument through the
-    // SAME adapter `phase remove` uses (phaseToken), not the legacy
-    // normalizePhaseName — which pads only the phase's FIRST segment
-    // ("1.1" -> "01.1", never matching the bracket-canonical "01.01"
-    // heading). Every other convention keeps its untouched
-    // normalizePhaseName behavior.
+    // #4304 round 5 (W4) / round 6 (I1): canonicalize a bracket argument
+    // through the SAME adapter `phase remove` uses
+    // (canonicalizeBracketPhaseArgument) instead of the legacy
+    // normalizePhaseName, which pads only the phase's FIRST segment ("1.1"
+    // -> "01.1", never matching the bracket-canonical "01.01" heading) and
+    // never accepted a qualified/display form ("CK.02-02", "[CK.02] 02") at
+    // all. Every other convention keeps its untouched normalizePhaseName
+    // behavior.
     let normalizedAfter: string;
     if (bracketContext) {
-      const canonical = phaseToken(afterPhase);
-      if (canonical === null) {
-        error(`Phase ${afterPhase} cannot be resolved to a bracket phase number`);
-      }
-      normalizedAfter = canonical!;
+      normalizedAfter = canonicalizeBracketPhaseArgument(bracketContext, afterPhase, 'insert after').normalized;
     } else {
       normalizedAfter = normalizePhaseName(afterPhase);
     }
@@ -2016,7 +2057,15 @@ function cmdPhaseInsert(
     if (bracketId) _decimalPhase = bracketArtifactToken(bracketId);
     const projectCode = (insertConfig.project_code as string) || '';
     const pfx = projectCode ? `${projectCode}-` : '';
-    const _dirName = bracketId ? toDir(bracketId, slug) : `${pfx}${_decimalPhase}-${slug}`;
+    // #4304 round 6 (I1): route the bracket directory-name allocation
+    // through the SAME bracketDirNameOrRefuse wrapper `phase add`/`phase
+    // add-batch` already use (round 5, B4), instead of a raw `toDir` call —
+    // an empty or all-digit slug now refuses cleanly through error(...)
+    // before any mutation, matching their wording, instead of an uncaught
+    // "toDir: slug sanitizes to empty" throw.
+    const _dirName = bracketId
+      ? bracketDirNameOrRefuse(bracketId, slug, description)
+      : `${pfx}${_decimalPhase}-${slug}`;
     const dirPath = path.join(planningDir(cwd), 'phases', _dirName);
 
     let updatedContent: string;
@@ -3331,43 +3380,19 @@ function cmdPhaseRemove(
     ? bracketWriteContext(cwd, loadConfig(cwd))
     : null;
 
-  // #4304 round 4: canonicalize every bracket argument before directory
-  // matching or any write. Bare tokens use phase-id-display's adapter; a
-  // qualified/display token uses phase-id.cts's strict parser. A rejected
-  // spelling has no parseInt fallback, so it cannot partially name a real
-  // phase and reach the destructive path.
+  // #4304 round 4 / round 6 (I1): canonicalize every bracket argument before
+  // directory matching or any write, through the SAME adapter `phase
+  // insert` now uses (canonicalizeBracketPhaseArgument) — a bare token
+  // through phase-id-display's `phaseToken`, a qualified/display token
+  // through phase-id.cts's strict `parsePhaseId`. A rejected spelling has no
+  // parseInt fallback, so it cannot partially name a real phase and reach
+  // the destructive path.
   let normalized: string;
   let isDecimal: boolean;
   let removedInt: number;
   let removedSubphase: number | undefined;
   if (removeContext) {
-    const isQualified = targetPhase.startsWith('[') || targetPhase.includes('-');
-    if (isQualified) {
-      let qualifiedId: ReturnType<typeof parsePhaseId> | null = null;
-      try {
-        qualifiedId = parsePhaseId(targetPhase);
-      } catch {
-        error(`Phase ${targetPhase} cannot be resolved to a bracket phase number`);
-        return;
-      }
-      if (qualifiedId.project !== removeContext.project || qualifiedId.milestone !== removeContext.milestone) {
-        error(
-          `Phase ${targetPhase} belongs to milestone [${qualifiedId.project}.${qualifiedId.milestone}], `
-          + `but the active milestone is [${removeContext.project}.${removeContext.milestone}]. `
-          + 'Refusing to remove a phase outside the active milestone.',
-        );
-      }
-      isDecimal = qualifiedId.subphase !== undefined;
-      normalized = isDecimal ? `${qualifiedId.phase}.${qualifiedId.subphase}` : qualifiedId.phase;
-    } else {
-      const canonicalToken = phaseToken(targetPhase);
-      if (canonicalToken === null) {
-        error(`Phase ${targetPhase} cannot be resolved to a bracket phase number`);
-        return;
-      }
-      normalized = canonicalToken;
-      isDecimal = canonicalToken.includes('.');
-    }
+    ({ normalized, isDecimal } = canonicalizeBracketPhaseArgument(removeContext, targetPhase, 'remove'));
     const [phasePart, subphasePart] = normalized.split('.');
     removedInt = Number(phasePart);
     removedSubphase = subphasePart === undefined ? undefined : Number(subphasePart);

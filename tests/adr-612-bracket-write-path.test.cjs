@@ -642,6 +642,65 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.equal(fs.existsSync(planning(dir, 'phases', 'CK.02-01.02-second-sub')), true);
   });
 
+  // #4304 round 6 (I1): `phase insert` only ever canonicalized a BARE
+  // argument through phaseToken (round 5's W4) — a qualified id
+  // ("CK.02-01") or a display id ("[CK.02] 01") failed phaseToken (which
+  // only ever accepts digits/dots) and refused with "cannot be resolved",
+  // even though `phase remove` already accepts both forms. Insert now
+  // canonicalizes through the SAME shared adapter remove uses
+  // (canonicalizeBracketPhaseArgument).
+  test('phase insert accepts the qualified and display bracket argument forms remove accepts', () => {
+    const bareDir = project('adr-612-bracket-insert-args-bare-');
+    writeBracketFixture(bareDir);
+    const bare = run(['phase', 'insert', '1', 'Urgent fix'], bareDir);
+
+    const qualifiedDir = project('adr-612-bracket-insert-args-qualified-');
+    writeBracketFixture(qualifiedDir);
+    const qualified = run(['phase', 'insert', 'CK.02-01', 'Urgent fix'], qualifiedDir);
+
+    const displayDir = project('adr-612-bracket-insert-args-display-');
+    writeBracketFixture(displayDir);
+    const display = run(['phase', 'insert', '[CK.02] 01', 'Urgent fix'], displayDir);
+
+    for (const out of [bare, qualified, display]) {
+      assert.equal(out.phase_number, '01.01');
+      assert.equal(out.directory, '.planning/phases/CK.02-01.01-urgent-fix');
+    }
+    assert.equal(
+      fs.readFileSync(planning(qualifiedDir, 'ROADMAP.md'), 'utf8'),
+      fs.readFileSync(planning(bareDir, 'ROADMAP.md'), 'utf8'),
+    );
+    assert.equal(
+      fs.readFileSync(planning(displayDir, 'ROADMAP.md'), 'utf8'),
+      fs.readFileSync(planning(bareDir, 'ROADMAP.md'), 'utf8'),
+    );
+  });
+
+  // #4304 round 6 (I1): insert's directory allocation called `toDir`
+  // directly, bypassing the bracketDirNameOrRefuse wrapper `phase add`/
+  // `phase add-batch` already route through (round 5, B4) — an
+  // empty-slug or all-digit description crashed with an uncaught
+  // "toDir: slug sanitizes to empty" throw instead of the wrapper's clean
+  // "Cannot create a phase directory for ..." refusal.
+  test('phase insert refuses an empty-slug description through the SAME wrapper phase add uses, before any mutation', () => {
+    const dir = project('adr-612-bracket-insert-emptyslug-');
+    writeBracketFixture(dir);
+    const before = snapshotTree(planning(dir));
+
+    const insertResult = runGsdTools(['phase', 'insert', '1', '!!!'], dir);
+    const addDir = project('adr-612-bracket-insert-emptyslug-add-control-');
+    writeBracketFixture(addDir);
+    const addResult = runGsdTools(['phase', 'add', '!!!'], addDir);
+
+    assert.equal(insertResult.success, false, insertResult.output);
+    assert.match(insertResult.error, /Cannot create a phase directory for "!!!"/);
+    assert.equal(
+      insertResult.error.replace(/^Error: /, '').split(':').slice(0, 2).join(':'),
+      addResult.error.replace(/^Error: /, '').split(':').slice(0, 2).join(':'),
+    );
+    assert.deepEqual(snapshotTree(planning(dir)), before);
+  });
+
   test('state descriptive writes use bracket display while operational fields stay compatible', () => {
     const dir = project();
     writeBracketFixture(dir);
