@@ -1658,28 +1658,47 @@ function computeBracketPlan(cwd: string): MigrationPlan {
         .find((section) => section.milestoneInt !== null) ?? null;
       if (bulletSection) {
         resolved = sectionLegacyMap.get(bulletSection.start)?.get(key);
-      } else if (isReaderRecognizedBullet) {
-        // Outside every section (a global summary list): unambiguous only
-        // when exactly one section (or the no-section bucket) defines this
-        // legacy token. #4144 round 7 B2: this cross-section search is
-        // reserved for Tier 1 (reader-recognized) bullets — Tier 2's own
-        // wider, non-reader-recognized tolerance only ever resolves WITHIN
-        // its own section (see the `!resolved` branch below); it never
-        // reaches across sections to guess at an unrelated to-do bullet.
-        const candidates: Array<{ token: string; milestoneInt: number }> = [];
-        for (const lookup of sectionLegacyMap.values()) {
-          const candidate = lookup.get(key);
-          if (candidate) candidates.push(candidate);
+      } else {
+        // #4144 round 8 B2 (was round 7 B2): outside every section, a
+        // checklist bullet resolves the way round 6 did, for EITHER tier —
+        // first against the no-section bucket itself (an exact,
+        // unambiguous per-key lookup: entries with no attributed section,
+        // such as an entire roadmap derived from a single STATE.md fallback
+        // milestone with no `## vN.M` headings at all, are filed here), and
+        // only when that bucket does not define the token, against the
+        // unique candidate across every bucket. Round 7 gated this whole
+        // lookup on `isReaderRecognizedBullet`, so a non-bold (Tier 2)
+        // bullet outside every section was never resolved at all — on the
+        // committed project-prefixed-single-milestone fixture (no sections,
+        // everything filed under the no-section bucket) that left
+        // `- [ ] Phase 1: Intake` / `- [ ] Phase 2: Delivery` legacy after
+        // an otherwise-"done" migration.
+        resolved = sectionLegacyMap.get(GLOBAL_SECTION_KEY)?.get(key);
+        if (!resolved) {
+          const candidates: Array<{ token: string; milestoneInt: number }> = [];
+          for (const lookup of sectionLegacyMap.values()) {
+            const candidate = lookup.get(key);
+            if (candidate) candidates.push(candidate);
+          }
+          if (candidates.length > 1) {
+            // #4144 round 8 B2: only a bullet the readers themselves
+            // recognize as a phase reference can turn this ambiguity into a
+            // refusal — Tier 2's own wider tolerance leaves it byte-identical
+            // instead (the `!resolved` branch below), never guessing and
+            // never blocking the whole migration over a to-do bullet no
+            // reader was ever going to check.
+            if (isReaderRecognizedBullet) {
+              throw new Error(
+                'Cannot safely migrate ROADMAP.md to the bracket convention: a checklist bullet outside every '
+                + 'milestone section names a legacy phase number that more than one milestone section defines. '
+                + 'Refusing rather than guessing which phase it means:\n'
+                + `  ${line}`,
+              );
+            }
+          } else {
+            resolved = candidates[0];
+          }
         }
-        if (candidates.length > 1) {
-          throw new Error(
-            'Cannot safely migrate ROADMAP.md to the bracket convention: a checklist bullet outside every '
-            + 'milestone section names a legacy phase number that more than one milestone section defines. '
-            + 'Refusing rather than guessing which phase it means:\n'
-            + `  ${line}`,
-          );
-        }
-        resolved = candidates[0];
       }
     }
     if (!resolved) {

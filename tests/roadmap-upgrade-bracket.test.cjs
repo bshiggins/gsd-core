@@ -276,6 +276,20 @@ describe('roadmap upgrade --convention bracket', () => {
       plan.phases.map(({ newDir }) => newDir),
       ['HQ.01-01-intake', 'HQ.01-02-delivery'],
     );
+
+    // #4144 round 8 B2: this fixture has no `## vN.M` heading at all (its
+    // milestone comes from STATE.md), so its two non-bold checklist bullets
+    // — `- [ ] Phase 1: Intake` / `- [ ] Phase 2: Delivery` — sit outside
+    // every section. Round 7 left both legacy after apply; only the plan's
+    // phase renames were ever checked here, so the regression was invisible
+    // to this test. Assert the bullets on disk directly.
+    const applyResult = runBracketUpgrade(cwd, ['--apply']);
+    assertExited(applyResult, 0, 'single-milestone bracket apply');
+    const roadmapAfter = fs.readFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), 'utf8');
+    assert.match(roadmapAfter, /- \[ \] \[HQ\.01\] 01: Intake/, 'the Intake checklist bullet must convert, not stay legacy');
+    assert.match(roadmapAfter, /- \[ \] \[HQ\.01\] 02: Delivery/, 'the Delivery checklist bullet must convert, not stay legacy');
+    assert.doesNotMatch(roadmapAfter, /- \[ \] Phase 1: Intake/, 'no leftover legacy-token bullet may remain');
+    assert.doesNotMatch(roadmapAfter, /- \[ \] Phase 2: Delivery/, 'no leftover legacy-token bullet may remain');
   });
 
   test('refuses a legacy tree whose milestone cannot be derived instead of marking it bracket', () => {
@@ -2397,6 +2411,65 @@ describe('roadmap upgrade --convention bracket', () => {
       assertExited(result, 1, 'bold unresolvable checklist bullet dry-run');
       assert.match(result.stderr, /recognize as a phase reference/i);
       assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'a refusal must write nothing');
+    });
+
+    // #4144 round 8 B2: a non-bold bullet genuinely OUTSIDE every section
+    // (before the first `## vN.M` heading, not merely under a non-versioned
+    // `## Notes` sub-heading inside one) must still resolve when its legacy
+    // token is unambiguous across sections — round 7 gated this lookup on
+    // the bold prefix and left it unresolved, a silent partial conversion.
+    test('a non-bold to-do bullet in a global summary list resolves against the unique section that defines its token', () => {
+      const cwd = materializeEmptyFixture('global-nonbold-unique');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'config.json'),
+        JSON.stringify({ project_code: 'GSD', phase_id_convention: null }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## Phases',
+          '',
+          '- [x] Phase 1: Alpha',
+          '- [ ] Phase 2: Beta',
+          '',
+          '## v1.0 Core',
+          '',
+          '### Phase 1: Alpha',
+          '**Goal**: a',
+          '',
+          '## v2.0 Scale',
+          '',
+          '### Phase 2: Beta',
+          '**Goal**: b',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      fs.mkdirSync(path.join(phasesDir, '01-alpha'), { recursive: true });
+      fs.mkdirSync(path.join(phasesDir, '02-beta'), { recursive: true });
+
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'global non-bold unique dry-run');
+
+      assert.equal(
+        plan.roadmapEdits.find(({ from }) => from === '- [x] Phase 1: Alpha')?.to,
+        '- [x] [GSD.01] 01: Alpha',
+        'the global non-bold bullet must resolve to the one section defining "Phase 1"',
+      );
+      assert.equal(
+        plan.roadmapEdits.find(({ from }) => from === '- [ ] Phase 2: Beta')?.to,
+        '- [ ] [GSD.02] 01: Beta',
+        'the global non-bold bullet must resolve to the one section defining "Phase 2"',
+      );
+
+      const applied = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(applied, 0, 'global non-bold unique apply');
+      const roadmap = fs.readFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), 'utf8');
+      assert.doesNotMatch(roadmap, /Phase 1: Alpha\n/, 'no leftover legacy-token bullet may remain');
+      assert.doesNotMatch(roadmap, /Phase 2: Beta\n/, 'no leftover legacy-token bullet may remain');
     });
   });
 
