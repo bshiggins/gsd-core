@@ -2256,6 +2256,85 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, []);
   });
 
+  // #4304 round 9 (W1, regression from round 8): `bracketRecognizedMilestoneMarkers`
+  // enumerated ONLY version-token milestone headings, narrower than the
+  // window locator's OWN recognition grammar (`isBracketMilestoneBoundary` /
+  // `bracketFallbackHeadingMatches`) — so a fully version-less, same-code
+  // shipped/active pair (the ADR-612 canonical name-only heading shape,
+  // "## [CK.02] Shipped", no `vX.Y` anywhere) produced NO marker for the
+  // shipped heading at all, and its own dedicated "## Progress" table was
+  // treated as shared/global — losing its own Complete row to the active
+  // milestone's removal even though the active milestone has its own
+  // separate "### Progress" table.
+  test('keeps a version-less shipped milestone\'s own Progress row when the active milestone shares its bracket code', () => {
+    fs.writeFileSync(
+      planning('STATE.md'),
+      '---\nmilestone: v2.1\n---\n\n# State\n\n**Status:** Planning\n**Last Activity:** 2026-09-01\n',
+    );
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] Shipped ✅',
+        '',
+        '- [x] [CK.02] 01: Old One',
+        '- [x] [CK.02] 02: Old Two',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] 01 | 1/1 | Complete |',
+        '| [CK.02] 02 | 1/1 | Complete |',
+        '',
+        '## [CK.02] Current 🚧',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '',
+        '### Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] 01 | 0/1 | Planned |',
+        '| [CK.02] 02 | 0/1 | Planned |',
+        '| [CK.02] 03 | 0/1 | Planned |',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', []],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+
+    // Shipped's own table survives byte-identical — both rows, including 02.
+    const shippedProgress = roadmap.slice(roadmap.indexOf('## Progress'), roadmap.indexOf('## [CK.02] Current'));
+    assert.equal(shippedProgress.includes('| [CK.02] 01 | 1/1 | Complete |'), true);
+    assert.equal(shippedProgress.includes('| [CK.02] 02 | 1/1 | Complete |'), true);
+
+    // Active's own table has the target row gone, no duplicate.
+    const activeProgress = roadmap.slice(roadmap.lastIndexOf('### Progress'));
+    assert.equal((activeProgress.match(/^\| \[CK\.02\] 02 \| 0\/1 \| Planned \|$/gm) ?? []).length, 1);
+    assert.equal(activeProgress.includes('| [CK.02] 03 | 0/1 | Planned |'), false);
+    assert.deepEqual(out.references_left_untouched, []);
+  });
+
   // #4304 round 8 (W2): `isProgressHeading` required an EXACT "progress"
   // match while `bracketProgressSectionRange` already matched "## Progress"
   // with any suffix (`\b`), so a shipped milestone's "## Progress (v2.0)"

@@ -2352,6 +2352,13 @@ export = {
   // owner (and its convention gate) instead of a private inline copy.
   extractPhaseFieldMultiline,
   hasPhaseEntries,
+  // #4304 round 9 (W1): exported so `phase.cts`'s milestone-marker
+  // enumeration (bracketRecognizedMilestoneMarkers) can recognize a
+  // version-less bracket milestone heading through the SAME grammar the
+  // window locator (bracketAwareMilestoneSection) already uses to decide
+  // section boundaries, instead of a narrower, independently-typed copy.
+  isBracketMilestoneBoundary,
+  bracketFallbackHeadingMatches,
 };
 
 

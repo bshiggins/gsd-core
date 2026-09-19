@@ -87,6 +87,11 @@ const {
   // not just the active one — see bracketProgressSectionOwnedByOtherMilestone.
   listMilestoneHeadings,
   selectMilestoneHeading,
+  // #4304 round 9 (W1): the SAME bracket milestone-boundary grammar the
+  // window locator uses (bracketAwareMilestoneSection), reused so the
+  // marker set below recognizes a version-less bracket milestone heading
+  // too, not only a version-token one.
+  isBracketMilestoneBoundary,
 } = roadmapParserMod;
 // #4129: the single owner of "count the ROADMAP's milestone Complete rows"
 // (pure computation, no I/O — no cycle on this path) for the intent-first
@@ -3216,22 +3221,67 @@ function bracketProgressSectionRange(content: string): { start: number; end: num
 }
 
 /**
- * #4304 round 8 (W1): every distinct RECOGNIZED milestone heading in the
- * document (one carrying a version token — `listMilestoneHeadings`' own
- * grammar), one representative offset per version, via the SAME selection
- * rule (`selectMilestoneHeading`) `currentMilestoneRawRanges` already uses
- * to pick "the" heading for a single version. Sorted ascending. Used to
- * decide which milestone (if any) a document-first `## Progress` heading
- * sits immediately after, with nothing of its own kind in between.
+ * #4304 round 8 (W1) / round 9 (W1 fix): every distinct RECOGNIZED milestone
+ * heading in the document, one representative offset per VERSION (one
+ * carrying a version token — `listMilestoneHeadings`' own grammar, via the
+ * SAME selection rule, `selectMilestoneHeading`, `currentMilestoneRawRanges`
+ * already uses to pick "the" heading for a single version) PLUS one marker
+ * per version-LESS bracket milestone heading recognized by the window
+ * locator's own grammar (`isBracketMilestoneBoundary`,
+ * src/roadmap-parser.cts — the SAME predicate `bracketAwareMilestoneSection`
+ * uses to decide a candidate heading is a milestone boundary while walking
+ * to find where the ACTIVE milestone's own section ends).
+ *
+ * Round 8 recognized ONLY version-token headings: a version-less ADR-612
+ * canonical milestone heading (`## [CK.02] Shipped ✅`, no `vX.Y` anywhere)
+ * produced no marker at all, even though the window locator itself
+ * recognizes it as a milestone boundary when walking the document — so a
+ * same-code shipped/active pair sharing no version token left the shipped
+ * milestone's own `## Progress` heading invisible to the sandwich test, and
+ * its own Complete row was deleted as if the table were shared/global.
+ *
+ * Deliberately NOT merged into one "one representative per identity" pass:
+ * a shipped and active milestone commonly share the SAME bracket code
+ * (`milestoneToken` folds `v2.0`/`v2.1` alike) while remaining two SEPARATE
+ * heading positions that each open their own section — collapsing them by
+ * id would silently drop one of the two boundaries the sandwich test needs.
+ * Version-token headings keep their existing one-per-version selection
+ * (unaffected, since every such heading already carries the distinguishing
+ * signal); only headings the version grammar cannot see at all (no `vX.Y`
+ * anywhere on the line) fall through to the boundary-predicate scan, so a
+ * heading already represented by the version loop is never double-counted
+ * merely for also being bracket-shaped (its own "(Phase Details)"
+ * continuation heading carries the SAME version token and is excluded here
+ * exactly as it always was — `selectMilestoneHeading` picks only the first
+ * non-closed occurrence of that version, never the continuation).
+ * `content[h.offset] === '#'` mirrors `bracketFallbackHeadingMatches`'s own
+ * ATX-only guard (a `<summary>` line naming a milestone is never a heading).
+ * Sorted ascending. Used to decide which milestone (if any) a document-first
+ * `## Progress` heading sits immediately after, with nothing of its own kind
+ * in between.
  */
 function bracketRecognizedMilestoneMarkers(content: string): number[] {
+  const headings = tokenizeHeadings(content);
   const versions = new Set(listMilestoneHeadings(content).map((h: { version: string }) => h.version));
   const markers: number[] = [];
   for (const version of versions) {
     const selected = selectMilestoneHeading(content, version);
     if (selected?.index !== undefined) markers.push(selected.index);
   }
-  return markers.sort((a: number, b: number) => a - b);
+  for (const h of headings) {
+    if (h.level > 3 || content[h.offset] !== '#') continue;
+    // Already represented above: this heading carries a version token the
+    // first loop already enumerated (its own group's selected marker, or —
+    // for a same-version continuation like "(Phase Details)" — the OTHER
+    // occurrence `selectMilestoneHeading` picked instead). Mirrors
+    // `extractMilestoneHeadingName`'s own no-`expectedVersion` grammar
+    // (src/roadmap-parser.cts) literally rather than importing a private
+    // helper across the module boundary for one boolean test.
+    if (/v\d+(?:\.\d+)*(?:[-.][A-Za-z0-9]+)*/i.test(h.text)) continue;
+    if (!isBracketMilestoneBoundary(h.text, h.level, null)) continue;
+    markers.push(h.offset);
+  }
+  return Array.from(new Set(markers)).sort((a: number, b: number) => a - b);
 }
 
 /**
