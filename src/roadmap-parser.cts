@@ -2219,7 +2219,7 @@ function getMilestonePhaseFilter(cwd: string, versionOverride?: string | null, p
  * keep in sync. Returns null when there is no versioned active milestone;
  * callers then fall back to whole-content mutation (the prior behaviour).
  *
- * #2761 (round-2 review, Minor 3) / #4304 (PR-4 follow-up): bracket-widened
+ * #2761 (Minor 3) / #4304 (PR-4 follow-up): bracket-widened
  * in lockstep with the write path landing, per this doc's own prior note.
  * `phaseIdConvention` is the same additive, optional trailing parameter
  * `extractCurrentMilestoneScoped` accepts — omitted (every pre-#4304 2-arg
@@ -2295,7 +2295,7 @@ function currentMilestoneRawRanges(
   let details: { start: number; end: number } | null = null;
   if (detailsMatch) {
     const detailsStart = detailsMatch.index ?? 0;
-    // #4304 round 6 (B1): pass the SAME bracketBoundary (and heading tokens)
+    // #4304 (B1): pass the SAME bracketBoundary (and heading tokens)
     // bracketAwareMilestoneSection already derived for the primary range —
     // extractCurrentMilestoneScoped's own details lookup (line ~1312) has
     // always done this; this copy omitted both trailing arguments, so a
@@ -2352,14 +2352,14 @@ export = {
   // owner (and its convention gate) instead of a private inline copy.
   extractPhaseFieldMultiline,
   hasPhaseEntries,
-  // #4304 round 9 (W1): exported so `phase.cts`'s milestone-marker
+  // #4304 (W1): exported so `phase.cts`'s milestone-marker
   // enumeration (bracketRecognizedMilestoneMarkers) can recognize a
   // version-less bracket milestone heading through the SAME grammar the
   // window locator (bracketAwareMilestoneSection) already uses to decide
   // section boundaries, instead of a narrower, independently-typed copy.
   isBracketMilestoneBoundary,
   bracketFallbackHeadingMatches,
-  // #4304 round 10 (B1): exported so `phase.cts`'s pre-mutation window guard
+  // #4304 (B1): exported so `phase.cts`'s pre-mutation window guard
   // (bracketOwnedLineOutsideActiveWindow) can recognize a CLOSED/shipped
   // milestone heading through the SAME predicate `currentMilestoneRawRanges`
   // itself already uses to skip a closed heading when selecting the active

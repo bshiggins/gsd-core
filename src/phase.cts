@@ -83,16 +83,16 @@ const {
   findMilestoneScopeHeadingLines,
   getMilestoneInfo,
   scanMilestonePhaseIds,
-  // #4304 round 8 (W1): every recognized milestone heading in the document,
+  // #4304 (W1): every recognized milestone heading in the document,
   // not just the active one — see bracketProgressSectionOwnedByOtherMilestone.
   listMilestoneHeadings,
   selectMilestoneHeading,
-  // #4304 round 9 (W1): the SAME bracket milestone-boundary grammar the
+  // #4304 (W1): the SAME bracket milestone-boundary grammar the
   // window locator uses (bracketAwareMilestoneSection), reused so the
   // marker set below recognizes a version-less bracket milestone heading
   // too, not only a version-token one.
   isBracketMilestoneBoundary,
-  // #4304 round 10 (B1): the SAME closed/shipped-heading predicate
+  // #4304 (B1): the SAME closed/shipped-heading predicate
   // currentMilestoneRawRanges uses, reused so the pre-mutation window guard
   // (bracketOwnedLineOutsideActiveWindow) can recognize an archived section
   // instead of a re-typed copy of MILESTONE_CLOSED_MARKER_PATTERN.
@@ -1244,7 +1244,7 @@ function describeGoalShapedTitle(description: string): string | null {
  * legacy whole-file lastIndexOf('\n---') so simple no-milestone roadmaps keep
  * their existing behavior.
  *
- * #4304 round-3 Blocker 2: `phaseIdConvention` is threaded through to
+ * #4304 Blocker 2: `phaseIdConvention` is threaded through to
  * `currentMilestoneRawRanges` so a version-less bracket milestone heading
  * (`## [CK.02] Current`) is still offset-scoped — omitting it here silently
  * degraded to the legacy-only search, which finds nothing for that heading
@@ -1511,7 +1511,7 @@ function collectSiblingWorktreePhaseNums(
 }
 
 /**
- * #4304 round 5 (B4): `toDir` throws a raw `Error` for a description whose
+ * #4304 (B4): `toDir` throws a raw `Error` for a description whose
  * slug sanitizes to empty (e.g. a description that transliterates to
  * nothing) or is all-digit. An uncaught throw from inside a mutation loop
  * is worse than a refusal — it can leave earlier iterations' directories
@@ -1750,7 +1750,7 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
         if (num > maxPhase) maxPhase = num;
       }
     }
-    // #4304 round 5 (B4): compute and validate every item's slug/dirName
+    // #4304 (B4): compute and validate every item's slug/dirName
     // BEFORE the first `platformEnsureDir` — a bracket `toDir` failure
     // (e.g. a description that sanitizes to an empty slug) must refuse the
     // whole batch with zero directories created, not throw mid-loop after
@@ -1913,9 +1913,9 @@ function scanExistingBracketDecimalPhaseNumbers(
 }
 
 /**
- * #4304 round 6 (I1): the ONE bracket-argument canonicalization `phase
- * remove` and `phase insert` both need, extracted from cmdPhaseRemove (round
- * 4) so insert accepts every form remove does instead of maintaining a
+ * #4304 (I1): the ONE bracket-argument canonicalization `phase
+ * remove` and `phase insert` both need, extracted from cmdPhaseRemove's own
+ * canonicalization so insert accepts every form remove does instead of maintaining a
  * second, narrower copy that could silently disagree with it. A bare token
  * (`2`, `02`, `002`) canonicalizes through phase-id-display's `phaseToken`
  * adapter; a qualified/display token (`CK.02-02`, `[CK.02] 02`) canonicalizes
@@ -1981,7 +1981,7 @@ function cmdPhaseInsert(
     const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
     const content = extractCurrentMilestone(rawContent, cwd);
 
-    // #4304 round 5 (W4) / round 6 (I1): canonicalize a bracket argument
+    // #4304 (W4) / (I1): canonicalize a bracket argument
     // through the SAME adapter `phase remove` uses
     // (canonicalizeBracketPhaseArgument) instead of the legacy
     // normalizePhaseName, which pads only the phase's FIRST segment ("1.1"
@@ -1995,7 +1995,7 @@ function cmdPhaseInsert(
     } else {
       normalizedAfter = normalizePhaseName(afterPhase);
     }
-    // #4304 round 5 (W4): a bracket id supports at most one decimal level
+    // #4304 (W4): a bracket id supports at most one decimal level
     // (phase.subphase). Nesting one level deeper under an already-decimal
     // afterPhase would produce a three-level id no bracket function can
     // represent — bracketPhaseId/toDir would otherwise throw uncaught deep
@@ -2038,7 +2038,7 @@ function cmdPhaseInsert(
     }
 
     const phasesDir = path.join(planningDir(cwd), 'phases');
-    // #4304 round 5 (W4): reuse the SAME canonicalization computed above
+    // #4304 (W4): reuse the SAME canonicalization computed above
     // (phaseToken on bracket, normalizePhaseName otherwise) rather than a
     // second, independent normalizePhaseName(afterPhase) call that would
     // silently disagree with it on bracket.
@@ -2073,9 +2073,9 @@ function cmdPhaseInsert(
     if (bracketId) _decimalPhase = bracketArtifactToken(bracketId);
     const projectCode = (insertConfig.project_code as string) || '';
     const pfx = projectCode ? `${projectCode}-` : '';
-    // #4304 round 6 (I1): route the bracket directory-name allocation
+    // #4304 (I1): route the bracket directory-name allocation
     // through the SAME bracketDirNameOrRefuse wrapper `phase add`/`phase
-    // add-batch` already use (round 5, B4), instead of a raw `toDir` call —
+    // add-batch` already use (B4), instead of a raw `toDir` call —
     // an empty or all-digit slug now refuses cleanly through error(...)
     // before any mutation, matching their wording, instead of an uncaught
     // "toDir: slug sanitizes to empty" throw.
@@ -2165,13 +2165,13 @@ function cmdPhaseInsert(
       // the untouched whole-document search for every non-bracket
       // convention, which never had this cross-milestone ambiguity.
       //
-      // #4304 round 5 (B3): the pre-flight headingMatch check above ran
+      // #4304 (B3): the pre-flight headingMatch check above ran
       // against extractCurrentMilestone's content, which (for a bracket
       // repo) merges the primary section with a later "(Phase Details)"
       // section carrying the same milestone identity — so it can pass even
       // when the target's own detail heading lives ONLY in that Phase
       // Details range, separated from primary by an unrelated sibling
-      // milestone. Search the SAME two raw ranges the round-3 remove fix
+      // milestone. Search the SAME two raw ranges the B3 remove fix
       // discovers (primary, then details) instead of primary alone, so a
       // heading the pre-flight check can see is also found here.
       const bracketSectionRanges = bracketContext
@@ -2218,7 +2218,7 @@ function cmdPhaseInsert(
         rawContent.slice(0, insertIdx) + phaseEntry + rawContent.slice(insertIdx);
     }
 
-    // #4304 round 5 (B3): every validation above — the pre-flight heading
+    // #4304 (B3): every validation above — the pre-flight heading
     // check, the header/bullet-line search, and computing `updatedContent`
     // — must succeed (or `error()` out, which never returns) before the new
     // phase's directory is created. A failing insert now leaves `.planning`
@@ -2784,7 +2784,7 @@ type BracketRoadmapPhaseId = ReturnType<typeof parsePhaseId>;
 type BracketRenumberMapping = { oldId: BracketRoadmapPhaseId; newId: BracketRoadmapPhaseId };
 
 /**
- * #4304 round 5 (B2): the ONE identity mapping shared by the disk rename
+ * #4304 (B2): the ONE identity mapping shared by the disk rename
  * (renameBracketPhases, below) and the ROADMAP rewrite
  * (updateRoadmapAfterBracketPhaseRemoval) — disk and ROADMAP can never
  * disagree because both consume this same computation instead of each
@@ -2848,7 +2848,7 @@ function computeBracketRenumberMapping(
 }
 
 /**
- * #4304 round 6 (W2): does the bracket phase about to be removed (an
+ * #4304 (W2): does the bracket phase about to be removed (an
  * INTEGER phase, never a subphase itself — `phase remove NN.SS` is a
  * different, unaffected path) still have its own sub-phases?
  * `computeBracketRenumberMapping`'s own filter only ever maps
@@ -2888,7 +2888,7 @@ function bracketPhaseOwnSubphases(
 }
 
 /**
- * #4304 round 9 (W2): a pre-mutation SAFETY CHECK, not a fix to the read
+ * #4304 (W2): a pre-mutation SAFETY CHECK, not a fix to the read
  * side's own window selection (mislocating the active window is PR-6 /
  * #4751 territory — this function does not touch that). When the read side
  * mislocates the active milestone window — a non-closed heading carrying
@@ -2923,7 +2923,7 @@ function bracketOwnedLineOutsideActiveWindow(
   // checklist-row deletion (the per-line loop, gated on `active`) are two
   // INDEPENDENT scoped operations in `updateRoadmapAfterBracketPhaseRemoval`
   // — a degenerate window can legitimately contain one kind of owned line
-  // while missing the other (round-4 p8: the version-less bracket-fallback
+  // while missing the other (p8: the version-less bracket-fallback
   // selects the first PHASE heading as if it were the milestone heading, so
   // the resulting window happens to span every later phase HEADING to EOF
   // while the checklist bullets — which sit ABOVE that heading — are still
@@ -2933,7 +2933,7 @@ function bracketOwnedLineOutsideActiveWindow(
   let checklistInside = false;
   let firstOutsideHeading: { lineNumber: number; text: string } | null = null;
   let firstOutsideChecklist: { lineNumber: number; text: string } | null = null;
-  // #4304 round 10 (B1, regression from round 9's own guard above,
+  // #4304 (B1, regression from the guard above,
   // .planning/2026-09-18-4773-opus-round9-correctness.json finding 1): a
   // line archived inside <details> or sitting under a CLOSED milestone
   // heading (isClosedMilestoneHeading — the SAME predicate
@@ -3051,7 +3051,7 @@ const BRACKET_OWNED_PHASE_INTRO_SRC = phaseHeadingPrefixSrcFor(
 );
 const BRACKET_OWNED_PHASE_TOKEN_CAPTURE_SRC = `(${PHASE_NUMBER_TOKEN_SOURCE})`;
 const BRACKET_OWNED_TAG_SRC = '(?:[ \\t]*\\([^)\\r\\n]{0,200}\\))?';
-// #4304 round 7 (B1): every reader compiles BRACKET_OWNED_PHASE_INTRO_SRC's
+// #4304 (B1): every reader compiles BRACKET_OWNED_PHASE_INTRO_SRC's
 // own source (phaseHeadingPrefixSrcFor's bracket alternative) with the `i`
 // flag — `BRACKET_PROJECT_CODE_SRC` is deliberately spelled `[A-Z]...` on the
 // understanding that recognition folds case at compile time, never in the
@@ -3099,7 +3099,7 @@ function splitRoadmapLineRecords(content: string): RoadmapLineRecord[] {
 function phaseIdFromOwnedLineMatch(match: RegExpExecArray | null): BracketRoadmapPhaseId | null {
   if (!match?.[1] || !match[2]) return null;
   try {
-    // #4304 round 7 (B1): parsePhaseId's own display-form regex requires an
+    // #4304 (B1): parsePhaseId's own display-form regex requires an
     // uppercase project code and checks canonicality by requiring the
     // re-rendered id to be byte-equal to the input, so a lowercase capture
     // from the now-case-insensitive owned-line regexes above (`[ck.02]
@@ -3108,7 +3108,7 @@ function phaseIdFromOwnedLineMatch(match: RegExpExecArray | null): BracketRoadma
     // phase-id.cts warns about ("fold before any identity operation; never
     // fold for display"). This is an identity operation.
     //
-    // #4304 round 8 (B1): the captured NUMBER needs the exact same
+    // #4304 (B1): the captured NUMBER needs the exact same
     // treatment. BRACKET_OWNED_PHASE_TOKEN_CAPTURE_SRC is deliberately
     // TOLERANT (PHASE_NUMBER_TOKEN_SOURCE, the read side's own grammar) so it
     // captures "2", "002", and "02.1" — the same non-canonical spellings
@@ -3171,7 +3171,7 @@ function replaceQualifiedBracketReference(
   const boundary = 'A-Za-z0-9.-';
   const oldNumber = bracketPhaseNumberSrc(oldId);
   const newNumber = bracketPhaseNumberSrc(newId);
-  // #4304 round 6 (W3) / round 7 (B1): the shared read grammar
+  // #4304 (W3) / (B1): the shared read grammar
   // (phaseHeadingPrefixSrcFor's bracketAlt, now factored out as
   // bracketAltIntroSrcFor / bracketQualifiedIntroSrcFor in phase-id.cts)
   // admits an OPTIONAL "Phase " label between the bracket and the phase
@@ -3185,7 +3185,7 @@ function replaceQualifiedBracketReference(
   // rewriter accept exactly what the classifier above, `roadmap get-phase`,
   // and `roadmap analyze` already do.
   //
-  // #4304 round 8 (B1): the NUMBER itself used to be anchored on the
+  // #4304 (B1): the NUMBER itself used to be anchored on the
   // canonical literal (`escapeRegex(oldNumber)`), so "[CK.02] 3" never
   // matched a mapping entry whose canonical oldNumber is "03" — the exact
   // half-applied-remove defect. Capture the number through the SAME
@@ -3238,7 +3238,7 @@ function lineStartsInActiveMilestone(
 }
 
 /**
- * #4304 round 6 (W1): a NARROWER boundary than currentMilestoneRawRanges'
+ * #4304 (W1): a NARROWER boundary than currentMilestoneRawRanges'
  * own primary/details ranges. Those stop only at a RECOGNIZED bracket/
  * version-bearing milestone heading, by design (the read path's own
  * milestone-scanning use case treats an unrelated heading — a
@@ -3264,7 +3264,7 @@ function bracketMilestoneOwnTableEnd(
 }
 
 /**
- * #4304 round 6 (W1): does `lineStart` fall inside the active milestone's
+ * #4304 (W1): does `lineStart` fall inside the active milestone's
  * OWN progress/table content — its primary or details section, bounded by
  * `bracketMilestoneOwnTableEnd` rather than the wider currentMilestoneRawRanges
  * end?
@@ -3289,7 +3289,7 @@ function lineStartsInMilestoneOwnTable(
   );
 }
 
-// #4304 round 8 (W2): the ONE textual expression of "this heading is
+// #4304 (W2): the ONE textual expression of "this heading is
 // titled Progress" — the title starts with the word "Progress", any
 // suffix admitted ("Progress", "Progress (v2.1)", "Progress — current"),
 // case-insensitive. `bracketProgressSectionRange` below already tolerated a
@@ -3302,7 +3302,7 @@ const BRACKET_PROGRESS_HEADING_TITLE_SRC = 'Progress\\b';
 const BRACKET_PROGRESS_HEADING_TITLE_RE = new RegExp(`^${BRACKET_PROGRESS_HEADING_TITLE_SRC}`, 'i');
 
 /**
- * #4304 round 6 (W1): the SAME `## Progress`-section scope legacy's
+ * #4304 (W1): the SAME `## Progress`-section scope legacy's
  * updateRoadmapAfterPhaseRemoval already uses (#2012, src/phase.cts:2482-2500)
  * — the first `## Progress` heading (case-insensitive) through the next
  * `#`/`##` heading or EOF. Lets a DOCUMENT-LEVEL Progress table that sits
@@ -3321,7 +3321,7 @@ function bracketProgressSectionRange(content: string): { start: number; end: num
 }
 
 /**
- * #4304 round 8 (W1) / round 9 (W1 fix): every distinct RECOGNIZED milestone
+ * #4304 (W1) / (W1 fix): every distinct RECOGNIZED milestone
  * heading in the document, one representative offset per VERSION (one
  * carrying a version token — `listMilestoneHeadings`' own grammar, via the
  * SAME selection rule, `selectMilestoneHeading`, `currentMilestoneRawRanges`
@@ -3378,7 +3378,7 @@ function bracketRecognizedMilestoneMarkers(content: string): number[] {
     // (src/roadmap-parser.cts) literally rather than importing a private
     // helper across the module boundary for one boolean test.
     if (/v\d+(?:\.\d+)*(?:[-.][A-Za-z0-9]+)*/i.test(h.text)) continue;
-    // #4304 round 10 (W2, .planning/2026-09-18-4773-opus-round9-correctness.json
+    // #4304 (W2, .planning/2026-09-18-4773-opus-round9-correctness.json
     // finding 4): a "(Phase Details)" heading is always a CONTINUATION of
     // whatever milestone opened before it (`currentMilestoneRawRanges`'s own
     // `detailsMatch` grammar, src/roadmap-parser.cts:2288-2294), never a
@@ -3397,19 +3397,19 @@ function bracketRecognizedMilestoneMarkers(content: string): number[] {
 }
 
 /**
- * #4304 round 7 (W1) / round 8 (W1 fix): does the DOCUMENT-FIRST
+ * #4304 (W1): does the DOCUMENT-FIRST
  * `## Progress` heading `bracketProgressSectionRange` found belong to a
  * DIFFERENT, non-active milestone's OWN dedicated section, rather than
  * being a genuinely document-level/shared table?
  *
- * Round 7's answer — "the active milestone has a Progress heading of its
- * own, and this isn't it, so it must be someone else's" — over-claims: a
- * genuinely global `## Progress` that lists every milestone's rows (before
- * any milestone heading at all, r1b/s7; or trailing after the LAST
- * recognized milestone heading with nothing bounding it on the far side,
- * s4 shape d) is neither the active milestone's own nor any OTHER
- * milestone's dedicated section, yet round 7 called it "owned elsewhere"
- * merely because it wasn't the active one's.
+ * An earlier version of this rule's answer — "the active milestone has a
+ * Progress heading of its own, and this isn't it, so it must be someone
+ * else's" — over-claims: a genuinely global `## Progress` that lists every
+ * milestone's rows (before any milestone heading at all, r1b/s7; or trailing
+ * after the LAST recognized milestone heading with nothing bounding it on
+ * the far side, s4 shape d) is neither the active milestone's own nor any
+ * OTHER milestone's dedicated section, yet that earlier rule called it
+ * "owned elsewhere" merely because it wasn't the active one's.
  *
  * The fix asks a POSITIONAL question instead, over every recognized
  * milestone heading in the document (`bracketRecognizedMilestoneMarkers`),
@@ -3436,25 +3436,25 @@ function bracketProgressSectionOwnedByOtherMilestone(
   // Progress-titled headings (any level) is never "elsewhere".
   if (ownProgressSectionRanges.some((r) => r.start === progressStart)) return false;
 
-  // #4304 round 9 (B1, regression from round 8/de31ccac0): round 7's own
+  // #4304 (B1, regression from commit de31ccac0): the original rule's own
   // precondition — the ACTIVE milestone must own a Progress heading of its
   // own before a DIFFERENT Progress heading can be "someone else's" — was
-  // dropped when round 8 rewrote this as a purely positional question. Without
-  // it, a document whose ACTIVE milestone has no dedicated Progress heading of
-  // its own (the common single-shared-table layout: one global `## Progress`
-  // table, no per-milestone one) had its shared table declared another
-  // milestone's the moment ANY version-bearing heading — a `## Backlog (v4.0
-  // candidates)` line, a changelog entry — followed it in the document,
-  // because the positional scan alone cannot distinguish "this table is the
-  // NEXT milestone's own dedicated section" from "this table is shared and a
-  // later milestone heading simply comes after it in the file". Restored
-  // verbatim from the finder's scratch-verified one-line fix (round-8 Opus
-  // correctness report, B1): with no own Progress heading at all, the active
+  // dropped when de31ccac0 rewrote this as a purely positional question.
+  // Without it, a document whose ACTIVE milestone has no dedicated Progress
+  // heading of its own (the common single-shared-table layout: one global
+  // `## Progress` table, no per-milestone one) had its shared table declared
+  // another milestone's the moment ANY version-bearing heading — a
+  // `## Backlog (v4.0 candidates)` line, a changelog entry — followed it in
+  // the document, because the positional scan alone cannot distinguish "this
+  // table is the NEXT milestone's own dedicated section" from "this table is
+  // shared and a later milestone heading simply comes after it in the file".
+  // Restored verbatim from the finder's scratch-verified one-line fix (the
+  // Opus correctness report, B1): with no own Progress heading at all, the active
   // milestone has no OWN claim any Progress heading could be "instead of", so
   // a shared table can never be misread as belonging to a different one.
   if (ownProgressSectionRanges.length === 0) return false;
 
-  // #4304 round 10 (W2, .planning/2026-09-18-4773-opus-round9-correctness.json
+  // #4304 (W2, .planning/2026-09-18-4773-opus-round9-correctness.json
   // finding 4): drop any marker lying STRICTLY inside the ACTIVE milestone's
   // own ranges — a heading inside the active's own window (a same-id prose
   // sub-heading like "### [CK.02] Notes", admitted by the boundary-predicate
@@ -3490,7 +3490,7 @@ function bracketProgressSectionOwnedByOtherMilestone(
 }
 
 /**
- * #4304 round 7 (W1) / round 8 (W2): the active milestone's OWN heading
+ * #4304 (W1) / (W2): the active milestone's OWN heading
  * titled "Progress" (`BRACKET_PROGRESS_HEADING_TITLE_RE` — any suffix, any
  * level, case-insensitive), found ANYWHERE inside its primary or details
  * ranges — regardless of what precedes it within those ranges.
@@ -3547,7 +3547,7 @@ function bracketOwnProgressSectionRanges(
   return out;
 }
 
-// #4304 round 5 (B5): shared "tolerant" trailing boundary for the
+// #4304 (B5): shared "tolerant" trailing boundary for the
 // reporting-only detection regexes below. `(?!\d|\.\d)` blocks extending
 // into more digits or a ".digit" continuation (so a bare identity never
 // falsely matches inside a longer number or a different decimal sibling),
@@ -3561,7 +3561,7 @@ const BRACKET_REPORT_TOLERANT_BOUNDARY_SRC = '(?!\\d|\\.\\d)';
 
 function bracketQualifiedMentionedInLine(line: string, id: BracketRoadmapPhaseId): boolean {
   const tolerant = BRACKET_REPORT_TOLERANT_BOUNDARY_SRC;
-  // #4304 round 6 (B5 follow-up) / round 7 (B1): admit the SAME optional
+  // #4304 (B5 follow-up) / (B1): admit the SAME optional
   // "Phase " label, zero-or-more spacing and any case
   // replaceQualifiedBracketReference now rewrites — built from the SAME
   // single-owner bracketQualifiedIntroSrcFor (phase-id.cts), never a
@@ -3574,7 +3574,7 @@ function bracketQualifiedMentionedInLine(line: string, id: BracketRoadmapPhaseId
   // ("**Depends on:** [ck.02] phase 02", which no rewriter ever touches
   // because 02 no longer exists) was never recognized as dangling.
   //
-  // #4304 round 8 (B1): the NUMBER was still anchored on the canonical
+  // #4304 (B1): the NUMBER was still anchored on the canonical
   // literal, so "**Depends on:** [CK.02] 2" (a non-canonical mention of the
   // just-removed identity) was invisible here too — capture it through the
   // same tolerant PHASE_NUMBER_TOKEN_SOURCE grammar the rewriter above now
@@ -3596,7 +3596,7 @@ function bracketQualifiedMentionedInLine(line: string, id: BracketRoadmapPhaseId
 function bracketLegacyPhaseMentionedInLine(line: string, id: BracketRoadmapPhaseId): boolean {
   const token = bracketArtifactToken(id);
   return new RegExp(
-    // #4304 round 6 (W3): a bracket-QUALIFIED, labeled mention
+    // #4304 (W3): a bracket-QUALIFIED, labeled mention
     // ("[CK.02] Phase 03") is handled completely by
     // replaceQualifiedBracketReference now — it is never "the legacy bare
     // 'Phase NN' spelling this detector exists for. Without the negative
@@ -3617,7 +3617,7 @@ function bracketArtifactMentionedInLine(line: string, id: BracketRoadmapPhaseId)
 }
 
 /**
- * #4304 round 5 (B5): computed from the ORIGINAL (pre-rewrite) line, never
+ * #4304 (B5): computed from the ORIGINAL (pre-rewrite) line, never
  * the persisted content — re-searching the PERSISTED text for a
  * pre-renumber id is how the prior implementation produced false
  * positives whenever two or more phases shifted (a later phase's NEW
@@ -3670,7 +3670,7 @@ function updateRoadmapAfterBracketPhaseRemoval(
   return withPlanningLock(cwd, () => {
     const originalContent = fs.readFileSync(roadmapPath, 'utf-8');
     const targetId = bracketPhaseId(context, removedInt, removedSubphase);
-    // #4304 round 5 (W2): scope the section deletion to the active
+    // #4304 (W2): scope the section deletion to the active
     // milestone's own ranges — the SAME primary+details discovery the
     // checklist-row deletion below already uses — computed from the
     // content BEFORE deletion. Without this, deleteSection removes the
@@ -3682,7 +3682,7 @@ function updateRoadmapAfterBracketPhaseRemoval(
     let content = deleteSection(
       originalContent,
       (heading) => {
-        // #4304 round 6 (W3): classify the heading through the SAME shared
+        // #4304 (W3): classify the heading through the SAME shared
         // owned-line grammar (classifyBracketOwnedLine / BRACKET_HEADING_LINE_RE)
         // the checklist/progress-row deletion below already uses, instead of
         // a literal `startsWith(targetDisplay)` — that comparison only ever
@@ -3710,15 +3710,15 @@ function updateRoadmapAfterBracketPhaseRemoval(
     );
     let roadmapLinesRewritten = content === originalContent ? 0 : 1;
     const ranges = currentMilestoneRawRanges(content, cwd, 'bracket');
-    // #4304 round 6 (W1) / round 7 (W1 fix): progress/table-row deletion is
+    // #4304 (W1): progress/table-row deletion is
     // scoped to the active milestone's OWN table content
     // (bracketMilestoneOwnTableEnd — narrower than `ranges` itself, see its
     // own doc comment) plus its own "Progress"-titled heading found ANYWHERE
-    // in its ranges (bracketOwnProgressSectionRanges — round 7, additive:
+    // in its ranges (bracketOwnProgressSectionRanges — additive:
     // covers a `## Notes` aside or a per-milestone `## Progress` the plain
     // own-table-end closes over too early) plus a document-level
     // `## Progress` section that is not itself owned by a DIFFERENT
-    // milestone (legacy's own #2012 scope, round 7 adds the ownership gate)
+    // milestone (legacy's own #2012 scope, plus an ownership gate)
     // — never the whole document. Without this, a same-identity row in ANY
     // pipe table anywhere (a shipped milestone sharing the same bracket
     // code, an unrelated Requirements Traceability table) was deleted.
@@ -3729,7 +3729,7 @@ function updateRoadmapAfterBracketPhaseRemoval(
       ? bracketProgressSectionOwnedByOtherMilestone(content, progressSectionRange.start, ranges, ownProgressSectionRanges)
       : false;
 
-    // #4304 round 5 (B5): the referencesLeftUntouched report is computed
+    // #4304 (B5): the referencesLeftUntouched report is computed
     // from each KEPT line's ORIGINAL (pre-rewrite) text, never the
     // persisted (already-rewritten) content — re-searching persisted text
     // for a pre-renumber id is how the prior implementation produced false
@@ -3823,7 +3823,7 @@ function cmdPhaseRemove(
     ? bracketWriteContext(cwd, loadConfig(cwd))
     : null;
 
-  // #4304 round 4 / round 6 (I1): canonicalize every bracket argument before
+  // #4304 / (I1): canonicalize every bracket argument before
   // directory matching or any write, through the SAME adapter `phase
   // insert` now uses (canonicalizeBracketPhaseArgument) — a bare token
   // through phase-id-display's `phaseToken`, a qualified/display token
@@ -3896,7 +3896,7 @@ function cmdPhaseRemove(
     }
   }
 
-  // #4304 round 5 (B2): compute the ONE renumber mapping shared by the disk
+  // #4304 (B2): compute the ONE renumber mapping shared by the disk
   // rename and the ROADMAP rewrite before either runs, from the roadmap
   // content as it stands right now (only the target directory is about to
   // be deleted below; deletion does not change which OTHER identities the
@@ -3907,7 +3907,7 @@ function cmdPhaseRemove(
     ? currentMilestoneRawRanges(roadmapContentBeforeRemoval, cwd, 'bracket')
     : null;
 
-  // #4304 round 6 (W2): refuse before any mutation when an INTEGER phase
+  // #4304 (W2): refuse before any mutation when an INTEGER phase
   // still has its own sub-phases. Without this, computeBracketRenumberMapping's
   // filter (phase > removedInt only) never touches the removed phase's OWN
   // sub-phases: they stay orphaned on disk/ROADMAP while the NEXT phase's
@@ -3930,7 +3930,7 @@ function cmdPhaseRemove(
     }
   }
 
-  // #4304 round 9 (W2): refuse before any mutation when the target's own
+  // #4304 (W2): refuse before any mutation when the target's own
   // heading/checklist line lives entirely OUTSIDE the milestone window the
   // read side located — a mislocated window (a decoy heading carrying the
   // active version token before the real milestone heading, a document-level
@@ -3940,7 +3940,7 @@ function cmdPhaseRemove(
   // attempt to fix the window's own selection (PR-6 / #4751 territory) —
   // only refuses instead of half-applying.
   //
-  // #4304 round 10 (W1, .planning/2026-09-18-4773-opus-round9-correctness.json
+  // #4304 (W1, .planning/2026-09-18-4773-opus-round9-correctness.json
   // finding 2): NOT additionally gated on `targetDir` — a ROADMAP-only
   // target (a phase `phase add` created with no directory materialized yet)
   // on a mislocated window still half-applied under the `targetDir` gate:

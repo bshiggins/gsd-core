@@ -328,7 +328,7 @@ const PHASE_HEADING_BASELINE = Object.freeze({
  *
  * Pure: takes the resolved convention, never reads config.
  */
-// #4304 round 7 (B1): `bracketAlt`'s own alternation, factored out to a named
+// #4304 (B1): `bracketAlt`'s own alternation, factored out to a named
 // function so every write-side consumer that needs "this bracket, optionally
 // followed by the literal Phase label, then a digit" derives from the SAME
 // expression the read grammar compiles — never a hand-retyped `[ \t]+` /
@@ -348,7 +348,7 @@ function bracketAltIntroSrcFor(idSrc: string): string {
 }
 
 /**
- * #4304 round 7 (B1): the qualified-mention intro for ONE already-known
+ * #4304 (B1): the qualified-mention intro for ONE already-known
  * bracket identity — `[{PROJECT}.{MM}]` (both escaped literals, not a
  * class), optionally followed by the `Phase` label — built from
  * `bracketAltIntroSrcFor` so a rewriter or detector anchoring a specific
@@ -358,7 +358,7 @@ function bracketAltIntroSrcFor(idSrc: string): string {
  * write-side bracket-identity regexes (the qualified-reference replacer, the
  * qualified-mention detector) build their intro through this instead of
  * re-typing `[ \t]+` / case-sensitive brackets independently of the read
- * grammar — the exact drift B1 found (round 6 shipped hand-composed,
+ * grammar — the exact drift B1 found (an earlier revision shipped hand-composed,
  * case-sensitive, `[ \t]+`-spaced copies that silently rejected
  * `[ck.02] 02:`, `[CK.02] PHASE 02:`, and the no-space `[CK.02]02:`, all of
  * which `roadmap get-phase` / `roadmap analyze` / this PR's own `phase
