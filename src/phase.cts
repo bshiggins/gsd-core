@@ -3274,6 +3274,24 @@ function bracketProgressSectionOwnedByOtherMilestone(
   // Progress-titled headings (any level) is never "elsewhere".
   if (ownProgressSectionRanges.some((r) => r.start === progressStart)) return false;
 
+  // #4304 round 9 (B1, regression from round 8/de31ccac0): round 7's own
+  // precondition — the ACTIVE milestone must own a Progress heading of its
+  // own before a DIFFERENT Progress heading can be "someone else's" — was
+  // dropped when round 8 rewrote this as a purely positional question. Without
+  // it, a document whose ACTIVE milestone has no dedicated Progress heading of
+  // its own (the common single-shared-table layout: one global `## Progress`
+  // table, no per-milestone one) had its shared table declared another
+  // milestone's the moment ANY version-bearing heading — a `## Backlog (v4.0
+  // candidates)` line, a changelog entry — followed it in the document,
+  // because the positional scan alone cannot distinguish "this table is the
+  // NEXT milestone's own dedicated section" from "this table is shared and a
+  // later milestone heading simply comes after it in the file". Restored
+  // verbatim from the finder's scratch-verified one-line fix (round-8 Opus
+  // correctness report, B1): with no own Progress heading at all, the active
+  // milestone has no OWN claim any Progress heading could be "instead of", so
+  // a shared table can never be misread as belonging to a different one.
+  if (ownProgressSectionRanges.length === 0) return false;
+
   const markers = bracketRecognizedMilestoneMarkers(content);
   let precedingIndex = -1;
   for (let i = 0; i < markers.length; i++) {

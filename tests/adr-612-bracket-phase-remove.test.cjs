@@ -2180,6 +2180,82 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, []);
   });
 
+  // #4304 round 9 (B1, regression from round 8/de31ccac0): round 8's own
+  // positional rewrite of bracketProgressSectionOwnedByOtherMilestone dropped
+  // round 7's precondition that the ACTIVE milestone must own a Progress
+  // heading before a document-first "## Progress" can be treated as a
+  // DIFFERENT milestone's — so a shared "## Progress" table (the ACTIVE
+  // milestone has no dedicated Progress heading of its own) was declared
+  // "owned elsewhere" whenever ANY version-bearing heading (here a versioned
+  // backlog heading, no real milestone at all) followed it, leaving the
+  // removed identity's row stale while the renumbered sibling's row landed on
+  // the SAME id — two rows for one identity. Same base fixture as the
+  // "renumbers fully qualified references in a global Progress table..."
+  // test above, with one appended versioned heading.
+  test('deletes the removed phase\'s row exactly once from a shared global Progress table followed by a versioned backlog heading', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.01] v1.0 — Prior',
+        '',
+        '### [CK.01] 03: Prior Three',
+        '',
+        '**Goal:** untouched',
+        '**Plans:** `03-01-PLAN.md`, `03-01-SUMMARY.md`',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '### [CK.02] 02: Two',
+        '',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '',
+        '**Goal:** renumber',
+        '**Plans:** `03-01-PLAN.md`',
+        '',
+        '## [CK.03] v3.0 — Future',
+        '',
+        '### [CK.03] 01: Later',
+        '',
+        '**Goal:** untouched by the CK.02 removal',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.01] 03 | 0/1 | Prior |',
+        '| [CK.02] 02 | 0/1 | Planned |',
+        '| [CK.02] 03 | 0/1 | Planned |',
+        '| [CK.03] 01 | 0/1 | Future |',
+        '',
+        '## Backlog (v4.0 candidates)',
+        '',
+        '- [ ] [CK.02] 999.1: Someday',
+        '',
+      ],
+      [
+        ['CK.01-03-prior-three', ['03-01-PLAN.md', '03-01-SUMMARY.md']],
+        ['CK.02-02-two', ['02-01-PLAN.md']],
+        ['CK.02-03-three', ['03-01-PLAN.md']],
+        ['CK.03-01-later', []],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+
+    const progressAfter = roadmap.slice(roadmap.indexOf('## Progress'), roadmap.indexOf('## Backlog'));
+    assert.equal((progressAfter.match(/^\| \[CK\.02\] 02 \|/gm) ?? []).length, 1);
+    assert.equal(progressAfter.includes('| [CK.02] 02 | 0/1 | Planned |'), true);
+    assert.equal(progressAfter.includes('| [CK.01] 03 | 0/1 | Prior |'), true);
+    assert.equal(progressAfter.includes('| [CK.03] 01 | 0/1 | Future |'), true);
+    assert.deepEqual(out.references_left_untouched, []);
+  });
+
   // #4304 round 8 (W2): `isProgressHeading` required an EXACT "progress"
   // match while `bracketProgressSectionRange` already matched "## Progress"
   // with any suffix (`\b`), so a shipped milestone's "## Progress (v2.0)"
