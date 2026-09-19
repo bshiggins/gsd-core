@@ -2080,4 +2080,86 @@ describe('roadmap upgrade --convention bracket', () => {
       );
     });
   });
+
+  // #4144 round 6 B2: two milestone sections sharing the same leading major
+  // integer (`## v2.0`, `## v2.1` — both resolve to bracket milestone 2) each
+  // restart their own legacy phase numbering. Headings resolve correctly
+  // (idMapping is keyed by lineIndex), but the checklist lookup used to be
+  // keyed by (milestoneInt, legacy token) alone, so the SECOND section's
+  // token silently overwrote the FIRST section's in that shared map.
+  describe('attributes checklist bullets to their own milestone section (#4144 round 6 B2)', () => {
+    function buildSameMajorFixture() {
+      const cwd = materializeEmptyFixture('samemajor');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'config.json'),
+        JSON.stringify({ project_code: 'GSD', phase_id_convention: null }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v2.0 Core',
+          '',
+          '- [ ] **Phase 1: Alpha**',
+          '- [ ] **Phase 2: Beta**',
+          '',
+          '### Phase 1: Alpha',
+          '**Goal**: a',
+          '',
+          '### Phase 2: Beta',
+          '**Goal**: b',
+          '',
+          '## v2.1 Patch',
+          '',
+          '- [ ] **Phase 1: Gamma**',
+          '- [ ] **Phase 2: Delta**',
+          '',
+          '### Phase 1: Gamma',
+          '**Goal**: g',
+          '',
+          '### Phase 2: Delta',
+          '**Goal**: d',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      for (const dir of ['01-alpha', '02-beta', '01-gamma', '02-delta']) {
+        fs.mkdirSync(path.join(phasesDir, dir), { recursive: true });
+        fs.writeFileSync(path.join(phasesDir, dir, '01-01-PLAN.md'), '---\nphase: "01"\n---\n', 'utf8');
+      }
+      return cwd;
+    }
+
+    test('each section\'s own checklist bullets convert to that section\'s own tokens, not the later section\'s', () => {
+      const cwd = buildSameMajorFixture();
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'same-major-milestones dry-run');
+
+      const editFor = (text) => plan.roadmapEdits.find(({ from }) => from === text);
+
+      assert.equal(editFor('- [ ] **Phase 1: Alpha**')?.to, '- [ ] **[GSD.02] 01: Alpha**');
+      assert.equal(editFor('- [ ] **Phase 2: Beta**')?.to, '- [ ] **[GSD.02] 02: Beta**');
+      assert.equal(editFor('- [ ] **Phase 1: Gamma**')?.to, '- [ ] **[GSD.02] 03: Gamma**');
+      assert.equal(editFor('- [ ] **Phase 2: Delta**')?.to, '- [ ] **[GSD.02] 04: Delta**');
+    });
+
+    test('a checklist bullet outside every section naming an ambiguous legacy token is refused before any write', () => {
+      const cwd = buildSameMajorFixture();
+      const roadmap = fs.readFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), 'utf8');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        `# Roadmap\n\n- [ ] **Phase 1: Somebody**\n\n${roadmap.slice('# Roadmap\n\n'.length)}`,
+        'utf8',
+      );
+      const before = snapshotTree(cwd, { skipGit: true });
+
+      const result = runBracketUpgrade(cwd);
+
+      assertExited(result, 1, 'ambiguous global checklist bullet dry-run');
+      assert.match(result.stderr, /ambiguous|more than one/i);
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'a refusal must write nothing');
+    });
+  });
 });

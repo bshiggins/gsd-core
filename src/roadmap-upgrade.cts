@@ -393,6 +393,15 @@ interface BracketSourceEntry {
   headingTag?: string;
   headingTail?: string;
   hashes?: string;
+  /**
+   * #4144 round 6 B2: the exact `milestoneSections` range this legacy entry
+   * was attributed to (never just its `milestoneInt` — two sections can
+   * share the same leading major integer, e.g. `## v2.0` and `## v2.1`, and
+   * still be DIFFERENT sections with their own independent legacy
+   * numbering). `null`/absent means no section attributed it (single-section
+   * or STATE.md-fallback repositories).
+   */
+  attributedSection?: { start: number; end: number; milestoneInt: number | null } | null;
 }
 
 interface BracketMapping {
@@ -1070,6 +1079,7 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     const attributed = containing.find((section) => section.milestoneInt !== null);
     if (attributed?.milestoneInt !== null && attributed?.milestoneInt !== undefined) {
       entry.milestoneInt = attributed.milestoneInt;
+      entry.attributedSection = attributed;
     } else if (phaseBearingSections.size > 1) {
       unattributedLegacy.push(entry);
     }
@@ -1116,15 +1126,26 @@ function computeBracketPlan(cwd: string): MigrationPlan {
 
   const idMapping = assignBracketTokens(sourcePhases, lines);
 
-  const milestoneLegacyMap = new Map<number, Map<string, string>>();
-  for (const mapping of idMapping.values()) {
-    if (mapping.source !== 'legacy') continue;
-    if (!milestoneLegacyMap.has(mapping.milestoneInt)) {
-      milestoneLegacyMap.set(mapping.milestoneInt, new Map<string, string>());
-    }
-    milestoneLegacyMap.get(mapping.milestoneInt)!.set(
+  // #4144 round 6 B2: keyed by SECTION identity (a section's own `start`
+  // offset via `milestoneSections` — the SAME attribution headings use, set
+  // on `entry.attributedSection` above), never by `milestoneInt` alone. Two
+  // sections can share the same leading major integer (`## v2.0`, `## v2.1`)
+  // while each restarts its own legacy phase numbering; a milestoneInt-only
+  // key let the later section's token silently overwrite the earlier
+  // section's in this same map. `GLOBAL_SECTION_KEY` covers legacy entries
+  // with no attributed section at all (single-section / STATE.md-fallback
+  // repositories), where there is only one bucket to begin with.
+  const GLOBAL_SECTION_KEY = -1;
+  const sectionLegacyMap = new Map<number, Map<string, { token: string; milestoneInt: number }>>();
+  for (const entry of sourcePhases) {
+    if (entry.source !== 'legacy') continue;
+    const mapping = idMapping.get(entry.lineIndex);
+    if (!mapping) continue;
+    const sectionKey = entry.attributedSection ? entry.attributedSection.start : GLOBAL_SECTION_KEY;
+    if (!sectionLegacyMap.has(sectionKey)) sectionLegacyMap.set(sectionKey, new Map());
+    sectionLegacyMap.get(sectionKey)!.set(
       legacyLookupKey(mapping.sourceToken),
-      mapping.token,
+      { token: mapping.token, milestoneInt: mapping.milestoneInt },
     );
   }
 
@@ -1205,7 +1226,6 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     }
   }
 
-  let currentMilestone: number | null = null;
   // #4698 Blocker 3 (round 2): both checklist grammars gain the same
   // captured OPTIONAL_PHASE_TAG_SOURCE the heading grammars above do, so a
   // checklist bullet mirroring a tagged heading (`- [ ] **Phase 2 (Cluster
@@ -1224,11 +1244,7 @@ function computeBracketPlan(cwd: string): MigrationPlan {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const milestoneMatch = line.match(MILESTONE_HEADING_RE);
-    if (milestoneMatch) {
-      currentMilestone = parseInt(milestoneMatch[1], 10);
-      continue;
-    }
+    if (MILESTONE_HEADING_RE.test(line)) continue;
     if (roadmapEdits.some((edit) => edit.lineIndex === i)) continue;
 
     const mnnChecklist = line.match(mnnChecklistRe);
@@ -1248,23 +1264,36 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     const legacyChecklist = line.match(legacyChecklistRe);
     if (!legacyChecklist) continue;
     const key = legacyLookupKey(legacyChecklist[2]);
-    const sectionMilestone = sectionsForOffset(lineOffsets[i] ?? -1)
-      .find((section) => section.milestoneInt !== null)?.milestoneInt ?? null;
-    let resolvedMilestone = sectionMilestone ?? currentMilestone;
-    let token = resolvedMilestone === null
-      ? undefined
-      : milestoneLegacyMap.get(resolvedMilestone)?.get(key);
-    if (!token) {
-      for (const [milestone, lookup] of milestoneLegacyMap) {
+    // #4144 round 6 B2: a bullet INSIDE a specific milestone section is
+    // attributed to THAT section alone — never a different section that
+    // happens to share the same leading major integer.
+    const bulletSection = sectionsForOffset(lineOffsets[i] ?? -1)
+      .find((section) => section.milestoneInt !== null) ?? null;
+    let resolved: { token: string; milestoneInt: number } | undefined;
+    if (bulletSection) {
+      resolved = sectionLegacyMap.get(bulletSection.start)?.get(key);
+    } else {
+      // Outside every section (a global summary list): unambiguous only
+      // when exactly one section (or the no-section bucket) defines this
+      // legacy token.
+      const candidates: Array<{ token: string; milestoneInt: number }> = [];
+      for (const lookup of sectionLegacyMap.values()) {
         const candidate = lookup.get(key);
-        if (!candidate) continue;
-        resolvedMilestone = milestone;
-        token = candidate;
-        break;
+        if (candidate) candidates.push(candidate);
       }
+      if (candidates.length > 1) {
+        throw new Error(
+          'Cannot safely migrate ROADMAP.md to the bracket convention: a checklist bullet outside every '
+          + 'milestone section names a legacy phase number that more than one milestone section defines. '
+          + 'Refusing rather than guessing which phase it means:\n'
+          + `  ${line}`,
+        );
+      }
+      resolved = candidates[0];
     }
-    if (!token || resolvedMilestone === null) continue;
-    const replacement = `${legacyChecklist[1]}[${code}.${pad2(resolvedMilestone)}] ${token}${legacyChecklist[3]}${legacyChecklist[4]}`;
+    if (!resolved) continue;
+    const replacement = `${legacyChecklist[1]}[${code}.${pad2(resolved.milestoneInt)}] ${resolved.token}`
+      + `${legacyChecklist[3]}${legacyChecklist[4]}`;
     roadmapEdits.push({
       lineIndex: i,
       from: line,
