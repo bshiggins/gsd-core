@@ -1299,4 +1299,117 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(roadmap.includes('| [CK.02] 02 | REQ-08 | Open |'), true);
     assert.equal(roadmap.includes('| [CK.01] 02 | REQ-01 | Done |'), true);
   });
+
+  // #4304 round 6 (W2): removing an integer phase that has its own
+  // sub-phases neither removed nor refused them (computeBracketRenumberMapping's
+  // filter only ever selects phase > removedInt, never phase === removedInt) —
+  // the sub-phase directories and ROADMAP rows stayed while the NEXT phase's
+  // sub-phases renumbered onto the SAME identities, manufacturing duplicate
+  // [CK.02] 02.01 identities on disk and in ROADMAP. Refuse before any
+  // mutation, naming the orphan sub-phases.
+  test('refuses removing a bracket phase that still has sub-phases, naming them, before any mutation', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 02.01: Two Sub A',
+        '- [ ] [CK.02] 02.02: Two Sub B',
+        '- [ ] [CK.02] 03: Three',
+        '- [ ] [CK.02] 03.01: Three Sub',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 02.01: Two Sub A',
+        '**Goal:** sub of removed',
+        '',
+        '### [CK.02] 02.02: Two Sub B',
+        '**Goal:** sub of removed',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '',
+        '### [CK.02] 03.01: Three Sub',
+        '**Goal:** renumber sub',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] 01 | 0/1 | Planned |',
+        '| [CK.02] 02 | 0/1 | Planned |',
+        '| [CK.02] 02.01 | 0/1 | Planned |',
+        '| [CK.02] 02.02 | 0/1 | Planned |',
+        '| [CK.02] 03 | 0/1 | Planned |',
+        '| [CK.02] 03.01 | 0/1 | Planned |',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+        ['CK.02-02.01-two-sub-a', []],
+        ['CK.02-02.02-two-sub-b', []],
+        ['CK.02-03-three', []],
+        ['CK.02-03.01-three-sub', []],
+      ],
+    );
+    const before = snapshotTree(planning());
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+
+    assert.equal(result.success, false, result.output);
+    assert.match(result.error, /still has sub-phase/i);
+    assert.match(result.error, /\[CK\.02\] 02\.01/);
+    assert.match(result.error, /\[CK\.02\] 02\.02/);
+    assert.deepEqual(snapshotTree(planning()), before);
+  });
+
+  test('removing a bracket phase\'s own sub-phase directly is unaffected by the parent-sub-phase refusal', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 02.01: Two Sub A',
+        '- [ ] [CK.02] 02.02: Two Sub B',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02.01: Two Sub A',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 02.02: Two Sub B',
+        '**Goal:** renumber',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+        ['CK.02-02.01-two-sub-a', []],
+        ['CK.02-02.02-two-sub-b', []],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02.01', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+
+    assert.equal(fs.existsSync(planning('phases', 'CK.02-02.01-two-sub-a')), false);
+    assert.equal(fs.existsSync(planning('phases', 'CK.02-02.01-two-sub-b')), true);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    assert.equal(roadmap.includes('### [CK.02] 02.01: Two Sub B'), true);
+  });
 });

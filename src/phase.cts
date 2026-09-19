@@ -2781,6 +2781,46 @@ function computeBracketRenumberMapping(
   }));
 }
 
+/**
+ * #4304 round 6 (W2): does the bracket phase about to be removed (an
+ * INTEGER phase, never a subphase itself — `phase remove NN.SS` is a
+ * different, unaffected path) still have its own sub-phases?
+ * `computeBracketRenumberMapping`'s own filter only ever maps
+ * `phase > removedInt` — the removed phase's OWN sub-phases (`phase ===
+ * removedInt`) are never mapped, deleted, or reported — so removing an
+ * integer phase that still has sub-phases left them orphaned on disk and
+ * in ROADMAP while the NEXT phase's sub-phases renumbered onto the SAME
+ * identities, manufacturing duplicates. Scans the SAME two sources
+ * computeBracketRenumberMapping unions (the directory scan, and every
+ * heading/checklist/progress line inside the active milestone's own
+ * ranges) so this refusal can never see a different phase inventory than
+ * the rename/rewrite that would otherwise follow it.
+ */
+function bracketPhaseOwnSubphases(
+  phasesDir: string,
+  roadmapContent: string,
+  ranges: ReturnType<typeof currentMilestoneRawRanges>,
+  context: BracketWriteContext,
+  targetInt: number,
+): BracketRoadmapPhaseId[] {
+  const bySubphase = new Map<number, BracketRoadmapPhaseId>();
+  const record = (phase: number, subphase?: number): void => {
+    if (phase === targetInt && subphase !== undefined) {
+      bySubphase.set(subphase, bracketPhaseId(context, phase, subphase));
+    }
+  };
+  for (const { id } of bracketIdsInContext(phasesDir, context)) {
+    record(Number(id.phase), id.subphase === undefined ? undefined : Number(id.subphase));
+  }
+  for (const line of splitRoadmapLineRecords(roadmapContent)) {
+    if (!lineStartsInActiveMilestone(line.start, ranges)) continue;
+    const { id } = classifyBracketOwnedLine(line.text);
+    if (!id || id.project !== context.project || id.milestone !== context.milestone) continue;
+    record(Number(id.phase), id.subphase === undefined ? undefined : Number(id.subphase));
+  }
+  return [...bySubphase.keys()].sort((a, b) => a - b).map((s) => bySubphase.get(s)!);
+}
+
 function renameBracketPhases(
   phasesDir: string,
   context: BracketWriteContext,
@@ -3357,18 +3397,44 @@ function cmdPhaseRemove(
   // be deleted below; deletion does not change which OTHER identities the
   // scan finds). Both consumers below apply this exact mapping so they
   // cannot independently diverge on a decimal sub-phase identity.
-  const bracketMapping = (() => {
-    if (!removeContext) return [];
-    const roadmapContentBeforeRename = fs.readFileSync(roadmapPath, 'utf-8');
-    return computeBracketRenumberMapping(
+  const roadmapContentBeforeRemoval = removeContext ? fs.readFileSync(roadmapPath, 'utf-8') : null;
+  const preRemovalRanges = roadmapContentBeforeRemoval
+    ? currentMilestoneRawRanges(roadmapContentBeforeRemoval, cwd, 'bracket')
+    : null;
+
+  // #4304 round 6 (W2): refuse before any mutation when an INTEGER phase
+  // still has its own sub-phases. Without this, computeBracketRenumberMapping's
+  // filter (phase > removedInt only) never touches the removed phase's OWN
+  // sub-phases: they stay orphaned on disk/ROADMAP while the NEXT phase's
+  // sub-phases renumber onto the SAME identities, manufacturing duplicates
+  // (legacy has the same defect on its own path — parity, not fixed there).
+  if (removeContext && removedSubphase === undefined) {
+    const ownSubphases = bracketPhaseOwnSubphases(
       phasesDir,
-      roadmapContentBeforeRename,
-      currentMilestoneRawRanges(roadmapContentBeforeRename, cwd, 'bracket'),
+      roadmapContentBeforeRemoval!,
+      preRemovalRanges,
+      removeContext,
+      removedInt,
+    );
+    if (ownSubphases.length > 0) {
+      error(
+        `Cannot remove phase ${normalized}: it still has sub-phase(s) `
+        + `${ownSubphases.map((id) => renderPhaseId(id)).join(', ')}. `
+        + 'Remove the sub-phase(s) first, then remove the phase.',
+      );
+    }
+  }
+
+  const bracketMapping = removeContext
+    ? computeBracketRenumberMapping(
+      phasesDir,
+      roadmapContentBeforeRemoval!,
+      preRemovalRanges,
       removeContext,
       removedInt,
       removedSubphase,
-    );
-  })();
+    )
+    : [];
 
   if (targetDir) fs.rmSync(path.join(phasesDir, targetDir), { recursive: true, force: true });
 
