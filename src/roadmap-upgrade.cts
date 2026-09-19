@@ -789,13 +789,20 @@ function computeArtifactRenames(
  * plan ID. Bare in-phase short forms and tokens naming other plans remain
  * untouched.
  *
- * `depends_on` is the only frontmatter field this rewrites. It is the only
- * field the real resolver reads for cross-plan identity: `parsePlanDocument`
- * (src/plan-document.cts) reads `phase`/`plan` as scalar display fields, never
- * assembling a `<phase>-<NN>` token from them, and a `*-SUMMARY.md`'s own
- * `requires:` block is prose (a human-readable "what this phase needed"
- * list) that `computeDependencyLevels` never parses — rewriting either would
- * touch bytes the resolver does not read, not fix a real resolution gap.
+ * `depends_on` is the only frontmatter field THIS function rewrites. It is
+ * the only field the real DEPENDENCY resolver reads for cross-plan identity:
+ * `parsePlanDocument` (src/plan-document.cts) reads `phase`/`plan` as scalar
+ * display fields, never assembling a `<phase>-<NN>` token from them, and a
+ * `*-SUMMARY.md`'s own `requires:` block is prose (a human-readable "what
+ * this phase needed" list) that `computeDependencyLevels` never parses —
+ * rewriting either would touch bytes THAT resolver does not read. `phase:`
+ * is a different story for a DIFFERENT reader: `history-digest`
+ * (src/commands.cts, `cmdHistoryDigest`) keys phases and decisions by that
+ * exact scalar, so a stale `phase:` left at the old token after a
+ * renumbering migration files a phase's decisions under a different phase's
+ * new identity. `computePhaseFrontmatterRewrites` below is the one that
+ * corrects it, on the reader-owned `phaseArtifactTokenSpan` membership this
+ * function's own `fileRenames` parameter is built from.
  *
  * NESTED `plans/` ARTIFACTS ARE OUT OF SCOPE, for the identical reason
  * `computeArtifactRenames` excludes them (see that function's docblock): a
@@ -919,6 +926,118 @@ function computeDependsOnRewrites(
   }
 
   return rewrites;
+}
+
+/**
+ * #4144 round 6 (W-phase): a renamed artifact's `phase:` frontmatter scalar
+ * keeps spelling the OLD legacy/M-NN token, and `history-digest`
+ * (src/commands.cts:547, `const phaseNum = fm['phase'] || dir.split('-')[0]`)
+ * keys phases and decisions by that exact field — the field IS used as
+ * identity by that reader, contrary to `computeDependsOnRewrites`' own
+ * docblock claim above (corrected there). After a renumbering migration, a
+ * phase's decisions were filed under whatever OTHER phase's new token
+ * happened to collide with its own stale value.
+ *
+ * Scoped to phase-QUALIFIED artifacts (`phaseArtifactTokenSpan`, the same
+ * reader-owned membership predicate `computeArtifactRenames` uses), not
+ * every file in the directory — a `phase:` value matching `sourceToken` in
+ * ANY spelling the readers accept (`03`, `3`, `02.1` — compared through
+ * `legacyLookupKey`, the same equivalence `matchBracketSourceDir` already
+ * uses) is rewritten to the phase's own new bracket token, via the same
+ * `extractFrontmatter`/`spliceFrontmatter` pair every other frontmatter
+ * rewrite in this file uses.
+ *
+ * `dependsOnRewrites` (already computed for this same directory) is reused
+ * rather than re-read: a file needing BOTH a depends_on rewrite and a phase
+ * rewrite gets its existing entry's `.to` spliced again in place — one
+ * combined write — instead of two independent passes racing to overwrite
+ * each other's change at apply time. A file needing only the phase rewrite
+ * gets a new entry appended. Returns the merged array in the exact shape
+ * `PhaseRename.dependsOnRewrites` already carries, so `applyMigration`'s
+ * existing apply/rollback loop needs no changes to consume it.
+ */
+function computePhaseFrontmatterRewrites(
+  oldDirPath: string,
+  dirName: string,
+  sourceToken: string,
+  targetToken: string,
+  fileRenames: ArtifactRename[],
+  dependsOnRewrites: DependsOnRewrite[],
+): DependsOnRewrite[] {
+  if (!sourceToken || sourceToken === targetToken) return dependsOnRewrites;
+
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(oldDirPath, { withFileTypes: true });
+  } catch {
+    return dependsOnRewrites;
+  }
+
+  const renameByOldName = new Map(fileRenames.map((r) => [r.oldName, r.newName]));
+  const byOldName = new Map(dependsOnRewrites.map((r) => [r.oldName, r]));
+  const sourceKey = legacyLookupKey(sourceToken);
+  const result = [...dependsOnRewrites];
+
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (phaseArtifactTokenSpan(entry.name, dirName) === null) continue;
+
+    const existing = byOldName.get(entry.name);
+    const filePath = path.join(oldDirPath, entry.name);
+    let originalContent: string;
+    let baseContent: string;
+    if (existing) {
+      originalContent = existing.from;
+      baseContent = existing.to;
+    } else {
+      try {
+        originalContent = fs.readFileSync(filePath, 'utf8');
+      } catch {
+        continue;
+      }
+      baseContent = originalContent;
+    }
+
+    let fm: Record<string, unknown>;
+    try {
+      fm = extractFrontmatter(originalContent, filePath);
+    } catch {
+      continue;
+    }
+    const rawPhase = fm['phase'];
+    if (typeof rawPhase !== 'string' && typeof rawPhase !== 'number') continue;
+    if (legacyLookupKey(String(rawPhase)) !== sourceKey) continue;
+
+    let baseFm: Record<string, unknown>;
+    try {
+      baseFm = extractFrontmatter(baseContent, filePath);
+    } catch {
+      continue;
+    }
+
+    let newContent: string;
+    try {
+      newContent = spliceFrontmatter(baseContent, { ...baseFm, phase: targetToken });
+    } catch (err) {
+      // Same refuse-before-any-write contract every other unrepresentable
+      // frontmatter rewrite in this file already follows.
+      throw new Error(
+        `Cannot rewrite phase frontmatter in ${JSON.stringify(entry.name)} for phase token change `
+        + `${JSON.stringify(sourceToken)} -> ${JSON.stringify(targetToken)}: ${(err as Error).message}`,
+      );
+    }
+
+    const finalName = renameByOldName.get(entry.name) ?? entry.name;
+    if (existing) {
+      existing.to = newContent;
+    } else {
+      const rewrite: DependsOnRewrite = { oldName: entry.name, finalName, from: originalContent, to: newContent };
+      result.push(rewrite);
+      byOldName.set(entry.name, rewrite);
+    }
+  }
+
+  return result;
 }
 
 /**
@@ -1277,17 +1396,25 @@ function computeBracketPlan(cwd: string): MigrationPlan {
       // this is still plan computation) so they keep matching their
       // phase's new bracket token after the directory itself is renamed.
       const fileRenames = computeArtifactRenames(dirName, oldDirPath, matchedToken, hit.mapping.token);
+      // #4698 Blocker 1 (round 2): rewrite depends_on references (in this
+      // same directory's own *-PLAN.md files) that name a sibling by the
+      // OLD token — see computeDependsOnRewrites' docblock. Also computed
+      // against the OLD path; nothing has moved yet.
+      const dependsOnRewrites = computeDependsOnRewrites(oldDirPath, matchedToken, hit.mapping.token, fileRenames);
       phases.push({
         oldId: hit.mapping.sourceToken,
         newId: `${code}.${pad2(hit.mapping.milestoneInt)}-${hit.mapping.token}`,
         oldDir: dirName,
         newDir,
         fileRenames,
-        // #4698 Blocker 1 (round 2): rewrite depends_on references (in this
-        // same directory's own *-PLAN.md files) that name a sibling by the
-        // OLD token — see computeDependsOnRewrites' docblock. Also computed
-        // against the OLD path; nothing has moved yet.
-        dependsOnRewrites: computeDependsOnRewrites(oldDirPath, matchedToken, hit.mapping.token, fileRenames),
+        // #4144 round 6 (W-phase): also rewrite any renamed artifact's
+        // `phase:` frontmatter scalar that still spells the OLD token — see
+        // computePhaseFrontmatterRewrites' docblock. Combined with the
+        // depends_on rewrites above (not a second independent write) so a
+        // file needing both never has one silently clobber the other.
+        dependsOnRewrites: computePhaseFrontmatterRewrites(
+          oldDirPath, dirName, matchedToken, hit.mapping.token, fileRenames, dependsOnRewrites,
+        ),
       });
     }
   }

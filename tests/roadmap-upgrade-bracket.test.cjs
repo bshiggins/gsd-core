@@ -50,6 +50,7 @@ const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { parsePlanDocument } = require('../gsd-core/bin/lib/plan-document.cjs');
 const { computeDependencyLevels, buildShortFormToId } = require('../gsd-core/bin/lib/phase.cjs');
 const { extractCanonicalPlanId } = require('../gsd-core/bin/lib/core-utils.cjs');
+const { extractFrontmatter } = require('../gsd-core/bin/lib/frontmatter.cjs');
 
 const FIXTURE_ROOT = path.join(__dirname, 'fixtures', 'roadmap-upgrade-bracket');
 const COMMAND_TIMEOUT_MS = 60000;
@@ -906,12 +907,28 @@ describe('roadmap upgrade --convention bracket', () => {
       assert.deepEqual(
         fs.readFileSync(path.join(gammaDir, '01-01-PLAN.md')),
         gammaBytesBefore.plan,
-        'renamed plan file must keep its exact original bytes',
+        'renamed plan file must keep its exact original bytes (it carries no phase: frontmatter to fix)',
       );
-      assert.deepEqual(
-        fs.readFileSync(path.join(gammaDir, '01-VERIFICATION.md')),
+      // #4144 round 6 (W-phase): 03-VERIFICATION.md's own `phase: "03"` is a
+      // STALE reference to Gamma's own OLD token after its 03 -> 01
+      // renumbering — history-digest keys decisions by this exact field, so
+      // it must be corrected to "01" (a real byte change), while the rest of
+      // the file (the markdown body) stays byte-identical.
+      const verificationAfter = fs.readFileSync(path.join(gammaDir, '01-VERIFICATION.md'), 'utf8');
+      assert.notDeepEqual(
+        Buffer.from(verificationAfter),
         gammaBytesBefore.verification,
-        'renamed verification file must keep its exact original bytes',
+        'the verification file\'s stale phase: "03" must actually change',
+      );
+      assert.equal(extractFrontmatter(verificationAfter).phase, '01', 'phase: must now name Gamma\'s own new token');
+      assert.equal(
+        extractFrontmatter(verificationAfter).status, 'passed',
+        'every other frontmatter key must survive untouched',
+      );
+      assert.equal(
+        verificationAfter.slice(verificationAfter.indexOf('\n# Phase 3')),
+        gammaBytesBefore.verification.toString('utf8').slice(gammaBytesBefore.verification.toString('utf8').indexOf('\n# Phase 3')),
+        'the markdown body after the frontmatter block must be byte-identical',
       );
 
       const betaDir = path.join(cwd, '.planning', 'phases', 'GSD.01-02-beta');
@@ -1105,10 +1122,19 @@ describe('roadmap upgrade --convention bracket', () => {
       const depsEntry = plan.phases.find((p) => p.oldDir === '03-deps');
       assert.ok(depsEntry, 'fixture must produce the 03-deps rename');
       assert.equal(depsEntry.newDir, 'GSD.02-01-deps');
-      assert.equal(depsEntry.dependsOnRewrites.length, 1, 'exactly one PLAN file needs a depends_on rewrite');
-      assert.equal(depsEntry.dependsOnRewrites[0].oldName, '03-02-PLAN.md');
-      assert.equal(depsEntry.dependsOnRewrites[0].finalName, '01-02-PLAN.md');
-      assert.deepEqual(parsePlanDocument(depsEntry.dependsOnRewrites[0].to).dependsOn, ['01-01']);
+      // #4144 round 6 (W-phase): every phase-qualified file in this
+      // directory carries a stale `phase: "03"` scalar, so all three get a
+      // rewrite entry here now — 03-02-PLAN.md's combines its depends_on
+      // fix and its own phase fix into ONE splice.
+      assert.equal(depsEntry.dependsOnRewrites.length, 3, 'all three phase-qualified files need a rewrite');
+      const byOldName = new Map(depsEntry.dependsOnRewrites.map((r) => [r.oldName, r]));
+      const dependentRewrite = byOldName.get('03-02-PLAN.md');
+      assert.ok(dependentRewrite, 'the dependent plan must have a rewrite entry');
+      assert.equal(dependentRewrite.finalName, '01-02-PLAN.md');
+      assert.deepEqual(parsePlanDocument(dependentRewrite.to).dependsOn, ['01-01']);
+      assert.equal(extractFrontmatter(dependentRewrite.to).phase, '01', 'the dependent plan\'s own phase scalar must also be fixed');
+      assert.equal(extractFrontmatter(byOldName.get('03-01-PLAN.md').to).phase, '01', 'the predecessor plan\'s phase scalar must be fixed');
+      assert.equal(extractFrontmatter(byOldName.get('03-01-SUMMARY.md').to).phase, '01', 'the summary\'s phase scalar must be fixed');
       assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'dry-run must write nothing');
     });
 
@@ -2461,6 +2487,85 @@ describe('roadmap upgrade --convention bracket', () => {
       assertExited(result, 1, 'empty target collision dry-run');
       assert.match(result.stderr, /GSD\.01-02-beta/);
       assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'a refusal must write nothing, even for an empty target');
+    });
+  });
+
+  // #4144 round 6 (W-phase): a renamed artifact's `phase:` frontmatter kept
+  // spelling the OLD legacy token, and `history-digest` (src/commands.cts,
+  // `cmdHistoryDigest`) keys phases and decisions by that exact scalar — so
+  // after a renumbering migration (a decimal sub-phase shifts every later
+  // phase's counter, the exact shape the shipped template itself produces),
+  // a phase's decisions were filed under a DIFFERENT phase's new token.
+  describe('rewrites phase frontmatter in renamed artifacts (#4144 round 6 W-phase)', () => {
+    function buildRenumberingFixture() {
+      const cwd = materializeEmptyFixture('phasefrontmatter');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'config.json'),
+        JSON.stringify({ project_code: 'GSD', phase_id_convention: null }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v1.0 Core',
+          '',
+          '### Phase 1: Alpha',
+          '### Phase 2: Beta',
+          '### Phase 2.1: CriticalFix',
+          '### Phase 3: Gamma',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      for (const dir of ['01-alpha', '02-beta', '02.1-critical-fix']) {
+        fs.mkdirSync(path.join(phasesDir, dir), { recursive: true });
+        fs.writeFileSync(path.join(phasesDir, dir, `${dir.split('-')[0]}-01-PLAN.md`), '---\nphase: "x"\n---\n', 'utf8');
+      }
+      // Gamma is legacy "3" but the decimal 2.1 insertion between it and Beta
+      // shifts its counter-assigned bracket token to "04" instead of "03" —
+      // the exact renumbering shape that makes a stale phase: field collide
+      // with CriticalFix's own new "03" token.
+      const gammaDir = path.join(phasesDir, '03-gamma');
+      fs.mkdirSync(gammaDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(gammaDir, '03-01-SUMMARY.md'),
+        '---\nphase: "03"\nplan: "01"\nstatus: complete\nkey-decisions:\n  - "Gamma chose X"\n---\n\n# Summary\n',
+        'utf8',
+      );
+      fs.writeFileSync(path.join(gammaDir, '03-01-PLAN.md'), '---\nphase: "03"\nplan: "01"\n---\n\n# Plan\n', 'utf8');
+      return cwd;
+    }
+
+    function runHistoryDigest(cwd) {
+      return JSON.parse(runNode(
+        [TOOLS_PATH, 'history-digest'],
+        { cwd, env: { ...process.env, ...helpers.TEST_ENV_BASE, HOME: cwd }, timeoutMs: COMMAND_TIMEOUT_MS },
+      ).stdout);
+    }
+
+    test('a renumbered phase\'s decisions file under its OWN new token, not a colliding sibling\'s', () => {
+      const cwd = buildRenumberingFixture();
+
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'renumbering dry-run');
+      const gammaEntry = plan.phases.find((p) => p.oldDir === '03-gamma');
+      assert.ok(gammaEntry, 'fixture must produce the 03-gamma rename');
+      assert.equal(gammaEntry.newDir, 'GSD.01-04-gamma', 'the decimal insertion must shift Gamma to bracket token 04');
+      const summaryRewrite = gammaEntry.dependsOnRewrites.find((r) => r.oldName === '03-01-SUMMARY.md');
+      assert.ok(summaryRewrite, 'the summary\'s stale phase: field must produce a rewrite entry');
+      assert.equal(extractFrontmatter(summaryRewrite.to).phase, '04', 'phase: must be corrected to Gamma\'s own new token');
+
+      const applied = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(applied, 0, 'renumbering apply');
+
+      const digest = runHistoryDigest(cwd);
+      assert.deepEqual(
+        digest.decisions,
+        [{ phase: '04', decision: 'Gamma chose X' }],
+        'the decision must be filed under Gamma\'s own new token, never under 03 (CriticalFix\'s new token)',
+      );
     });
   });
 });
