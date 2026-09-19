@@ -415,7 +415,16 @@ describe('roadmap upgrade --convention bracket', () => {
     assert.equal(config.phase_id_convention, 'bracket');
   });
 
-  test('a mid-migration rename failure restores an ignored planning tree byte-for-byte', () => {
+  // #4144 round 6 (W-collision): a target directory occupied between the
+  // dry-run and a fresh `--apply` invocation used to surface only at APPLY
+  // time (a mid-rename ENOTEMPTY, caught and rolled back by applyMigration's
+  // own try/catch). `computeMigrationPlan` now checks every target directory
+  // for existence itself, and `--apply` recomputes the plan fresh before
+  // touching anything — so this exact race is now refused at PLAN time,
+  // before applyMigration's rename loop ever starts, and never reaches the
+  // "Migration failed and rolled back" wrapper at all. Nothing is written
+  // either way; this test now proves the EARLIER, better-scoped refusal.
+  test('a target directory occupied since dry-run is refused at plan time on --apply, before any rename', () => {
     const cwd = materializeFixture('legacy-multi-milestone');
     const dryRunPlan = parseDryRun(runBracketUpgrade(cwd), 'rollback setup dry-run');
     assert.ok(dryRunPlan.phases.length >= 2, 'fixture must provide a rename before the failing rename');
@@ -426,12 +435,13 @@ describe('roadmap upgrade --convention bracket', () => {
 
     const result = runBracketUpgrade(cwd, ['--apply']);
 
-    assertExited(result, 1, 'mid-migration rollback');
-    assert.match(result.stderr, /Migration failed and rolled back/);
+    assertExited(result, 1, 'plan-time directory-collision refusal on --apply');
+    assert.match(result.stderr, /directory already exists/);
+    assert.ok(result.stderr.includes(dryRunPlan.phases[1].newDir), 'the refusal must name the colliding directory');
     assert.deepEqual(
       snapshotTree(path.join(cwd, '.planning')),
       before,
-      'ignored planning tree must be byte-restored after rollback',
+      'a plan-time refusal must write nothing — no rename, no rollback needed',
     );
   });
 
@@ -2401,6 +2411,56 @@ describe('roadmap upgrade --convention bracket', () => {
       assert.match(after, /### \[GSD\.01\] 01: Alpha\r\n/);
       assert.match(after, /### \[GSD\.01\] 02 \(Cluster B\): Beta\r\n/);
       assert.match(after, /### \[GSD\.01\] 03: Gamma\r\n/);
+    });
+  });
+
+  // #4144 round 6 (W-collision): the plan never checked that a target
+  // directory name was free — dry-run reported a clean plan `apply` could
+  // not perform (non-empty target: ENOTEMPTY mid-apply, rollback restores)
+  // or silently replaced (empty target: POSIX rename semantics).
+  describe('refuses target directory collisions at plan time (#4144 round 6 W-collision)', () => {
+    function buildCollisionFixture(preExisting) {
+      const cwd = materializeEmptyFixture('collision');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'config.json'),
+        JSON.stringify({ project_code: 'GSD', phase_id_convention: null }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        '# Roadmap\n\n## v1.0 Core\n\n### Phase 1: Alpha\n\n### Phase 2: Beta\n',
+        'utf8',
+      );
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      for (const dir of ['01-alpha', '02-beta']) {
+        fs.mkdirSync(path.join(phasesDir, dir), { recursive: true });
+        fs.writeFileSync(path.join(phasesDir, dir, '01-01-PLAN.md'), '---\nphase: "01"\n---\n', 'utf8');
+      }
+      fs.mkdirSync(path.join(phasesDir, 'GSD.01-02-beta'), { recursive: true });
+      preExisting(path.join(phasesDir, 'GSD.01-02-beta'));
+      return cwd;
+    }
+
+    test('a pre-existing NON-EMPTY target directory refuses at dry-run, nothing written', () => {
+      const cwd = buildCollisionFixture((dir) => fs.writeFileSync(path.join(dir, 'STALE.md'), 'stale\n', 'utf8'));
+      const before = snapshotTree(cwd, { skipGit: true });
+
+      const result = runBracketUpgrade(cwd);
+
+      assertExited(result, 1, 'non-empty target collision dry-run');
+      assert.match(result.stderr, /GSD\.01-02-beta/);
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'a refusal must write nothing');
+    });
+
+    test('a pre-existing EMPTY target directory also refuses at dry-run, never silently replaced', () => {
+      const cwd = buildCollisionFixture(() => {});
+      const before = snapshotTree(cwd, { skipGit: true });
+
+      const result = runBracketUpgrade(cwd);
+
+      assertExited(result, 1, 'empty target collision dry-run');
+      assert.match(result.stderr, /GSD\.01-02-beta/);
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'a refusal must write nothing, even for an empty target');
     });
   });
 });

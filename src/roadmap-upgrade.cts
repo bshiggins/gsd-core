@@ -1292,6 +1292,28 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     }
   }
 
+  // #4144 round 6 (W-collision): the plan never checked that a TARGET
+  // directory name was free, so a dry-run reported a clean plan `apply`
+  // could not perform (a pre-existing NON-EMPTY target fails mid-apply with
+  // ENOTEMPTY, rollback restores) or silently REPLACED (a pre-existing EMPTY
+  // target — POSIX rename semantics). Every other collision class in this
+  // file (artifact renames above, token collisions in assignBracketTokens,
+  // depends_on aliases) is refused at PLAN time; this closes the one
+  // remaining seam left to apply. A target occupied by another directory
+  // THIS SAME PLAN is also renaming away is not a collision — that directory
+  // vacates the name as part of this same migration.
+  const renamedOldDirs = new Set(phases.map((rename) => rename.oldDir));
+  for (const rename of phases) {
+    if (renamedOldDirs.has(rename.newDir)) continue;
+    if (fs.existsSync(path.join(phasesDir, rename.newDir))) {
+      throw new Error(
+        `Cannot migrate phase directory ${JSON.stringify(rename.oldDir)} to ${JSON.stringify(rename.newDir)}: `
+        + 'a directory already exists at that path and is not itself part of this migration. Refusing '
+        + 'rather than overwriting or colliding with it at apply time.',
+      );
+    }
+  }
+
   const roadmapEdits: RoadmapEdit[] = [];
   for (const entry of sourcePhases) {
     const mapping = idMapping.get(entry.lineIndex);
