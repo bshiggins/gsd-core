@@ -58,6 +58,7 @@ const {
   BRACKET_ID_SRC,
   BRACKET_PROJECT_CODE_SRC,
   isBracketPhaseTokenRepresentable,
+  isSentinelPhaseId,
   normalizePhaseName,
   OPTIONAL_PHASE_TAG_SOURCE,
   PHASE_NUMBER_TOKEN_SOURCE,
@@ -578,6 +579,23 @@ function assignBracketTokens(entries: BracketSourceEntry[], lines: string[]): Ma
   return mappings;
 }
 
+/**
+ * #4144 round 6 B1: a legacy phase token (raw, as spelled in a `### Phase N:`
+ * heading) that the readers' own sentinel classifier (`isSentinelPhaseId`,
+ * legacy/bare-leading-int branch — the SAME rule `listAllPhaseDirs` and every
+ * phase count already exclude `999.x`/`0.x` sentinels through) treats as a
+ * sentinel. Returns the sentinel's own bracket MILESTONE integer (0 or 999)
+ * so the caller can attribute the phase to that milestone directly, bypassing
+ * whatever `## vN.M` section happens to enclose the heading on disk — under
+ * bracket, a sentinel's identity IS the sentinel milestone (`[CODE.999]` /
+ * `[CODE.00]`), never the real milestone section it was filed under.
+ */
+function legacySentinelMilestone(sourceToken: string): number | null {
+  if (!isSentinelPhaseId(sourceToken)) return null;
+  const match = stripProjectCodePrefix(sourceToken).match(/^0*(\d+)/);
+  return match ? parseInt(match[1], 10) : null;
+}
+
 function asciiInteger(segment: string): number | null {
   if (segment.length === 0) return null;
   for (const character of segment) {
@@ -1039,6 +1057,15 @@ function computeBracketPlan(cwd: string): MigrationPlan {
   const unattributedLegacy: BracketSourceEntry[] = [];
   for (const entry of sourcePhases) {
     if (entry.source !== 'legacy') continue;
+    // #4144 round 6 B1: a legacy sentinel (999.x icebox / 0.x backlog) is
+    // NEVER attributed to the enclosing `## vN.M` section — it belongs to
+    // its own sentinel milestone regardless of which real milestone section
+    // it happens to be filed under on disk.
+    const sentinelMilestone = legacySentinelMilestone(entry.sourceToken!);
+    if (sentinelMilestone !== null) {
+      entry.milestoneInt = sentinelMilestone;
+      continue;
+    }
     const containing = sectionsForOffset(lineOffsets[entry.lineIndex] ?? -1);
     const attributed = containing.find((section) => section.milestoneInt !== null);
     if (attributed?.milestoneInt !== null && attributed?.milestoneInt !== undefined) {

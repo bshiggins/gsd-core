@@ -35,7 +35,7 @@ const {
   computeDependsOnRewrites,
 } = require('../gsd-core/bin/lib/roadmap-upgrade.cjs');
 const { readVerificationStatus } = require('../gsd-core/bin/lib/verification.cjs');
-const { scopeToPhase, matchPhaseDirs } = require('../gsd-core/bin/lib/phase-id.cjs');
+const { scopeToPhase, matchPhaseDirs, isSentinelPhaseId } = require('../gsd-core/bin/lib/phase-id.cjs');
 // #4144 round 5 Blocker 1: hasPhaseEntries and its exported single-owner
 // phase-heading predicate — the READERS' OWN phase-heading grammar the
 // bracket migrator's "phase-like but unparsed" refusal must be gated on
@@ -1986,6 +1986,98 @@ describe('roadmap upgrade --convention bracket', () => {
         + 'so its alias must now be registered and this dependency rewritten',
       );
       assert.deepEqual(parsePlanDocument(followupRewrite.to).dependsOn, ['01']);
+    });
+  });
+
+  // #4144 round 6 B1: legacy sentinel phases (`Phase 999.x` icebox, `Phase
+  // 0.x` backlog/pre-milestone) are excluded from every phase COUNT under the
+  // legacy convention (`isSentinelPhaseId`, phase-id.cts). Folding them into
+  // the enclosing real milestone's own counter (the pre-fix behavior) both
+  // consumes a real milestone's counter slot and makes `roadmap analyze`
+  // count phases the legacy roadmap never counted. A sentinel must be lifted
+  // into the bracket sentinel MILESTONE the grammar defines for it instead.
+  describe('lifts legacy sentinel phases into the bracket sentinel milestones (#4144 round 6 B1)', () => {
+    function buildSentinelFixture() {
+      const cwd = materializeEmptyFixture('sentinel');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'config.json'),
+        JSON.stringify({ project_code: 'GSD', phase_id_convention: null }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v2.0 Scale',
+          '',
+          '### Phase 5: Real',
+          '**Goal**: r',
+          '',
+          '### Phase 6: Also real',
+          '**Goal**: r2',
+          '',
+          '### Phase 999.1: Icebox idea',
+          '**Goal**: later',
+          '',
+          '### Phase 0.5: Bootstrap note',
+          '**Goal**: pre',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      for (const [dir, num] of [
+        ['05-real', '05'],
+        ['06-also-real', '06'],
+        ['999.1-icebox-idea', '999.1'],
+        ['0.5-bootstrap-note', '0.5'],
+      ]) {
+        fs.mkdirSync(path.join(phasesDir, dir), { recursive: true });
+        fs.writeFileSync(
+          path.join(phasesDir, dir, `${num}-01-PLAN.md`),
+          `---\nphase: "${num}"\nplan: "01"\n---\n# Plan\n`,
+          'utf8',
+        );
+      }
+      return cwd;
+    }
+
+    test('999.x and 0.x lift into their own sentinel bracket milestone, never the enclosing real milestone', () => {
+      const cwd = buildSentinelFixture();
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'sentinel dry-run');
+
+      assert.deepEqual(
+        plan.phases
+          .map(({ oldDir, newDir }) => ({ oldDir, newDir }))
+          .sort((a, b) => a.oldDir.localeCompare(b.oldDir)),
+        [
+          { oldDir: '0.5-bootstrap-note', newDir: 'GSD.00-01-bootstrap-note' },
+          { oldDir: '05-real', newDir: 'GSD.02-01-real' },
+          { oldDir: '06-also-real', newDir: 'GSD.02-02-also-real' },
+          { oldDir: '999.1-icebox-idea', newDir: 'GSD.999-01-icebox-idea' },
+        ].sort((a, b) => a.oldDir.localeCompare(b.oldDir)),
+        'the real milestone keeps exactly its own two phases; sentinels move to their own milestones',
+      );
+      assert.ok(plan.roadmapEdits.some(({ to }) => to === '### [GSD.999] 01: Icebox idea'));
+      assert.ok(plan.roadmapEdits.some(({ to }) => to === '### [GSD.00] 01: Bootstrap note'));
+      assert.ok(plan.roadmapEdits.some(({ to }) => to === '### [GSD.02] 01: Real'));
+      assert.ok(plan.roadmapEdits.some(({ to }) => to === '### [GSD.02] 02: Also real'));
+
+      assert.equal(isSentinelPhaseId('GSD.999-01-icebox-idea', 'bracket'), true);
+      assert.equal(isSentinelPhaseId('GSD.00-01-bootstrap-note', 'bracket'), true);
+
+      const applied = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(applied, 0, 'sentinel apply');
+      const analyzed = JSON.parse(runNode(
+        [TOOLS_PATH, 'roadmap', 'analyze'],
+        { cwd, env: { ...process.env, ...helpers.TEST_ENV_BASE, HOME: cwd }, timeoutMs: COMMAND_TIMEOUT_MS },
+      ).stdout);
+      assert.deepEqual(
+        analyzed.phases.map((p) => p.number).sort(),
+        ['01', '02'],
+        'roadmap analyze must still count exactly the two real phases — sentinels excluded, same as before migration',
+      );
     });
   });
 });
