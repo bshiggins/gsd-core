@@ -1371,6 +1371,50 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(snapshotTree(planning()), before);
   });
 
+  // #4304 round 11 (W1): the sub-phase safety guard must share the read
+  // side's CommonMark fence handling. A heading-shaped example inside a
+  // fence is documentation, not a child phase, and cannot block removal.
+  test('does not treat a fenced example sub-phase as a real child', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '```md',
+        '### [CK.02] 02.01: Example subphase',
+        '```',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', []],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+
+    assert.deepEqual(fs.readdirSync(planning('phases')).sort(), ['CK.02-01-one', 'CK.02-02-three']);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    assert.equal(roadmap.includes('### [CK.02] 02: Two'), false);
+    assert.equal(roadmap.includes('### [CK.02] 02: Three'), true);
+  });
+
   test('removing a bracket phase\'s own sub-phase directly is unaffected by the parent-sub-phase refusal', () => {
     replaceSeed(
       [

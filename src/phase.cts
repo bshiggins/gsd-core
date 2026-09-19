@@ -115,7 +115,7 @@ import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
 import { transitionCore } from './state-transition.cjs';
 import { updateTableCell, deleteTableRow, escapeCell, splitTableRow } from './markdown-table.cjs';
-import { deleteSection, updateBullet, tokenizeHeadings, type HeadingToken } from './markdown-sectionizer.cjs';
+import { deleteSection, updateBullet, tokenizeHeadings, scanFencedBlocks, type HeadingToken } from './markdown-sectionizer.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- uat-predicate.cjs is an export= CommonJS module
 import uatPredicate = require('./uat-predicate.cjs');
 const { evaluateUatPassed } = uatPredicate;
@@ -2858,9 +2858,9 @@ function computeBracketRenumberMapping(
  * in ROADMAP while the NEXT phase's sub-phases renumbered onto the SAME
  * identities, manufacturing duplicates. Scans the SAME two sources
  * computeBracketRenumberMapping unions (the directory scan, and every
- * heading/checklist/progress line inside the active milestone's own
- * ranges) so this refusal can never see a different phase inventory than
- * the rename/rewrite that would otherwise follow it.
+ * heading/checklist/progress line outside CommonMark fences and inside the
+ * active milestone's own ranges) so this refusal can never see a different
+ * phase inventory than the rename/rewrite that would otherwise follow it.
  */
 function bracketPhaseOwnSubphases(
   phasesDir: string,
@@ -2878,8 +2878,18 @@ function bracketPhaseOwnSubphases(
   for (const { id } of bracketIdsInContext(phasesDir, context)) {
     record(Number(id.phase), id.subphase === undefined ? undefined : Number(id.subphase));
   }
-  for (const line of splitRoadmapLineRecords(roadmapContent)) {
+  const roadmapLines = splitRoadmapLineRecords(roadmapContent);
+  const fencedLineNumbers = new Set<number>();
+  const rawLines = roadmapContent.split('\n');
+  for (const block of scanFencedBlocks(rawLines)) {
+    const lastIndex = block.closeLineIdx === -1 ? rawLines.length - 1 : block.closeLineIdx;
+    for (let index = block.openLineIdx; index <= lastIndex; index++) {
+      fencedLineNumbers.add(index + 1);
+    }
+  }
+  for (const line of roadmapLines) {
     if (!lineStartsInActiveMilestone(line.start, ranges)) continue;
+    if (fencedLineNumbers.has(line.lineNumber)) continue;
     const { id } = classifyBracketOwnedLine(line.text);
     if (!id || id.project !== context.project || id.milestone !== context.milestone) continue;
     record(Number(id.phase), id.subphase === undefined ? undefined : Number(id.subphase));
