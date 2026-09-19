@@ -2733,6 +2733,92 @@ describe('roadmap upgrade --convention bracket', () => {
     });
   });
 
+  // #4144 round 8 I1: Tier 2 (non-bold) checklist matching had no token
+  // boundary requirement after the phase number at all, so prose that
+  // merely STARTS WITH a phase number and continues as a hyphenated
+  // compound word converted too — `- [ ] Phase 1-on-1 meetings` became
+  // `- [ ] [GSD.01] 01-on-1 meetings`. Mirrors phase.cts:4358-4361's
+  // checkbox-branch separator (colon/em-dash/en-dash/hyphen, the same
+  // family BULLET_PHASE_LINE_PATTERN already accepts) plus the ordinary
+  // "whitespace before a plain word" case a bare to-do bullet needs, rather
+  // than inventing a fourth grammar.
+  describe('requires a token boundary before renumbering a non-bold bullet (#4144 round 8 I1)', () => {
+    function buildTier2BoundaryFixture() {
+      const cwd = materializeEmptyFixture('tier2-boundary');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'config.json'),
+        JSON.stringify({ project_code: 'GSD', phase_id_convention: null }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v1.0 Core',
+          '',
+          '- [ ] **Phase 1: Alpha**',
+          '- [ ] **Phase 2: Beta**',
+          '',
+          '### Phase 1: Alpha',
+          '### Phase 2: Beta',
+          '',
+          '## Notes',
+          '',
+          '- [ ] Phase 2 retrospective',
+          '- [ ] Phase 1 demo video',
+          '- [ ] Ask Phase 3 owner',
+          '- [ ] Phase 3 kickoff (no such phase)',
+          '- [ ] Phase 1-on-1 meetings',
+          '- [ ] Phase 10 planning',
+          '- [ ] Phase 2: write the retro doc',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      fs.mkdirSync(path.join(phasesDir, '01-alpha'), { recursive: true });
+      fs.mkdirSync(path.join(phasesDir, '02-beta'), { recursive: true });
+      return cwd;
+    }
+
+    test('a hyphenated compound word right after the number is left byte-identical; ordinary prose still converts', () => {
+      const cwd = buildTier2BoundaryFixture();
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'Tier 2 token boundary dry-run');
+      const editFor = (text) => plan.roadmapEdits.find(({ from }) => from === text);
+
+      assert.equal(
+        plan.roadmapEdits.some(({ from }) => from === '- [ ] Phase 1-on-1 meetings'),
+        false,
+        'the number is glued directly onto a hyphenated word — no token boundary, left byte-identical',
+      );
+      assert.equal(
+        plan.roadmapEdits.some(({ from }) => from === '- [ ] Ask Phase 3 owner'),
+        false,
+        'not anchored at the bullet start — never matched at all',
+      );
+      assert.equal(
+        plan.roadmapEdits.some(({ from }) => from === '- [ ] Phase 3 kickoff (no such phase)'),
+        false,
+        'no "Phase 3" heading exists in this section — unresolved, left byte-identical',
+      );
+      assert.equal(
+        plan.roadmapEdits.some(({ from }) => from === '- [ ] Phase 10 planning'),
+        false,
+        'no "Phase 10" heading exists anywhere — unresolved, left byte-identical',
+      );
+
+      assert.equal(editFor('- [ ] Phase 2 retrospective')?.to, '- [ ] [GSD.01] 02 retrospective', 'space then a plain word is a valid boundary');
+      assert.equal(editFor('- [ ] Phase 1 demo video')?.to, '- [ ] [GSD.01] 01 demo video', 'space then a plain word is a valid boundary');
+      assert.equal(editFor('- [ ] Phase 2: write the retro doc')?.to, '- [ ] [GSD.01] 02: write the retro doc', 'a colon immediately after the number is still a valid boundary');
+
+      const applied = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(applied, 0, 'Tier 2 token boundary apply');
+      const roadmap = fs.readFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), 'utf8');
+      assert.match(roadmap, /- \[ \] Phase 1-on-1 meetings/, 'the hyphenated-compound bullet stays byte-identical on disk');
+    });
+  });
+
   // #4144 round 7 W1: the B3 tie-break slugified the heading NAME with
   // `generateSlugInternal(text, null)` — never accounting for the way the
   // HARNESS ITSELF derives a directory's own slug. `phase insert` writes

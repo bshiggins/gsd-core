@@ -1649,6 +1649,32 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     'i',
   );
 
+  // #4144 round 8 I1: `legacyChecklistRe` above requires nothing at all
+  // after the number/tag — deliberately, since Tier 1 (reader-recognized,
+  // `isReaderRecognizedBullet` below) must match exactly what the readers'
+  // own grammar matches, and neither `roadmap.cts:770`'s checklistPattern
+  // nor `phase.cts`'s heading branch require a boundary there either (a
+  // bold `**Phase 1-on-1 meetings**` is read by every reader as naming
+  // phase 1, trailing text and all — narrowing the MATCH itself would
+  // silently un-recognize exactly the reader-recognized bullets round 6 B4
+  // exists to keep converting). Tier 2 (this migrator's own wider,
+  // non-bold tolerance) has no such reader grammar to mirror, so it applies
+  // its own separate, narrower boundary check below: mirroring
+  // `phase.cts:4358-4361`'s checkbox-branch separator (colon/em-dash/
+  // en-dash/hyphen) and `BULLET_PHASE_LINE_PATTERN`'s dash family rather
+  // than inventing a fourth grammar, plus the ordinary "end of a plain
+  // word" case a bare-prose to-do bullet needs (`Phase 2 retrospective`).
+  // Without it, Tier 2 renumbered prose that merely STARTS WITH a phase
+  // number and continues as a hyphenated compound word, e.g. `Phase
+  // 1-on-1 meetings` -> `[GSD.01] 01-on-1 meetings` — the hyphen glued
+  // directly onto the number with no separating whitespace is the one shape
+  // every boundary alternative below rejects; a colon/dash preceded by
+  // whitespace (or attached directly, for colon/em-dash/en-dash only, the
+  // same tolerance the heading and bullet-line grammars already give those
+  // three), a bold-close `**`, end of line, or whitespace before an
+  // ordinary (non-hyphen) word all still pass.
+  const TIER2_TOKEN_BOUNDARY_RE = /^(?:\s*[:—–]|\s+-|\*\*|$|\s+[^\s-])/;
+
   // #4144 round 6 (C-fence): fence handling was heading-only —
   // parseBracketSourcePhases skips fenced lines via `fencedLineIndices`
   // (round 5 W4), but this checklist loop walked raw `lines` with no fence
@@ -1694,6 +1720,16 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     // resolves (keeps the long-standing non-bold conversion case green),
     // left byte-identical rather than refused when it does not.
     const isReaderRecognizedBullet = /\*\*$/.test(legacyChecklist[1]);
+    // #4144 round 8 I1: Tier 2 additionally requires a token boundary right
+    // after the number/tag (see `TIER2_TOKEN_BOUNDARY_RE` above) — Tier 1
+    // never does, since narrowing the shared match itself would silently
+    // un-recognize a bold bullet the readers' own ungated grammar still
+    // reads as naming that phase. A Tier-2 bullet that fails the boundary
+    // (`- [ ] Phase 1-on-1 meetings`) is treated exactly like one no reader
+    // recognizes at all: left byte-identical, never resolved or refused.
+    if (!isReaderRecognizedBullet && !TIER2_TOKEN_BOUNDARY_RE.test(line.slice(legacyChecklist[0].length))) {
+      continue;
+    }
     let resolved: { token: string; milestoneInt: number } | undefined;
     // #4144 round 7 B1: a checklist bullet naming a SENTINEL phase (999.x
     // icebox / 0.x backlog) bypasses section attribution entirely — the same
