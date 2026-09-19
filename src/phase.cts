@@ -2998,7 +2998,25 @@ function phaseIdFromOwnedLineMatch(match: RegExpExecArray | null): BracketRoadma
     // identity-recognition gap `foldBracketId`'s own doc comment in
     // phase-id.cts warns about ("fold before any identity operation; never
     // fold for display"). This is an identity operation.
-    return parsePhaseId(`[${foldBracketId(match[1])}] ${match[2]}`);
+    //
+    // #4304 round 8 (B1): the captured NUMBER needs the exact same
+    // treatment. BRACKET_OWNED_PHASE_TOKEN_CAPTURE_SRC is deliberately
+    // TOLERANT (PHASE_NUMBER_TOKEN_SOURCE, the read side's own grammar) so it
+    // captures "2", "002", and "02.1" — the same non-canonical spellings
+    // `roadmap get-phase`/`analyze`/`validate` and this PR's own `phase
+    // insert`/`phase add` already treat as real phases — but parsePhaseId's
+    // canonicality check (render(parse(x)) === x) throws on every one of
+    // them, so the line silently classified as 'other' before this line's
+    // owning heading/checklist/progress row could ever be recognized.
+    // Canonicalize through the SAME adapter the bare-token argument path
+    // uses (phase-id-display's `phaseToken`, per-segment pad2) BEFORE
+    // parsePhaseId, exactly as `canonicalizeBracketPhaseArgument` already
+    // does for a CLI argument. A token phaseToken cannot canonicalize (a
+    // legacy M-NN letter suffix) falls through unchanged, which still fails
+    // parsePhaseId's own grammar precisely as before — this only widens
+    // acceptance to spellings phaseToken itself accepts.
+    const canonicalNumber = phaseToken(match[2]) ?? match[2];
+    return parsePhaseId(`[${foldBracketId(match[1])}] ${canonicalNumber}`);
   } catch {
     return null;
   }
@@ -3056,17 +3074,30 @@ function replaceQualifiedBracketReference(
   // the intro from the single-owner helper (instead of `[ \t]+` and a
   // case-sensitive bracket) and compiling with `i` is what makes this
   // rewriter accept exactly what the classifier above, `roadmap get-phase`,
-  // and `roadmap analyze` already do. Capture whichever spelling the line
-  // actually used (group 1) and re-emit it verbatim, so a labeled mention
-  // stays labeled, a bare one stays bare, and the line's own case survives.
+  // and `roadmap analyze` already do.
+  //
+  // #4304 round 8 (B1): the NUMBER itself used to be anchored on the
+  // canonical literal (`escapeRegex(oldNumber)`), so "[CK.02] 3" never
+  // matched a mapping entry whose canonical oldNumber is "03" — the exact
+  // half-applied-remove defect. Capture the number through the SAME
+  // tolerant grammar the read side and classifyBracketOwnedLine use
+  // (PHASE_NUMBER_TOKEN_SOURCE) and canonicalize it (phaseToken) before
+  // comparing to oldNumber, so "3", "003", and "02.1"-style captures are all
+  // recognized as the SAME identity a canonical "03"/"02.01" is. GSD never
+  // WRITES a non-canonical spelling, so a matched rewrite always emits the
+  // canonical newNumber — a renumbered mention is not "preserved" in the
+  // old, non-canonical spelling it happened to be written in. The intro's
+  // own spelling (label, case, spacing) is still captured and re-emitted
+  // verbatim (group 1).
   const qualifiedRe = new RegExp(
-    `(?<![${boundary}])(${bracketQualifiedIntroSrcFor(oldId.project, oldId.milestone)})${escapeRegex(oldNumber)}(?![${boundary}])`,
+    `(?<![${boundary}])(${bracketQualifiedIntroSrcFor(oldId.project, oldId.milestone)})(${PHASE_NUMBER_TOKEN_SOURCE})(?![${boundary}])`,
     'gi',
   );
   const oldDash = dashBracketPhaseId(oldId);
   const newDash = dashBracketPhaseId(newId);
   return line
-    .replace(qualifiedRe, (_match: string, intro: string) => `${intro}${newNumber}`)
+    .replace(qualifiedRe, (matchText: string, intro: string, numberTok: string) =>
+      (phaseToken(numberTok) === oldNumber ? `${intro}${newNumber}` : matchText))
     .replace(
       new RegExp(`(?<![${boundary}])${escapeRegex(oldDash)}(?![${boundary}])`, 'g'),
       () => newDash,
@@ -3261,11 +3292,22 @@ function bracketQualifiedMentionedInLine(line: string, id: BracketRoadmapPhaseId
   // this, a labeled/case/no-space mention of the REMOVED identity itself
   // ("**Depends on:** [ck.02] phase 02", which no rewriter ever touches
   // because 02 no longer exists) was never recognized as dangling.
+  //
+  // #4304 round 8 (B1): the NUMBER was still anchored on the canonical
+  // literal, so "**Depends on:** [CK.02] 2" (a non-canonical mention of the
+  // just-removed identity) was invisible here too — capture it through the
+  // same tolerant PHASE_NUMBER_TOKEN_SOURCE grammar the rewriter above now
+  // uses, and canonicalize (phaseToken) before comparing to this id's own
+  // canonical number.
+  const targetNumber = bracketPhaseNumberSrc(id);
   const qualifiedRe = new RegExp(
-    `${bracketQualifiedIntroSrcFor(id.project, id.milestone)}${escapeRegex(bracketPhaseNumberSrc(id))}${tolerant}`,
-    'i',
+    `${bracketQualifiedIntroSrcFor(id.project, id.milestone)}(${PHASE_NUMBER_TOKEN_SOURCE})${tolerant}`,
+    'gi',
   );
-  if (qualifiedRe.test(line)) return true;
+  let match: RegExpExecArray | null;
+  while ((match = qualifiedRe.exec(line)) !== null) {
+    if (phaseToken(match[1]) === targetNumber) return true;
+  }
   const dash = dashBracketPhaseId(id);
   return new RegExp(`(?<![A-Za-z0-9.-])${escapeRegex(dash)}${tolerant}`).test(line);
 }

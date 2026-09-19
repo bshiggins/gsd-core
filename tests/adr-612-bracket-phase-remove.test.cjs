@@ -1867,4 +1867,175 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(activeProgress.includes('| [CK.02] 03 | 0/1 | Planned |'), false);
     assert.deepEqual(out.references_left_untouched, []);
   });
+
+  // #4304 round 8 (B1): round 7 folded the CODE (foldBracketId) before
+  // parsePhaseId but passed the captured NUMBER through verbatim, so a
+  // non-canonical ROADMAP spelling ("[CK.02] 2:", not the canonical
+  // "[CK.02] 02:") threw parsePhaseId's own canonicality check and
+  // classified as 'other' — invisible to the heading/checklist/progress
+  // deletion, the renumber mapping, and the W2 sub-phase scan alike, even
+  // though `roadmap get-phase`/`analyze`/`validate` and this PR's own
+  // `phase insert`/`phase add` all already treat it as a real phase. The
+  // fix canonicalizes the captured number (phaseToken, the same adapter the
+  // bare-token argument path already uses) before parsePhaseId, and makes
+  // the qualified-reference rewriter/detector match the number through the
+  // same tolerant grammar instead of the canonical literal.
+  test('removes and renumbers a non-canonically-spelled phase number, reporting the dangling old mention', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current 🚧',
+        '',
+        '- [ ] [CK.02] 1: One',
+        '- [ ] [CK.02] 2: Two',
+        '- [ ] [CK.02] 3: Three',
+        '',
+        '### [CK.02] 1: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 2: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 3: Three',
+        '**Goal:** renumber',
+        '**Depends on:** [CK.02] 2',
+        '**Plans:** `03-01-PLAN.md`',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] 1 | 0/1 | Planned |',
+        '| [CK.02] 2 | 0/1 | Planned |',
+        '| [CK.02] 3 | 0/1 | Planned |',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', ['03-01-PLAN.md']],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+
+    assert.equal(out.directory_deleted, 'CK.02-02-two');
+    assert.deepEqual(fs.readdirSync(planning('phases')).sort(), ['CK.02-01-one', 'CK.02-02-three']);
+    assert.equal(fs.existsSync(planning('phases', 'CK.02-02-three', '02-01-PLAN.md')), true);
+
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    // The target is completely gone: heading, checklist row, progress row.
+    assert.equal(roadmap.includes('[CK.02] 2: Two'), false);
+    assert.equal(roadmap.includes('**Goal:** remove'), false);
+    // Phase 3 renumbers to the CANONICAL padded token, not the old spelling's
+    // "3" — GSD never writes a non-canonical number.
+    assert.equal(roadmap.includes('### [CK.02] 02: Three'), true);
+    assert.equal(roadmap.includes('### [CK.02] 3: Three'), false);
+    assert.equal(roadmap.includes('- [ ] [CK.02] 02: Three'), true);
+    assert.equal(roadmap.includes('| [CK.02] 02 | 0/1 | Planned |'), true);
+    const headingLines = splitLines(roadmap).filter((l) => l.startsWith('### [CK.02] 02:'));
+    assert.equal(headingLines.length, 1);
+    const progressLines = splitLines(roadmap).filter((l) => l.startsWith('| [CK.02] 02 |'));
+    assert.equal(progressLines.length, 1);
+
+    // The dangling "Depends on" mention of the just-removed identity, still
+    // spelled non-canonically, is reported rather than silently dropped.
+    const lines = splitLines(roadmap);
+    const dependsLine = lines.indexOf('**Depends on:** [CK.02] 2') + 1;
+    assert.ok(dependsLine > 0, 'dangling Depends-on line must survive');
+    assert.deepEqual(out.references_left_untouched, [dependsLine]);
+  });
+
+  // #4304 round 8 (B1): an OVER-padded spelling ("[CK.02] 002:") has the
+  // same defect — and confirms the rewrite always emits the canonical
+  // 2-digit token on renumber, never preserving a 3-digit source spelling.
+  test('removes and renumbers an over-padded phase number to the canonical width', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current 🚧',
+        '',
+        '- [ ] [CK.02] 001: One',
+        '- [ ] [CK.02] 002: Two',
+        '- [ ] [CK.02] 003: Three',
+        '',
+        '### [CK.02] 001: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 002: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 003: Three',
+        '**Goal:** renumber',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', []],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+    assert.equal(out.directory_deleted, 'CK.02-02-two');
+
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    assert.equal(roadmap.includes('[CK.02] 002: Two'), false);
+    assert.equal(roadmap.includes('### [CK.02] 02: Three'), true);
+    assert.equal(roadmap.includes('### [CK.02] 003: Three'), false);
+    assert.deepEqual(out.references_left_untouched, []);
+  });
+
+  // #4304 round 8 (B1): the round-6 W2 sub-phase refusal scans
+  // classifyBracketOwnedLine's output for `phase === targetInt` rows — with
+  // the number-canonicalization gap, a ROADMAP-only sub-phase spelled
+  // unpadded ("[CK.02] 02.1:") was invisible to that scan, so `remove 02`
+  // was NOT refused and would have manufactured a duplicate identity when
+  // the next phase's sub-phase renumbered onto the same slot.
+  test('refuses removing a phase whose own sub-phase is spelled with an unpadded number', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current 🚧',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 02.1: Two Sub',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 02.1: Two Sub',
+        '**Goal:** orphan risk',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', []],
+      ],
+    );
+    const before = snapshotTree(planning());
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+
+    assert.equal(result.success, false, result.output);
+    assert.match(result.error, /still has sub-phase/i);
+    assert.match(result.error, /\[CK\.02\] 02\.01/);
+    assert.deepEqual(snapshotTree(planning()), before);
+  });
 });
