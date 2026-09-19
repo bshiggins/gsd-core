@@ -796,7 +796,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
       true,
     );
     assert.equal(roadmap.includes('[CK.02] 02: descoped (colon form)'), true);
-    assert.equal(roadmap.split('\n').includes('[CK.02] 02'), true);
+    assert.equal(splitLines(roadmap).includes('[CK.02] 02'), true);
     assert.equal(roadmap.includes('Keep: see [CK.02] 02 for history.'), true);
 
     assert.equal(roadmap.includes('| **[CK.02] 02** | 0/1 | Planned |'), true);
@@ -982,7 +982,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(result.success, true, result.error || result.output);
     const out = JSON.parse(result.output);
     const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
-    const lines = roadmap.split('\n');
+    const lines = splitLines(roadmap);
     const dependsLine = lines.indexOf('**Depends on:** [CK.02] 02') + 1;
     const blockedLine = lines.indexOf('Also blocked by CK.02-02 and Phase 02.') + 1;
 
@@ -1031,7 +1031,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(result.success, true, result.error || result.output);
     const out = JSON.parse(result.output);
     const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
-    const lines = roadmap.split('\n');
+    const lines = splitLines(roadmap);
     const blockedLine = lines.indexOf('Blocked until [CK.02] 03.') + 1;
     const dirNameLine = lines.indexOf('Dir name: CK.02-03-three') + 1;
 
