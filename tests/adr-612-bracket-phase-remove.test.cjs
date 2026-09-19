@@ -1208,4 +1208,95 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(ck02Section.includes('`02-01-PLAN.md`'), true);
     assert.equal(fs.existsSync(planning('phases', 'CK.02-02-three', '02-01-PLAN.md')), true);
   });
+
+  // #4304 round 6 (W1): progress/table rows were deleted roadmap-wide with
+  // no active-range check (src/phase.cts:3099-3104), so a shipped milestone
+  // sharing the bracket code lost its own completed-phase row, and any
+  // non-Progress table (a Requirements Traceability table) whose first cell
+  // happened to be the removed identity lost its row too — even though
+  // qualified-reference RENUMBERING (a different mechanism) correctly stays
+  // roadmap-wide. Deletion is scoped to the active milestone's own table
+  // content plus a `## Progress` section (the #2012 scope legacy already
+  // uses); a table elsewhere is never touched.
+  test('deletes a progress row only inside the active milestone\'s own table, never in a shipped section or an unrelated table', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Shipped ✅',
+        '',
+        '- [x] [CK.02] 01: Old One',
+        '- [x] [CK.02] 02: Old Two',
+        '',
+        '### [CK.02] 02: Old Two',
+        '**Goal:** shipped',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] 01 | 1/1 | Complete |',
+        '| [CK.02] 02 | 1/1 | Complete |',
+        '',
+        '## [CK.02] v2.1 — Current 🚧',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] 01 | 0/1 | Planned |',
+        '| [CK.02] 02 | 0/1 | Planned |',
+        '| [CK.02] 03 | 0/1 | Planned |',
+        '',
+        '## Requirements Traceability',
+        '',
+        '| Phase | Requirement | Status |',
+        '| --- | --- | --- |',
+        '| [CK.01] 02 | REQ-01 | Done |',
+        '| [CK.02] 02 | REQ-07 | Open |',
+        '| [CK.02] 03 | REQ-08 | Open |',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', []],
+      ],
+    );
+    fs.writeFileSync(
+      planning('STATE.md'),
+      '---\nmilestone: v2.1\n---\n\n# State\n\n**Status:** Planning\n**Last Activity:** 2026-09-01\n',
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+
+    // The shipped section's own Complete row survives byte-identical.
+    assert.equal(roadmap.includes('| [CK.02] 01 | 1/1 | Complete |'), true);
+    assert.equal(roadmap.includes('| [CK.02] 02 | 1/1 | Complete |'), true);
+
+    // The active table's own target row is gone; its later sibling is
+    // renumbered onto that slot, not duplicated.
+    assert.equal(roadmap.includes('| [CK.02] 03 | 0/1 | Planned |'), false);
+    assert.equal((roadmap.match(/^\| \[CK\.02\] 02 \| 0\/1 \| Planned \|$/gm) ?? []).length, 1);
+
+    // The Requirements Traceability table is not a Progress table: the
+    // dangling REQ-07 row (naming the just-removed identity) survives
+    // byte-identical, and REQ-08's identity is renumbered like any other
+    // qualified reference — its ROW is never a deletion candidate.
+    assert.equal(roadmap.includes('| [CK.02] 02 | REQ-07 | Open |'), true);
+    assert.equal(roadmap.includes('| [CK.02] 03 | REQ-08 | Open |'), false);
+    assert.equal(roadmap.includes('| [CK.02] 02 | REQ-08 | Open |'), true);
+    assert.equal(roadmap.includes('| [CK.01] 02 | REQ-01 | Done |'), true);
+  });
 });

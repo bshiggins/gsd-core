@@ -98,7 +98,7 @@ import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
 import { transitionCore } from './state-transition.cjs';
 import { updateTableCell, deleteTableRow, escapeCell, splitTableRow } from './markdown-table.cjs';
-import { deleteSection, updateBullet } from './markdown-sectionizer.cjs';
+import { deleteSection, updateBullet, tokenizeHeadings, type HeadingToken } from './markdown-sectionizer.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- uat-predicate.cjs is an export= CommonJS module
 import uatPredicate = require('./uat-predicate.cjs');
 const { evaluateUatPassed } = uatPredicate;
@@ -2962,6 +2962,77 @@ function lineStartsInActiveMilestone(
     || Boolean(ranges.details && lineStart >= ranges.details.start && lineStart < ranges.details.end);
 }
 
+/**
+ * #4304 round 6 (W1): a NARROWER boundary than currentMilestoneRawRanges'
+ * own primary/details ranges. Those stop only at a RECOGNIZED bracket/
+ * version-bearing milestone heading, by design (the read path's own
+ * milestone-scanning use case treats an unrelated heading — a
+ * `## Requirements Traceability`, a `## Notes` — as staying inside the
+ * current milestone's content, not as a boundary). A pipe-table row has no
+ * "this is my milestone's own table" marker beyond ordinary heading
+ * nesting, so deciding whether a progress/table row belongs to THIS
+ * milestone needs the plain Markdown rule instead: stop at the next
+ * heading of any kind at or above the milestone heading's own level —
+ * the SAME rule deleteSection/collectSection already apply elsewhere.
+ */
+function bracketMilestoneOwnTableEnd(
+  content: string,
+  sectionStart: number,
+  headings: readonly HeadingToken[],
+): number {
+  const level = (content.slice(sectionStart).match(/^#{1,4}/) ?? ['#'])[0].length;
+  for (const h of headings) {
+    if (h.offset <= sectionStart) continue;
+    if (h.level <= level) return h.offset;
+  }
+  return content.length;
+}
+
+/**
+ * #4304 round 6 (W1): does `lineStart` fall inside the active milestone's
+ * OWN progress/table content — its primary or details section, bounded by
+ * `bracketMilestoneOwnTableEnd` rather than the wider currentMilestoneRawRanges
+ * end?
+ */
+function lineStartsInMilestoneOwnTable(
+  content: string,
+  lineStart: number,
+  ranges: ReturnType<typeof currentMilestoneRawRanges>,
+  headings: readonly HeadingToken[],
+): boolean {
+  if (!ranges) return false;
+  if (
+    lineStart >= ranges.primary.start
+    && lineStart < bracketMilestoneOwnTableEnd(content, ranges.primary.start, headings)
+  ) {
+    return true;
+  }
+  return Boolean(
+    ranges.details
+    && lineStart >= ranges.details.start
+    && lineStart < bracketMilestoneOwnTableEnd(content, ranges.details.start, headings),
+  );
+}
+
+/**
+ * #4304 round 6 (W1): the SAME `## Progress`-section scope legacy's
+ * updateRoadmapAfterPhaseRemoval already uses (#2012, src/phase.cts:2482-2500)
+ * — the first `## Progress` heading (case-insensitive) through the next
+ * `#`/`##` heading or EOF. Lets a DOCUMENT-LEVEL Progress table that sits
+ * textually outside the active milestone's own ranges (e.g. after a later
+ * milestone's own section, the existing "global Progress table" shape) stay
+ * in scope for the target row's own deletion, exactly as it already was.
+ */
+function bracketProgressSectionRange(content: string): { start: number; end: number } | null {
+  const match = content.match(/^##[ \t]+Progress\b/im);
+  if (!match || match.index === undefined) return null;
+  const start = match.index;
+  const fromHeading = content.slice(start);
+  const nextHeadingOffset = fromHeading.search(/\n#{1,2}[ \t]/);
+  const length = nextHeadingOffset >= 0 ? nextHeadingOffset : fromHeading.length;
+  return { start, end: start + length };
+}
+
 // #4304 round 5 (B5): shared "tolerant" trailing boundary for the
 // reporting-only detection regexes below. `(?!\d|\.\d)` blocks extending
 // into more digits or a ".digit" continuation (so a bare identity never
@@ -3081,6 +3152,15 @@ function updateRoadmapAfterBracketPhaseRemoval(
     );
     let roadmapLinesRewritten = content === originalContent ? 0 : 1;
     const ranges = currentMilestoneRawRanges(content, cwd, 'bracket');
+    // #4304 round 6 (W1): progress/table-row deletion is scoped to the
+    // active milestone's OWN table content (bracketMilestoneOwnTableEnd —
+    // narrower than `ranges` itself, see its own doc comment) plus a
+    // document-level `## Progress` section (legacy's own #2012 scope) —
+    // never the whole document. Without this, a same-identity row in ANY
+    // pipe table anywhere (a shipped milestone sharing the same bracket
+    // code, an unrelated Requirements Traceability table) was deleted.
+    const headingsForOwnTable = tokenizeHeadings(content);
+    const progressSectionRange = bracketProgressSectionRange(content);
 
     // #4304 round 5 (B5): the referencesLeftUntouched report is computed
     // from each KEPT line's ORIGINAL (pre-rewrite) text, never the
@@ -3097,9 +3177,16 @@ function updateRoadmapAfterBracketPhaseRemoval(
     for (const line of splitRoadmapLineRecords(content)) {
       const active = lineStartsInActiveMilestone(line.start, ranges);
       const owned = classifyBracketOwnedLine(line.text);
+      const inMilestoneOwnTable = owned.kind === 'progress'
+        && lineStartsInMilestoneOwnTable(content, line.start, ranges, headingsForOwnTable);
+      const inProgressSection = owned.kind === 'progress' && Boolean(
+        progressSectionRange
+        && line.start >= progressSectionRange.start
+        && line.start < progressSectionRange.end,
+      );
       if (owned.id
         && sameBracketPhaseId(owned.id, targetId)
-        && (owned.kind === 'progress' || (active && owned.kind === 'checklist'))) {
+        && ((active && owned.kind === 'checklist') || inMilestoneOwnTable || inProgressSection)) {
         roadmapLinesRewritten += 1;
         continue;
       }
