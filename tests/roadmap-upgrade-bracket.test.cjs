@@ -2271,4 +2271,86 @@ describe('roadmap upgrade --convention bracket', () => {
       assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'a refusal must write nothing');
     });
   });
+
+  // #4144 round 6 B4: the READERS' own checklist grammar
+  // (`src/roadmap.cts:770`, `missing_phase_details`) requires a bold `**`
+  // before the `Phase` label but no colon anywhere after the token — a
+  // bullet like `- [ ] **Phase 7** - Eta work` is a real phase reference to
+  // it. The migrator's own checklist regex required a colon immediately
+  // after the token, so such bullets survived byte-identical while their
+  // headings converted, and `roadmap analyze` reported them missing after a
+  // "done" migration.
+  describe("converts every checklist bullet the reader's grammar accepts (#4144 round 6 B4)", () => {
+    function buildChecklistShapesFixture() {
+      const cwd = materializeEmptyFixture('checklistshapes');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'config.json'),
+        JSON.stringify({ project_code: 'GSD', phase_id_convention: null }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v2.0 Scale',
+          '',
+          '- [ ] **Phase 7** - Eta work',
+          '- [x] **Phase 8**: Theta',
+          '- [ ] **Phase 9 (Cluster B)** - Iota',
+          '',
+          '### Phase 7: Eta',
+          '**Goal**: h',
+          '',
+          '### Phase 8: Theta',
+          '**Goal**: t',
+          '',
+          '### Phase 9 (Cluster B): Iota',
+          '**Goal**: i',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      fs.mkdirSync(path.join(phasesDir, '07-eta'), { recursive: true });
+      fs.writeFileSync(path.join(phasesDir, '07-eta', '07-01-PLAN.md'), '---\nphase: "07"\n---\n', 'utf8');
+      return cwd;
+    }
+
+    test('bold checklist bullets with no colon after the token still convert, preserving what follows', () => {
+      const cwd = buildChecklistShapesFixture();
+      const before = JSON.parse(runNode(
+        [TOOLS_PATH, 'roadmap', 'analyze'],
+        { cwd, env: { ...process.env, ...helpers.TEST_ENV_BASE, HOME: cwd }, timeoutMs: COMMAND_TIMEOUT_MS },
+      ).stdout);
+      assert.equal(before.missing_phase_details, null, 'the reader must not report any missing detail before migration');
+
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'checklist-shapes dry-run');
+      const editFor = (text) => plan.roadmapEdits.find(({ from }) => from === text);
+      assert.equal(editFor('- [ ] **Phase 7** - Eta work')?.to, '- [ ] **[GSD.02] 01** - Eta work');
+      assert.equal(editFor('- [x] **Phase 8**: Theta')?.to, '- [x] **[GSD.02] 02**: Theta');
+      assert.equal(
+        editFor('- [ ] **Phase 9 (Cluster B)** - Iota')?.to,
+        '- [ ] **[GSD.02] 03 (Cluster B)** - Iota',
+      );
+
+      const applied = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(applied, 0, 'checklist-shapes apply');
+      const after = JSON.parse(runNode(
+        [TOOLS_PATH, 'roadmap', 'analyze'],
+        { cwd, env: { ...process.env, ...helpers.TEST_ENV_BASE, HOME: cwd }, timeoutMs: COMMAND_TIMEOUT_MS },
+      ).stdout);
+      assert.equal(
+        after.missing_phase_details,
+        null,
+        'a "done" migration must never leave a reader-recognized checklist bullet unconverted',
+      );
+    });
+
+    test('a colon-form checklist bullet still converts (no regression)', () => {
+      const cwd = materializeFixture('legacy-multi-milestone');
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'legacy-multi-milestone dry-run');
+      assert.ok(plan.roadmapEdits.some(({ from, to }) => from === '- [ ] **Phase 1:** Alpha' && to === '- [ ] **[GSD.01] 01:** Alpha'));
+    });
+  });
 });

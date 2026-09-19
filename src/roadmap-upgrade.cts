@@ -61,6 +61,8 @@ const {
   isSentinelPhaseId,
   normalizePhaseName,
   OPTIONAL_PHASE_TAG_SOURCE,
+  PHASE_HEADING_BASELINE,
+  phaseHeadingPrefixSrcFor,
   PHASE_NUMBER_TOKEN_SOURCE,
   phaseArtifactTokenSpan,
   stripProjectCodePrefix,
@@ -1295,19 +1297,35 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     }
   }
 
-  // #4698 Blocker 3 (round 2): both checklist grammars gain the same
-  // captured OPTIONAL_PHASE_TAG_SOURCE the heading grammars above do, so a
-  // checklist bullet mirroring a tagged heading (`- [ ] **Phase 2 (Cluster
-  // B):** Beta`) still converts — the real checklist reader
-  // (src/phase.cts, e.g. line 3745) tolerates the identical tag in the
-  // identical position. Group 3 is now the tag; group 4 (previously group 3)
-  // is the colon-with-leading-space.
+  // #4144 round 6 B4: the READERS' own checklist grammar
+  // (`src/roadmap.cts`'s `cmdRoadmapAnalyze checklistPattern`, the exact
+  // scan `missing_phase_details` is computed from) requires a bold `**`
+  // immediately before the `Phase` label and — unlike the previous regex
+  // here — never requires a colon anywhere after the token:
+  // `- [ ] **Phase 7** - Eta` and `- [x] **Phase 8**: Theta` are both real
+  // phase references to it. A colon-requiring copy left such bullets
+  // byte-identical while their headings converted, so a "done" migration
+  // reported them missing (`missing_phase_details`). This migrator keeps its
+  // own long-standing OPTIONAL-bold tolerance (`\*{0,2}` — a plain,
+  // non-bold `- [x] Phase 3: Gamma` has converted since round 1 and must
+  // keep doing so), so the actual fix is dropping the colon requirement, not
+  // narrowing to bold-only: the "Phase " intro comes from the shared
+  // `phaseHeadingPrefixSrcFor` selector (never a second copy of that text),
+  // and the bullet/checkbox/bold-open prefix is its own capture group
+  // (group 1) — the "Phase " intro text itself is matched but deliberately
+  // left OUT of any group, since the bracket form drops the word "Phase"
+  // entirely. The token and optional tag are captured here, and the REST OF
+  // THE LINE — bold close, tag, separator, colon, whatever follows — is
+  // preserved verbatim via `line.slice(match[0].length)` below, never
+  // reconstructed.
+  const CHECKLIST_BULLET_PREFIX_SRC = '-\\s*\\[[ x]\\]\\s*\\*{0,2}';
+  const CHECKLIST_PHASE_INTRO_SRC = phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, undefined, true);
   const mnnChecklistRe = new RegExp(
-    `^(\\s*-\\s*\\[[ x]\\]\\s*\\*{0,2})Phase\\s+(${MNN_SOURCE_TOKEN_SOURCE})(${OPTIONAL_PHASE_TAG_SOURCE})(\\s*:)`,
+    `^(\\s*${CHECKLIST_BULLET_PREFIX_SRC})${CHECKLIST_PHASE_INTRO_SRC}(${MNN_SOURCE_TOKEN_SOURCE})(${OPTIONAL_PHASE_TAG_SOURCE})`,
     'i',
   );
   const legacyChecklistRe = new RegExp(
-    `^(\\s*-\\s*\\[[ x]\\]\\s*\\*{0,2})Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})(${OPTIONAL_PHASE_TAG_SOURCE})(\\s*:)`,
+    `^(\\s*${CHECKLIST_BULLET_PREFIX_SRC})${CHECKLIST_PHASE_INTRO_SRC}(${PHASE_NUMBER_TOKEN_SOURCE})(${OPTIONAL_PHASE_TAG_SOURCE})`,
     'i',
   );
 
@@ -1321,7 +1339,7 @@ function computeBracketPlan(cwd: string): MigrationPlan {
       const segments = mnnChecklist[2].split('-');
       const milestone = parseInt(segments[0], 10);
       const token = segments.slice(1).map((segment) => pad2(parseInt(segment, 10))).join('.');
-      const replacement = `${mnnChecklist[1]}[${code}.${pad2(milestone)}] ${token}${mnnChecklist[3]}${mnnChecklist[4]}`;
+      const replacement = `${mnnChecklist[1]}[${code}.${pad2(milestone)}] ${token}${mnnChecklist[3]}`;
       roadmapEdits.push({
         lineIndex: i,
         from: line,
@@ -1360,9 +1378,22 @@ function computeBracketPlan(cwd: string): MigrationPlan {
       }
       resolved = candidates[0];
     }
-    if (!resolved) continue;
+    if (!resolved) {
+      // #4144 round 6 B4: the readers' own grammar recognizes this bullet as
+      // a phase reference (mnnChecklistRe/legacyChecklistRe just matched
+      // it), but this migrator could not attribute it to any converted
+      // phase. Leaving it byte-identical would stamp the migration done
+      // while a reader-recognized checklist entry stays unconverted —
+      // refuse before any write instead, naming the bullet.
+      throw new Error(
+        'Cannot safely migrate ROADMAP.md to the bracket convention: a checklist bullet the readers '
+        + 'recognize as a phase reference could not be attributed to any converted phase. Refusing rather '
+        + 'than leaving it unconverted in an otherwise-migrated roadmap:\n'
+        + `  ${line}`,
+      );
+    }
     const replacement = `${legacyChecklist[1]}[${code}.${pad2(resolved.milestoneInt)}] ${resolved.token}`
-      + `${legacyChecklist[3]}${legacyChecklist[4]}`;
+      + `${legacyChecklist[3]}`;
     roadmapEdits.push({
       lineIndex: i,
       from: line,
