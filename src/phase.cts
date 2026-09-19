@@ -3155,8 +3155,20 @@ const BRACKET_REPORT_TOLERANT_BOUNDARY_SRC = '(?!\\d|\\.\\d)';
 
 function bracketQualifiedMentionedInLine(line: string, id: BracketRoadmapPhaseId): boolean {
   const tolerant = BRACKET_REPORT_TOLERANT_BOUNDARY_SRC;
-  const display = renderPhaseId(id);
-  if (new RegExp(`${escapeRegex(display)}${tolerant}`).test(line)) return true;
+  // #4304 round 6 (B5 follow-up): admit the SAME optional "Phase " label
+  // replaceQualifiedBracketReference already rewrites (mirroring
+  // phaseHeadingPrefixSrcFor's bracketAlt, `\[${id}\][ \t]*(?:Phase\s+|(?=\d))`,
+  // pinned at tests/adr-612-bracket-grammar.test.cjs:644) — not a second,
+  // independently-typed label grammar. Without this, a labeled mention of
+  // the REMOVED identity itself ("**Depends on:** [CK.02] Phase 02", which
+  // no rewriter ever touches because 02 no longer exists) was never
+  // recognized as dangling: this detector only ever matched the label-less
+  // display form ("[CK.02] 02"), which is not a substring of the labeled
+  // spelling.
+  const milestoneSrc = `\\[${escapeRegex(id.project)}\\.${escapeRegex(id.milestone)}\\]`;
+  const numberSrc = escapeRegex(bracketPhaseNumberSrc(id));
+  const qualifiedRe = new RegExp(`${milestoneSrc}[ \\t]+(?:Phase[ \\t]+)?${numberSrc}${tolerant}`);
+  if (qualifiedRe.test(line)) return true;
   const dash = dashBracketPhaseId(id);
   return new RegExp(`(?<![A-Za-z0-9.-])${escapeRegex(dash)}${tolerant}`).test(line);
 }

@@ -1487,4 +1487,57 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(roadmap.includes('`02-01-PLAN.md`'), true);
     assert.deepEqual(out.references_left_untouched, []);
   });
+
+  // #4304 round 6 (B5 follow-up): references_left_untouched exists so the
+  // report never omits a dangling reference to the removed identity.
+  // bracketQualifiedMentionedInLine only ever recognized the label-less
+  // display form ("[CK.02] 02"), which is not a substring of a labeled
+  // mention ("[CK.02] Phase 02") — so a genuinely dangling
+  // "**Depends on:** [CK.02] Phase 02" line (a phase that depended on the
+  // just-removed phase, spelled in the labeled bracket form) survived the
+  // removal byte-identical but was never flagged. Fixed by teaching
+  // bracketQualifiedMentionedInLine the SAME optional "Phase " label
+  // replaceQualifiedBracketReference already rewrites (W3), rather than a
+  // second, independent label grammar.
+  test('reports a dangling labeled mention of the removed identity by its persisted line number', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '- [ ] [CK.02] Phase 01: One',
+        '- [ ] [CK.02] Phase 02: Two',
+        '- [ ] [CK.02] Phase 03: Three',
+        '',
+        '### [CK.02] Phase 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] Phase 02: Two',
+        '**Goal:** remove me',
+        '',
+        '### [CK.02] Phase 03: Three',
+        '**Goal:** renumber',
+        '**Depends on:** [CK.02] Phase 02',
+        '**Plans:** `03-01-PLAN.md`',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', ['03-01-PLAN.md']],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    const lines = splitLines(roadmap);
+    const dependsLine = lines.indexOf('**Depends on:** [CK.02] Phase 02') + 1;
+
+    assert.ok(dependsLine > 0, 'the dangling Depends-on line must survive byte-identical');
+    assert.equal(roadmap.includes('**Depends on:** [CK.02] Phase 02'), true);
+    assert.deepEqual(out.references_left_untouched, [dependsLine]);
+  });
 });
