@@ -2568,4 +2568,58 @@ describe('roadmap upgrade --convention bracket', () => {
       );
     });
   });
+
+  // #4144 round 6 (C-fence, claims finder): fence handling was heading-only
+  // — a checklist bullet INSIDE a fenced markdown example was still
+  // rewritten, even though the identical heading inside the same fence
+  // (round 5 W4) already survives untouched.
+  describe('skips fenced checklist bullets the way fenced headings are skipped (#4144 round 6 C-fence)', () => {
+    test('a fenced checklist bullet survives byte-identical; the real phase converts normally', () => {
+      const cwd = materializeEmptyFixture('fencedchecklist');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'config.json'),
+        JSON.stringify({ project_code: 'GSD', phase_id_convention: null }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v1.0 Core',
+          '',
+          '### Phase 1: Alpha',
+          '',
+          '- [ ] **Phase 1:** Alpha',
+          '',
+          '```markdown',
+          '- [ ] **Phase 1:** example',
+          '```',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      fs.mkdirSync(path.join(phasesDir, '01-alpha'), { recursive: true });
+      fs.writeFileSync(path.join(phasesDir, '01-alpha', '01-01-PLAN.md'), '---\nphase: "01"\n---\n', 'utf8');
+
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'fenced checklist dry-run');
+      assert.ok(
+        plan.roadmapEdits.some(({ from, to }) => from === '- [ ] **Phase 1:** Alpha' && to === '- [ ] **[GSD.01] 01:** Alpha'),
+        'the real checklist bullet must still convert',
+      );
+      assert.ok(
+        !plan.roadmapEdits.some(({ from }) => from === '- [ ] **Phase 1:** example'),
+        'the fenced checklist bullet must never appear in roadmapEdits at all',
+      );
+
+      const applied = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(applied, 0, 'fenced checklist apply');
+      const after = fs.readFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), 'utf8');
+      assert.ok(
+        after.includes('```markdown\n- [ ] **Phase 1:** example\n```'),
+        'the fenced bullet must survive byte-identical',
+      );
+    });
+  });
 });

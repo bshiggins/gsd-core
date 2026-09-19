@@ -1489,7 +1489,16 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     'i',
   );
 
+  // #4144 round 6 (C-fence): fence handling was heading-only —
+  // parseBracketSourcePhases skips fenced lines via `fencedLineIndices`
+  // (round 5 W4), but this checklist loop walked raw `lines` with no fence
+  // awareness at all, so a checklist bullet inside a fenced EXAMPLE block
+  // was still rewritten. Same engine, same "never a phase heading/bullet of
+  // any kind inside a fence" rule the heading parse already follows.
+  const fencedChecklistLines = fencedLineIndices(lines);
+
   for (let i = 0; i < lines.length; i++) {
+    if (fencedChecklistLines.has(i)) continue;
     const line = lines[i];
     if (MILESTONE_HEADING_RE.test(line)) continue;
     if (roadmapEdits.some((edit) => edit.lineIndex === i)) continue;
