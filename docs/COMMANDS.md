@@ -2021,12 +2021,27 @@ renames matching phase directories, and writes `phase_id_convention: "bracket"`.
 When a renamed directory's phase token changes, the bracket target also
 renames every phase-qualified artifact inside it (`03-VERIFICATION.md`,
 `03-01-PLAN.md`, and similar) to the new token, so existing plans and
-verification reports stay attached to their phase, and rewrites any
+verification reports stay attached to their phase, rewrites any
 `depends_on` reference inside that same directory's plan files that named a
 renamed sibling by its old token (`depends_on: ["03-01"]` becomes
-`["01-01"]`), so the dependency still resolves after migration.
-It refuses before writing when a source phase has no bracket spelling or a
-multi-milestone phase has no unambiguous reader-recognized milestone section.
+`["01-01"]`), so the dependency still resolves after migration, and rewrites
+that artifact's own `phase:` frontmatter scalar to its new token so
+`history-digest` keys the phase's decisions correctly after renumbering.
+Legacy sentinel phases (`Phase 999.x` icebox, `Phase 0.x` backlog) are lifted
+into their own sentinel bracket milestone (`[CODE.999]` / `[CODE.00]`) rather
+than folded into the enclosing real milestone. Checklist bullets convert
+using the same reader-recognized bold-checkbox grammar `roadmap analyze`
+scores `missing_phase_details` against (no colon required after the token),
+attributed to their own milestone section when two sections share a leading
+major integer, and skipped inside a fenced code block the same way a fenced
+heading is skipped.
+It refuses before writing when: a source phase has no bracket spelling; a
+multi-milestone phase (or a checklist bullet outside every section) has no
+unambiguous reader-recognized milestone section; the same legacy phase
+number appears twice within one milestone section; a directory matches more
+than one candidate phase heading and its slug does not disambiguate exactly
+one of them; or a rename's target directory name already exists on disk and
+is not itself part of the same migration.
 
 | Flag | Required | Description |
 |------|----------|-------------|
