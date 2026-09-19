@@ -2117,6 +2117,86 @@ describe('roadmap upgrade --convention bracket', () => {
     });
   });
 
+  // #4144 round 7 B1: the HEADING side already bypasses section attribution
+  // for a legacy sentinel (`legacySentinelMilestone`, consulted before
+  // `entry.attributedSection` is ever set — B1 above), but the CHECKLIST
+  // lookup did not: a sentinel's own bullet can sit inside a real `## vN.M`
+  // section on disk (nothing stops an author from listing an icebox item
+  // next to the real phases it is scheduled near), and the bullet loop
+  // looked it up only in that ENCLOSING section's bucket — where a sentinel
+  // is never filed (it always lands under GLOBAL_SECTION_KEY, since it never
+  // receives an `attributedSection`). A roadmap `roadmap analyze` reports
+  // clean was refused.
+  describe('resolves a sentinel checklist bullet regardless of its enclosing section (#4144 round 7 B1)', () => {
+    function buildSentinelChecklistFixture() {
+      const cwd = materializeEmptyFixture('sentinel-checklist');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'config.json'),
+        JSON.stringify({ project_code: 'GSD', phase_id_convention: null }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v2.0 Scale',
+          '',
+          '- [ ] **Phase 5: Real** - r',
+          '- [ ] **Phase 6: Also real** - r2',
+          '- [ ] **Phase 999.1: Icebox idea** - later',
+          '',
+          '### Phase 5: Real',
+          '**Goal**: r',
+          '',
+          '### Phase 6: Also real',
+          '**Goal**: r2',
+          '',
+          '### Phase 999.1: Icebox idea',
+          '**Goal**: later',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      for (const [dir, num] of [
+        ['05-real', '05'],
+        ['06-also-real', '06'],
+        ['999.1-icebox-idea', '999.1'],
+      ]) {
+        fs.mkdirSync(path.join(phasesDir, dir), { recursive: true });
+        fs.writeFileSync(
+          path.join(phasesDir, dir, `${num}-01-PLAN.md`),
+          `---\nphase: "${num}"\nplan: "01"\n---\n# Plan\n`,
+          'utf8',
+        );
+      }
+      return cwd;
+    }
+
+    test('a sentinel checklist bullet inside a real milestone section converts to its own sentinel milestone', () => {
+      const cwd = buildSentinelChecklistFixture();
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'sentinel checklist bullet dry-run');
+
+      const editFor = (text) => plan.roadmapEdits.find(({ from }) => from === text);
+      assert.equal(
+        editFor('- [ ] **Phase 999.1: Icebox idea** - later')?.to,
+        '- [ ] **[GSD.999] 01: Icebox idea** - later',
+      );
+      assert.equal(editFor('- [ ] **Phase 5: Real** - r')?.to, '- [ ] **[GSD.02] 01: Real** - r');
+      assert.equal(editFor('- [ ] **Phase 6: Also real** - r2')?.to, '- [ ] **[GSD.02] 02: Also real** - r2');
+
+      const applied = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(applied, 0, 'sentinel checklist bullet apply');
+      const analyzed = JSON.parse(runNode(
+        [TOOLS_PATH, 'roadmap', 'analyze'],
+        { cwd, env: { ...process.env, ...helpers.TEST_ENV_BASE, HOME: cwd }, timeoutMs: COMMAND_TIMEOUT_MS },
+      ).stdout);
+      assert.deepEqual(analyzed.phases.map((p) => p.number).sort(), ['01', '02']);
+      assert.equal(analyzed.missing_phase_details, null);
+    });
+  });
+
   // #4144 round 6 B2: two milestone sections sharing the same leading major
   // integer (`## v2.0`, `## v2.1` — both resolve to bracket milestone 2) each
   // restart their own legacy phase numbering. Headings resolve correctly

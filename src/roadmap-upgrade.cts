@@ -1520,32 +1520,47 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     const legacyChecklist = line.match(legacyChecklistRe);
     if (!legacyChecklist) continue;
     const key = legacyLookupKey(legacyChecklist[2]);
-    // #4144 round 6 B2: a bullet INSIDE a specific milestone section is
-    // attributed to THAT section alone — never a different section that
-    // happens to share the same leading major integer.
-    const bulletSection = sectionsForOffset(lineOffsets[i] ?? -1)
-      .find((section) => section.milestoneInt !== null) ?? null;
     let resolved: { token: string; milestoneInt: number } | undefined;
-    if (bulletSection) {
-      resolved = sectionLegacyMap.get(bulletSection.start)?.get(key);
+    // #4144 round 7 B1: a checklist bullet naming a SENTINEL phase (999.x
+    // icebox / 0.x backlog) bypasses section attribution entirely — the same
+    // rule the HEADING side already applies via `legacySentinelMilestone`
+    // (consulted before `entry.attributedSection` is ever set, above).
+    // Sentinel entries are always filed under GLOBAL_SECTION_KEY (never
+    // `attributedSection`, since the milestone-attribution loop `continue`s
+    // past that assignment for a sentinel), so a sentinel bullet must be
+    // looked up there directly — never in whichever real `## vN.M` section
+    // its own line happens to sit inside on disk (nothing stops an author
+    // from listing an icebox item next to the real phases it is scheduled
+    // near).
+    if (legacySentinelMilestone(legacyChecklist[2]) !== null) {
+      resolved = sectionLegacyMap.get(GLOBAL_SECTION_KEY)?.get(key);
     } else {
-      // Outside every section (a global summary list): unambiguous only
-      // when exactly one section (or the no-section bucket) defines this
-      // legacy token.
-      const candidates: Array<{ token: string; milestoneInt: number }> = [];
-      for (const lookup of sectionLegacyMap.values()) {
-        const candidate = lookup.get(key);
-        if (candidate) candidates.push(candidate);
+      // #4144 round 6 B2: a bullet INSIDE a specific milestone section is
+      // attributed to THAT section alone — never a different section that
+      // happens to share the same leading major integer.
+      const bulletSection = sectionsForOffset(lineOffsets[i] ?? -1)
+        .find((section) => section.milestoneInt !== null) ?? null;
+      if (bulletSection) {
+        resolved = sectionLegacyMap.get(bulletSection.start)?.get(key);
+      } else {
+        // Outside every section (a global summary list): unambiguous only
+        // when exactly one section (or the no-section bucket) defines this
+        // legacy token.
+        const candidates: Array<{ token: string; milestoneInt: number }> = [];
+        for (const lookup of sectionLegacyMap.values()) {
+          const candidate = lookup.get(key);
+          if (candidate) candidates.push(candidate);
+        }
+        if (candidates.length > 1) {
+          throw new Error(
+            'Cannot safely migrate ROADMAP.md to the bracket convention: a checklist bullet outside every '
+            + 'milestone section names a legacy phase number that more than one milestone section defines. '
+            + 'Refusing rather than guessing which phase it means:\n'
+            + `  ${line}`,
+          );
+        }
+        resolved = candidates[0];
       }
-      if (candidates.length > 1) {
-        throw new Error(
-          'Cannot safely migrate ROADMAP.md to the bracket convention: a checklist bullet outside every '
-          + 'milestone section names a legacy phase number that more than one milestone section defines. '
-          + 'Refusing rather than guessing which phase it means:\n'
-          + `  ${line}`,
-        );
-      }
-      resolved = candidates[0];
     }
     if (!resolved) {
       // #4144 round 6 B4: the readers' own grammar recognizes this bullet as
