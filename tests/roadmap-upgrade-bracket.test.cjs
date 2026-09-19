@@ -2490,6 +2490,125 @@ describe('roadmap upgrade --convention bracket', () => {
     });
   });
 
+  // #4144 round 6 (W-collision follow-up, coordinator-directed): repurposing
+  // 'a mid-migration rename failure restores an ignored planning tree
+  // byte-for-byte' into the plan-time collision test above removed the
+  // repo's only rollback proof for a failure in the MIDDLE of the
+  // directory-rename list — the occupied-target injection that test used is
+  // now refused at PLAN time (W-collision), so it can no longer reach
+  // applyMigration's mid-rename rollback path at all. This restores that
+  // coverage with a different injection: fs.renameSync itself, mocked by
+  // exact destination path (the same "resolve the real path, compare, call
+  // through otherwise" style the writeFileSync mocks elsewhere in this file
+  // use), on a fixture with three phase directories where the FIRST one's
+  // rename, artifact renames, AND depends_on/phase rewrites all complete for
+  // real before the SECOND directory's own rename throws.
+  describe('rolls back a failure partway through the directory renames (#4144 round 6, coordinator follow-up)', () => {
+    test('a failure on the second of three directory renames rolls back the first rename, its artifacts, and its content rewrites', (t) => {
+      const cwd = materializeEmptyFixture('midrename');
+      const planningPath = path.join(cwd, '.planning');
+      const configPath = path.join(planningPath, 'config.json');
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({ project_code: 'GSD', phase_id_convention: null }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(planningPath, 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v1.0 Core',
+          '',
+          '### Phase 1.5: Alpha',
+          '### Phase 2: Middle',
+          '### Phase 3: Beta',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const phasesDir = path.join(planningPath, 'phases');
+      // Alpha's on-disk token ("01.5") differs from its assigned bracket
+      // token ("01" — the decimal flattens into the milestone's counter),
+      // so its OWN directory rename, BOTH its plan files' artifact renames,
+      // AND its depends_on rewrite all really happen on disk before Middle
+      // (the second directory) ever gets touched.
+      fs.mkdirSync(path.join(phasesDir, '01.5-alpha'), { recursive: true });
+      fs.writeFileSync(
+        path.join(phasesDir, '01.5-alpha', '01.5-01-PLAN.md'),
+        '---\nphase: "01.5"\nplan: "01"\ndepends_on: []\n---\n\nAlpha first plan.\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(phasesDir, '01.5-alpha', '01.5-02-PLAN.md'),
+        '---\nphase: "01.5"\nplan: "02"\ndepends_on: ["01.5-01"]\n---\n\nAlpha second plan, depends on the first.\n',
+        'utf8',
+      );
+      // Middle and Beta keep on-disk tokens equal to their assigned bracket
+      // tokens ("02"/"03"), so each is a plain directory rename with no
+      // artifacts of its own — Middle is the failure point; Beta must never
+      // be reached or touched at all.
+      fs.mkdirSync(path.join(phasesDir, '02-middle'), { recursive: true });
+      fs.writeFileSync(path.join(phasesDir, '02-middle', '02-01-PLAN.md'), '---\nphase: "02"\n---\n\nMiddle plan.\n', 'utf8');
+      fs.mkdirSync(path.join(phasesDir, '03-beta'), { recursive: true });
+      fs.writeFileSync(path.join(phasesDir, '03-beta', '03-01-PLAN.md'), '---\nphase: "03"\n---\n\nBeta plan.\n', 'utf8');
+
+      const plan = computeMigrationPlan(cwd, { convention: 'bracket' });
+      assert.equal(plan.alreadyMigrated, false);
+      assert.ok(plan.phases.length >= 3, 'fixture must produce at least three directory renames');
+      const alphaEntry = plan.phases.find((p) => p.oldDir === '01.5-alpha');
+      const middleEntry = plan.phases.find((p) => p.oldDir === '02-middle');
+      const betaEntry = plan.phases.find((p) => p.oldDir === '03-beta');
+      assert.ok(alphaEntry && middleEntry && betaEntry, 'fixture must produce all three renames');
+      assert.equal(plan.phases[0].oldDir, '01.5-alpha', 'Alpha must be first in rename order');
+      assert.equal(plan.phases[1].oldDir, '02-middle', 'Middle must be second in rename order — the failure point');
+      assert.ok(alphaEntry.fileRenames.length >= 1, 'Alpha must produce at least one artifact rename to reverse');
+      assert.ok(alphaEntry.dependsOnRewrites.length >= 1, 'Alpha must produce at least one content rewrite to reverse');
+
+      const before = snapshotTree(planningPath);
+      const beforeConfigBytes = fs.readFileSync(configPath);
+
+      const firstTarget = path.resolve(path.join(phasesDir, plan.phases[0].newDir));
+      const failTarget = path.resolve(path.join(phasesDir, middleEntry.newDir));
+      const realRename = fs.renameSync;
+      let sawFirstRenameBeforeFailure = false;
+      const renameMock = mock.method(fs, 'renameSync', (oldPath, newPath) => {
+        const resolvedNew = path.resolve(String(newPath));
+        if (resolvedNew === firstTarget) sawFirstRenameBeforeFailure = true;
+        if (resolvedNew === failTarget) {
+          throw Object.assign(new Error('EIO: simulated rename failure'), { code: 'EIO' });
+        }
+        return realRename.call(fs, oldPath, newPath);
+      });
+      t.after(() => renameMock.mock.restore());
+
+      let caught;
+      try {
+        applyMigration(cwd, plan, { dryRun: false });
+      } catch (err) {
+        caught = err;
+      }
+
+      assert.ok(caught, 'a mid-list directory-rename failure must throw, not silently succeed');
+      assert.match(caught.message, /Migration failed and rolled back/);
+      assert.ok(
+        sawFirstRenameBeforeFailure,
+        'the mock must have observed Alpha\'s own directory rename before the injected failure — '
+        + 'otherwise this test proves nothing about a MID-list failure',
+      );
+      assert.deepEqual(
+        snapshotTree(planningPath),
+        before,
+        'the whole .planning tree (directory listing plus every file\'s bytes) must be byte-identical after rollback',
+      );
+      assert.deepEqual(
+        fs.readFileSync(configPath),
+        beforeConfigBytes,
+        'config.json must be untouched — this failure never reached the config-stamp step',
+      );
+    });
+  });
+
   // #4144 round 6 (W-phase): a renamed artifact's `phase:` frontmatter kept
   // spelling the OLD legacy token, and `history-digest` (src/commands.cts,
   // `cmdHistoryDigest`) keys phases and decisions by that exact scalar — so
