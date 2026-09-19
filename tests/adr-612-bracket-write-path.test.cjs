@@ -101,6 +101,27 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     );
   });
 
+  // #4304 round 12 (W1): readSubdirectories intentionally ignores symlinks,
+  // so a planted link at the next allocated bracket directory used to be
+  // invisible to allocation and then followed by the .gitkeep write.
+  test('phase add refuses a symlink planted at the allocated bracket directory without writing through it', () => {
+    const dir = project('adr-612-bracket-add-symlink-');
+    writeBracketFixture(dir);
+    const outside = path.join(dir, 'outside-phase-target');
+    fs.mkdirSync(outside);
+    const link = planning(dir, 'phases', 'CK.02-02-escape');
+    fs.symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
+    const roadmapBefore = fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8');
+
+    const result = runGsdTools(['phase', 'add', 'Escape'], dir);
+
+    assert.equal(result.success, false, result.output);
+    assert.match(result.error, /symbolic link|outside the planning phases directory/i);
+    assert.equal(fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8'), roadmapBefore);
+    assert.deepEqual(fs.readdirSync(outside), []);
+    assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+  });
+
   test('phase add can mint the first bracket phase in an empty milestone', () => {
     const dir = project('adr-612-first-bracket-');
     writeConfig(dir, 'bracket');
@@ -403,6 +424,28 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.equal(fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8'), roadmapBefore);
   });
 
+  test('phase add-batch refuses every destination before a later allocated path can follow a symlink', () => {
+    const dir = project('adr-612-bracket-batch-symlink-');
+    writeBracketFixture(dir);
+    const outside = path.join(dir, 'outside-batch-target');
+    fs.mkdirSync(outside);
+    const link = planning(dir, 'phases', 'CK.02-03-beta');
+    fs.symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
+    const roadmapBefore = fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8');
+
+    const result = runGsdTools(
+      ['phase', 'add-batch', '--descriptions', JSON.stringify(['Alpha', 'Beta'])],
+      dir,
+    );
+
+    assert.equal(result.success, false, result.output);
+    assert.match(result.error, /symbolic link|outside the planning phases directory/i);
+    assert.equal(fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8'), roadmapBefore);
+    assert.equal(fs.existsSync(planning(dir, 'phases', 'CK.02-02-alpha')), false);
+    assert.deepEqual(fs.readdirSync(outside), []);
+    assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+  });
+
   test('phase add-batch still creates all five directories with one ROADMAP write when every item validates', () => {
     const dir = project('adr-612-bracket-addbatch-full-');
     writeBracketFixture(dir);
@@ -448,6 +491,24 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
       fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8').includes('### [CK.02] 01.02: Second Hotfix (INSERTED)'),
       true,
     );
+  });
+
+  test('phase insert refuses a symlink planted at its bracket subphase destination', () => {
+    const dir = project('adr-612-bracket-insert-symlink-');
+    writeBracketFixture(dir);
+    const outside = path.join(dir, 'outside-insert-target');
+    fs.mkdirSync(outside);
+    const link = planning(dir, 'phases', 'CK.02-01.01-urgent-fix');
+    fs.symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
+    const roadmapBefore = fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8');
+
+    const result = runGsdTools(['phase', 'insert', '01', 'Urgent fix'], dir);
+
+    assert.equal(result.success, false, result.output);
+    assert.match(result.error, /symbolic link|outside the planning phases directory/i);
+    assert.equal(fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8'), roadmapBefore);
+    assert.deepEqual(fs.readdirSync(outside), []);
+    assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
   });
 
   // #4304 Blocker 2: the bracket branch validated the parent heading against

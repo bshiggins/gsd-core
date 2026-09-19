@@ -164,6 +164,24 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal((roadmap.match(/^\| \[CK\.02\] 02 \|/gm) ?? []).length, 1);
   });
 
+  test('refuses before mutation when bracket removal would rename into a symlinked directory path', () => {
+    const outside = path.join(tmpDir, 'outside-remove-target');
+    fs.mkdirSync(outside);
+    const link = planning('phases', 'CK.02-02-three');
+    fs.symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
+    const roadmapBefore = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+
+    assert.equal(result.success, false, result.output);
+    assert.match(result.error, /symbolic link|outside the planning phases directory/i);
+    assert.equal(fs.readFileSync(planning('ROADMAP.md'), 'utf8'), roadmapBefore);
+    assert.equal(fs.existsSync(planning('phases', 'CK.02-02-two')), true);
+    assert.equal(fs.existsSync(planning('phases', 'CK.02-03-three')), true);
+    assert.deepEqual(fs.readdirSync(outside), []);
+    assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+  });
+
   test('removes a bracket subphase and renumbers only later siblings', () => {
     const result = runGsdTools(['phase', 'remove', '01.01', '--force'], tmpDir);
     assert.equal(result.success, true, result.error || result.output);

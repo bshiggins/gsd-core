@@ -117,6 +117,7 @@ import { realClock } from './clock.cjs';
 import { transitionCore } from './state-transition.cjs';
 import { updateTableCell, deleteTableRow, escapeCell, splitTableRow } from './markdown-table.cjs';
 import { deleteSection, updateBullet, tokenizeHeadings, scanFencedBlocks, type HeadingToken } from './markdown-sectionizer.cjs';
+import { PathAcceptance, tryWithinRoot } from './security.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- uat-predicate.cjs is an export= CommonJS module
 import uatPredicate = require('./uat-predicate.cjs');
 const { evaluateUatPassed } = uatPredicate;
@@ -1533,6 +1534,38 @@ function bracketDirNameOrRefuse(
   }
 }
 
+/**
+ * #4304: fail closed before a bracket writer creates or renames into a phase
+ * directory. Allocation intentionally ignores symlink entries, so the exact
+ * destination must be checked with lstat (including dangling links) before a
+ * recursive mkdir or child write can follow it. The canonical containment
+ * predicate then resolves the existing path, or its nearest existing parent,
+ * so a destination reached through a symlinked ancestor cannot escape the
+ * planning phases directory either.
+ */
+function assertPhaseDirectoryDestinationSafe(
+  phasesDir: string,
+  dirName: string,
+  operation: 'create' | 'renumber into',
+): void {
+  const destination = path.join(phasesDir, dirName);
+  let stat: fs.Stats | null = null;
+  try {
+    stat = fs.lstatSync(destination);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT') {
+      error(`Cannot ${operation} phase directory "${dirName}": unable to inspect the destination (${code ?? 'unknown error'})`);
+    }
+  }
+  if (stat?.isSymbolicLink()) {
+    error(`Cannot ${operation} phase directory "${dirName}": the destination is a symbolic link`);
+  }
+  if (tryWithinRoot(destination, phasesDir, PathAcceptance.AbsoluteInsideRoot) === null) {
+    error(`Cannot ${operation} phase directory "${dirName}": the destination resolves outside the planning phases directory`);
+  }
+}
+
 function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: string): void {
   if (!description) {
     error('description required for phase add');
@@ -1624,6 +1657,10 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
     }
 
     const dirPath = path.join(planningDir(cwd), 'phases', _dirName);
+
+    if (bracketContext) {
+      assertPhaseDirectoryDestinationSafe(path.dirname(dirPath), _dirName, 'create');
+    }
 
     platformEnsureDir(dirPath);
     platformWriteSync(path.join(dirPath, '.gitkeep'), '');
@@ -1780,6 +1817,15 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
         dirName = `${prefix}${String(newPhaseId).padStart(2, '0')}-${slug}`;
       }
       validated.push({ description, slug, newPhaseId, dirName });
+    }
+
+    // Batch creation is all-or-nothing: validate every bracket destination
+    // before the first directory or ROADMAP byte is written.
+    if (bracketContext) {
+      const phasesDir = path.join(planningDir(cwd), 'phases');
+      for (const { dirName } of validated) {
+        assertPhaseDirectoryDestinationSafe(phasesDir, dirName, 'create');
+      }
     }
 
     const added: Record<string, unknown>[] = [];
@@ -2224,6 +2270,9 @@ function cmdPhaseInsert(
     // — must succeed (or `error()` out, which never returns) before the new
     // phase's directory is created. A failing insert now leaves `.planning`
     // byte-identical.
+    if (bracketId) {
+      assertPhaseDirectoryDestinationSafe(path.dirname(dirPath), _dirName, 'create');
+    }
     platformEnsureDir(dirPath);
     platformWriteSync(path.join(dirPath, '.gitkeep'), '');
 
@@ -3020,6 +3069,46 @@ function bracketOwnedLineOutsideActiveWindow(
   return null;
 }
 
+type BracketRenameCandidate = {
+  item: { dir: string; id: BracketRoadmapPhaseId; slug: string };
+  newId: BracketRoadmapPhaseId;
+  newDirName: string;
+};
+
+function bracketRenameCandidates(
+  phasesDir: string,
+  context: BracketWriteContext,
+  mapping: BracketRenumberMapping[],
+): BracketRenameCandidate[] {
+  const mappingKey = (phase: unknown, subphase: unknown): string =>
+    `${Number(phase)}.${subphase === undefined ? '' : Number(subphase)}`;
+  const byKey = new Map<string, BracketRoadmapPhaseId>();
+  for (const { oldId, newId } of mapping) byKey.set(mappingKey(oldId.phase, oldId.subphase), newId);
+
+  return bracketIdsInContext(phasesDir, context)
+    .filter(({ id }) => byKey.has(mappingKey(id.phase, id.subphase)))
+    .sort((a, b) => {
+      const phaseDelta = Number(a.id.phase) - Number(b.id.phase);
+      return phaseDelta !== 0
+        ? phaseDelta
+        : Number(a.id.subphase ?? 0) - Number(b.id.subphase ?? 0);
+    })
+    .map((item) => {
+      const newId = byKey.get(mappingKey(item.id.phase, item.id.subphase))!;
+      return { item, newId, newDirName: toDir(newId, item.slug) };
+    });
+}
+
+function assertBracketRenameDestinationsSafe(
+  phasesDir: string,
+  context: BracketWriteContext,
+  mapping: BracketRenumberMapping[],
+): void {
+  for (const { newDirName } of bracketRenameCandidates(phasesDir, context, mapping)) {
+    assertPhaseDirectoryDestinationSafe(phasesDir, newDirName, 'renumber into');
+  }
+}
+
 function renameBracketPhases(
   phasesDir: string,
   context: BracketWriteContext,
@@ -3033,23 +3122,10 @@ function renameBracketPhases(
   const renamedFiles: { from: string; to: string }[] = [];
   const renamedFileCollisions: { from: string; to: string; displaced_to: string | null }[] = [];
 
-  const mappingKey = (phase: unknown, subphase: unknown): string =>
-    `${Number(phase)}.${subphase === undefined ? '' : Number(subphase)}`;
-  const byKey = new Map<string, BracketRoadmapPhaseId>();
-  for (const { oldId, newId } of mapping) byKey.set(mappingKey(oldId.phase, oldId.subphase), newId);
-
-  const candidates = bracketIdsInContext(phasesDir, context)
-    .filter(({ id }) => byKey.has(mappingKey(id.phase, id.subphase)))
-    .sort((a, b) => {
-      const phaseDelta = Number(a.id.phase) - Number(b.id.phase);
-      return phaseDelta !== 0
-        ? phaseDelta
-        : Number(a.id.subphase ?? 0) - Number(b.id.subphase ?? 0);
-    });
-
-  for (const item of candidates) {
-    const newId = byKey.get(mappingKey(item.id.phase, item.id.subphase))!;
-    const newDirName = toDir(newId, item.slug);
+  for (const { item, newId, newDirName } of bracketRenameCandidates(phasesDir, context, mapping)) {
+    // Recheck immediately before the rename as well as cmdPhaseRemove's
+    // pre-mutation pass, closing the validation-to-use gap within this loop.
+    assertPhaseDirectoryDestinationSafe(phasesDir, newDirName, 'renumber into');
     retryRenameSync(path.join(phasesDir, item.dir), path.join(phasesDir, newDirName));
     renamedDirs.push({ from: item.dir, to: newDirName });
     renameBracketArtifactFiles(
@@ -4036,6 +4112,13 @@ function cmdPhaseRemove(
       removedSubphase,
     )
     : [];
+
+  // Validate every bracket rename destination before deleting the target or
+  // changing ROADMAP/STATE, so a planted symlink produces a clean refusal
+  // with the planning tree untouched.
+  if (removeContext) {
+    assertBracketRenameDestinationsSafe(phasesDir, removeContext, bracketMapping);
+  }
 
   if (targetDir) fs.rmSync(path.join(phasesDir, targetDir), { recursive: true, force: true });
 
