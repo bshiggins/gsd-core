@@ -2704,4 +2704,79 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.match(result.error, /lies outside/i);
     assert.deepEqual(snapshotTree(planning()), before);
   });
+  // #4304 round 10 (W2, .planning/2026-09-18-4773-opus-round9-correctness.json
+  // finding 4): the second marker loop (`isBracketMilestoneBoundary(h.text,
+  // h.level, null)`) admitted the ACTIVE milestone's own same-id, version-less
+  // prose sub-heading ("### [CK.02] Notes") as a milestone marker in its own
+  // right, so a shared "## Progress" table sitting after it — but still
+  // inside the active milestone's own primary range — was misread as
+  // belonging to a phantom "other milestone" and its target row survived,
+  // duplicating once the sibling phase renumbered onto the same identity.
+  test('does not treat the active milestone\'s own same-id prose sub-heading as a milestone marker', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current 🚧',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '',
+        '### [CK.02] Notes',
+        'aside',
+        '',
+        '### Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] 01 | 0/1 | Planned |',
+        '| [CK.02] 02 | 0/1 | Planned |',
+        '| [CK.02] 03 | 0/1 | Planned |',
+        '',
+        '## Done ✅',
+        '',
+        'nothing',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] 01 | 0/1 | Planned |',
+        '| [CK.02] 02 | 0/1 | Planned |',
+        '| [CK.02] 03 | 0/1 | Planned |',
+        '',
+        '## [CK.03] v3.0 — Planned 📋',
+        '',
+        '- [ ] [CK.03] 01: P',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', []],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+
+    // Exactly one surviving "02" row per Progress table (own + shared): no
+    // duplicate from the shared table being misattributed to the Notes
+    // heading as if it were a different milestone's own section.
+    assert.equal((roadmap.match(/^\| \[CK\.02\] 02 \|/gm) ?? []).length, 2);
+    assert.equal((roadmap.match(/^\| \[CK\.02\] 03 \|/gm) ?? []).length, 0);
+    assert.deepEqual(out.references_left_untouched, []);
+  });
 });

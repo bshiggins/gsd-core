@@ -3378,6 +3378,18 @@ function bracketRecognizedMilestoneMarkers(content: string): number[] {
     // (src/roadmap-parser.cts) literally rather than importing a private
     // helper across the module boundary for one boolean test.
     if (/v\d+(?:\.\d+)*(?:[-.][A-Za-z0-9]+)*/i.test(h.text)) continue;
+    // #4304 round 10 (W2, .planning/2026-09-18-4773-opus-round9-correctness.json
+    // finding 4): a "(Phase Details)" heading is always a CONTINUATION of
+    // whatever milestone opened before it (`currentMilestoneRawRanges`'s own
+    // `detailsMatch` grammar, src/roadmap-parser.cts:2288-2294), never a
+    // second, separate milestone marker in its own right — the version loop
+    // above already skips a VERSIONED continuation for exactly this reason
+    // (comment above); a version-LESS one (`## [CK.02] Current (Phase
+    // Details)`) fell through to this boundary-predicate scan uncaught,
+    // because `isBracketMilestoneBoundary` is called with `selectedBracketId`
+    // `null` here and so cannot recognize it as a continuation of its own
+    // milestone.
+    if (/\(Phase\s+Details\)/i.test(h.text)) continue;
     if (!isBracketMilestoneBoundary(h.text, h.level, null)) continue;
     markers.push(h.offset);
   }
@@ -3442,7 +3454,23 @@ function bracketProgressSectionOwnedByOtherMilestone(
   // a shared table can never be misread as belonging to a different one.
   if (ownProgressSectionRanges.length === 0) return false;
 
-  const markers = bracketRecognizedMilestoneMarkers(content);
+  // #4304 round 10 (W2, .planning/2026-09-18-4773-opus-round9-correctness.json
+  // finding 4): drop any marker lying STRICTLY inside the ACTIVE milestone's
+  // own ranges — a heading inside the active's own window (a same-id prose
+  // sub-heading like "### [CK.02] Notes", admitted by the boundary-predicate
+  // scan above because it is bracket-shaped and version-less) never opens a
+  // DIFFERENT milestone's section; it is content the active milestone itself
+  // owns. A marker AT the range's own start (the active's own primary/details
+  // heading) is kept — that is the "sandwiched under the ACTIVE milestone's
+  // own heading" case just below, not an interior heading. Same-code SHIPPED
+  // headings are never inside the active's own ranges, so they stay markers.
+  const markers = bracketRecognizedMilestoneMarkers(content).filter((offset) => {
+    if (!activeRanges) return true;
+    const insidePrimary = offset > activeRanges.primary.start && offset < activeRanges.primary.end;
+    const insideDetails = activeRanges.details !== null
+      && offset > activeRanges.details.start && offset < activeRanges.details.end;
+    return !insidePrimary && !insideDetails;
+  });
   let precedingIndex = -1;
   for (let i = 0; i < markers.length; i++) {
     if (markers[i] <= progressStart) precedingIndex = i;
