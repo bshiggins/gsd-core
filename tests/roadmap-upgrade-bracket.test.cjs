@@ -40,7 +40,7 @@ const { scopeToPhase, matchPhaseDirs, isSentinelPhaseId } = require('../gsd-core
 // phase-heading predicate — the READERS' OWN phase-heading grammar the
 // bracket migrator's "phase-like but unparsed" refusal must be gated on
 // (see the describe block below).
-const { hasPhaseEntries, isPhaseHeadingText } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
+const { hasPhaseEntries, isPhaseHeadingText, scanMilestonePhaseIds } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
 const { extractFencedBlock } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 // #4698 Blocker 1 (round 2): real production functions used to prove the
@@ -3137,6 +3137,61 @@ describe('roadmap upgrade --convention bracket', () => {
       assert.ok(
         after.includes('```markdown\n- [ ] **Phase 1:** example\n```'),
         'the fenced bullet must survive byte-identical',
+      );
+    });
+  });
+
+  // #4144 round 7 W3: `BULLET_PHASE_LINE_PATTERN` (roadmap-parser.cts:1446,
+  // the scanner `scanMilestonePhaseIds` uses) accepts BOTH `-` and `*` list
+  // markers (`^\s*[-*]\s+...`), but this migrator's own checklist prefix
+  // (`CHECKLIST_BULLET_PREFIX_SRC`) began with a literal `-` only, so a
+  // `* [ ] **Phase 1: Alpha**` bullet stayed legacy after an otherwise-done
+  // migration — and the bracket-mode milestone id set then carried the
+  // stale legacy token alongside the bracket ones.
+  describe('accepts star list markers on checklist bullets (#4144 round 7 W3)', () => {
+    test('star-marker bold checklist bullets convert the same way dash-marker ones do', () => {
+      const cwd = materializeEmptyFixture('starbullet');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'config.json'),
+        JSON.stringify({ project_code: 'GSD', phase_id_convention: null }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v1.0 Core',
+          '',
+          '* [ ] **Phase 1: Alpha**',
+          '* [ ] **Phase 2: Beta**',
+          '',
+          '### Phase 1: Alpha',
+          '### Phase 2: Beta',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      for (const dir of ['01-alpha', '02-beta']) {
+        fs.mkdirSync(path.join(phasesDir, dir), { recursive: true });
+      }
+
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'star-bullet dry-run');
+      assert.equal(plan.roadmapEdits.find(({ from }) => from === '* [ ] **Phase 1: Alpha**')?.to, '* [ ] **[GSD.01] 01: Alpha**');
+      assert.equal(plan.roadmapEdits.find(({ from }) => from === '* [ ] **Phase 2: Beta**')?.to, '* [ ] **[GSD.01] 02: Beta**');
+
+      const applied = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(applied, 0, 'star-bullet apply');
+      const roadmap = fs.readFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), 'utf8');
+      assert.match(roadmap, /\* \[ \] \*\*\[GSD\.01\] 01: Alpha\*\*/);
+      assert.match(roadmap, /\* \[ \] \*\*\[GSD\.01\] 02: Beta\*\*/);
+
+      const bracketIds = [...scanMilestonePhaseIds(roadmap, 'bracket')];
+      assert.deepEqual(
+        bracketIds.sort(),
+        ['01', '02'],
+        'no stale legacy token ("1"/"2") may survive alongside the bracket ids',
       );
     });
   });

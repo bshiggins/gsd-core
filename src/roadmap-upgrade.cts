@@ -1555,7 +1555,13 @@ function computeBracketPlan(cwd: string): MigrationPlan {
   // THE LINE — bold close, tag, separator, colon, whatever follows — is
   // preserved verbatim via `line.slice(match[0].length)` below, never
   // reconstructed.
-  const CHECKLIST_BULLET_PREFIX_SRC = '-\\s*\\[[ x]\\]\\s*\\*{0,2}';
+  // #4144 round 7 W3: `[-*]`, not a literal `-` — the same list-marker class
+  // `BULLET_PHASE_LINE_PATTERN` (roadmap-parser.cts:1446, the scanner
+  // `scanMilestonePhaseIds` uses) already accepts. A `* [ ] **Phase 1: …**`
+  // bullet stayed legacy after an otherwise-done migration, so the
+  // bracket-mode milestone id set carried the stale legacy token alongside
+  // the bracket ones.
+  const CHECKLIST_BULLET_PREFIX_SRC = '[-*]\\s*\\[[ x]\\]\\s*\\*{0,2}';
   const CHECKLIST_PHASE_INTRO_SRC = phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, undefined, true);
   const mnnChecklistRe = new RegExp(
     `^(\\s*${CHECKLIST_BULLET_PREFIX_SRC})${CHECKLIST_PHASE_INTRO_SRC}(${MNN_SOURCE_TOKEN_SOURCE})(${OPTIONAL_PHASE_TAG_SOURCE})`,
