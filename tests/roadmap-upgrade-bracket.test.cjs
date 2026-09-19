@@ -2683,6 +2683,56 @@ describe('roadmap upgrade --convention bracket', () => {
     });
   });
 
+  // #4144 round 8 W2: in a BALANCED tie group (dirs === candidates), the
+  // resolution loop's "single remaining candidate" shortcut accepted
+  // whichever directory is visited LAST without ever checking its slug —
+  // fine when every directory in the group is a genuine phase directory,
+  // wrong when a STALE duplicate-number directory (a leftover copy of one
+  // real phase's directory) is among them: the real directory claims its
+  // own phase by slug first, and the stale leftover is then handed the
+  // OTHER phase by elimination alone, though its own slug names neither.
+  describe('refuses a stale duplicate-number directory instead of assigning it by elimination (#4144 round 8 W2)', () => {
+    test('a stale copy of one phase\'s directory is refused rather than silently claiming the other phase', () => {
+      const cwd = materializeEmptyFixture('balanced-stale-dup');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'config.json'),
+        JSON.stringify({ project_code: 'GSD', phase_id_convention: null }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v1.0 Core',
+          '',
+          '### Phase 1: Alpha',
+          '**Goal**: a',
+          '',
+          '## v2.0 Scale',
+          '',
+          '### Phase 1: Beta',
+          '**Goal**: b',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      for (const dir of ['01-alpha', '01-alpha-old']) {
+        fs.mkdirSync(path.join(phasesDir, dir), { recursive: true });
+        fs.writeFileSync(path.join(phasesDir, dir, '01-01-PLAN.md'), '---\nphase: "01"\n---\n# plan\n', 'utf8');
+      }
+      const before = snapshotTree(cwd, { skipGit: true });
+
+      const result = runBracketUpgrade(cwd);
+
+      assertExited(result, 1, 'stale duplicate-number directory dry-run');
+      assert.match(result.stderr, /01-alpha-old/, 'the refusal must name the stale directory');
+      assert.doesNotMatch(result.stderr, /GSD\.02-01-alpha-old/, 'the stale directory must never be silently assigned Beta\'s identity');
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'a refusal must write nothing');
+    });
+  });
+
   // #4144 round 7 W1: the B3 tie-break slugified the heading NAME with
   // `generateSlugInternal(text, null)` — never accounting for the way the
   // HARNESS ITSELF derives a directory's own slug. `phase insert` writes

@@ -1382,6 +1382,21 @@ function computeBracketPlan(cwd: string): MigrationPlan {
   // never `dirs !== candidates` — this check only catches a genuine
   // directory-count SURPLUS, never a deficit and never re-litigates a
   // balanced pairing.
+  // #4144 round 8 W2: for every directory that was ever part of a
+  // multi-directory tie group (2+ directories structurally contesting the
+  // identical candidate set — a duplicate/stale legacy-number directory
+  // sharing the tree with the real one), record the group's directory
+  // count here. The resolution loop below consults this to decide whether
+  // its own "single remaining candidate" shortcut may skip the slug check:
+  // it may only do so for a directory that was NEVER part of such a group
+  // (group size 1 — an ordinary, unambiguous structural match, including one
+  // whose own slug paraphrases its phase's name rather than matching it
+  // exactly, round 6 B3's r4e case). A directory that WAS part of a
+  // multi-directory group must still pass the slug check even once
+  // elimination has narrowed it down to a single remaining candidate,
+  // because elimination alone cannot tell a stale duplicate from the real
+  // directory (see W2 below).
+  const dirTieGroupSize = new Map<string, number>();
   {
     const allMappings = [...idMapping.values()];
     const ambiguityGroups = new Map<string, { dirs: string[]; mappingLines: number[] }>();
@@ -1409,15 +1424,17 @@ function computeBracketPlan(cwd: string): MigrationPlan {
       // round 8 B1: only a directory SURPLUS is the silent-drop hazard this
       // check exists for; fewer (or exactly as many) directories than
       // candidates is left to the slug-driven resolution loop below.
-      if (group.dirs.length <= group.mappingLines.length) continue;
-      throw new Error(
-        'Cannot safely migrate ROADMAP.md to the bracket convention: '
-        + `${group.dirs.length} phase director${group.dirs.length === 1 ? 'y' : 'ies'} `
-        + `(${group.dirs.map((dir) => JSON.stringify(dir)).join(', ')}) tie with the same `
-        + `${group.mappingLines.length} candidate phase heading(s) — an unresolvable count mismatch. `
-        + 'Refusing rather than silently dropping a real directory from the plan:\n'
-        + group.mappingLines.map((lineIndex) => `  ${lines[lineIndex]}`).join('\n'),
-      );
+      if (group.dirs.length > group.mappingLines.length) {
+        throw new Error(
+          'Cannot safely migrate ROADMAP.md to the bracket convention: '
+          + `${group.dirs.length} phase director${group.dirs.length === 1 ? 'y' : 'ies'} `
+          + `(${group.dirs.map((dir) => JSON.stringify(dir)).join(', ')}) tie with the same `
+          + `${group.mappingLines.length} candidate phase heading(s) — an unresolvable count mismatch. `
+          + 'Refusing rather than silently dropping a real directory from the plan:\n'
+          + group.mappingLines.map((lineIndex) => `  ${lines[lineIndex]}`).join('\n'),
+        );
+      }
+      for (const dir of group.dirs) dirTieGroupSize.set(dir, group.dirs.length);
     }
   }
 
@@ -1444,11 +1461,24 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     // comparing the directory's OWN slug against each candidate's phase name
     // slugified the same way `toDir` sanitizes one; exactly one match wins.
     //
-    // #4144 round 7 W2: the plan-level check above already refuses a
-    // genuine cardinality mismatch (more directories than candidates in a
-    // shared tie group), so by the time this loop runs, any directory whose
-    // tie shrinks to exactly one still-unused candidate belongs to a
-    // BALANCED group and that candidate is its correct match.
+    // #4144 round 7 W2, corrected round 8 W2: the plan-level check above
+    // already refuses a genuine cardinality mismatch (more directories than
+    // candidates in a shared tie group), so by the time this loop runs, any
+    // directory whose tie shrinks to exactly one still-unused candidate
+    // belongs to a group with dirs <= candidates. That is NOT the same as
+    // saying the remaining candidate is automatically correct: in a
+    // BALANCED group (dirs === candidates, e.g. exactly two real
+    // directories for two real phases) it usually is, because every
+    // directory in that group is claimed by its own true match in turn —
+    // but when a stale duplicate-number directory is among them (`01-alpha`
+    // / `01-alpha-old` both tying with {Alpha, Beta}), the real directory
+    // claims its own phase by slug first and the stale leftover would
+    // otherwise be handed the other phase by elimination alone, with no
+    // slug agreement ever checked. See `dirTieGroupSize` below: a directory
+    // that was never part of a multi-directory tie group may still skip
+    // straight to its sole match with no check at all (there is no sibling
+    // to confuse it with); one that WAS still gets a (prefix-tolerant, not
+    // exact) sanity check against the sole remaining candidate.
     let bestSpecificity = -1;
     let tied: Array<{ candidate: (typeof orderedMappings)[number]; match: { slug: string; matchedToken: string } }> = [];
     for (const candidate of orderedMappings) {
@@ -1478,6 +1508,34 @@ function computeBracketPlan(cwd: string): MigrationPlan {
         );
       }
       winner = bySlug[0];
+    } else if ((dirTieGroupSize.get(dirName) ?? 1) > 1) {
+      // #4144 round 8 W2: exactly one unused candidate remains for this
+      // directory, but it was reached by ELIMINATION out of a
+      // multi-directory tie group (another directory shares its legacy
+      // number) — the round-6 depletion loop accepted whichever directory
+      // is visited LAST in such a group without ever checking its slug,
+      // which is exactly how a stale duplicate-number directory (`01-alpha`
+      // / `01-alpha-old`, both tying with {Alpha, Beta}) ends up claiming
+      // the OTHER real phase once the real directory has already claimed
+      // its own. A directory's own slug is often an abbreviation of the
+      // full phase name rather than an exact match (round 6 B3's r4e: dir
+      // `01-zeta` for phase "Zeta - the return"), so this check is
+      // prefix-tolerant in either direction rather than requiring exact
+      // equality — but a slug that shares NO relation at all to the sole
+      // remaining candidate (c2: "alpha-old" vs "beta") is refused rather
+      // than silently handed a phase it never named.
+      const dirSlug = slugify(tied[0].match.slug);
+      const candidateSlug = slugify(tied[0].candidate.mapping.phaseName);
+      const agrees = candidateSlug.startsWith(dirSlug) || dirSlug.startsWith(candidateSlug);
+      if (!agrees) {
+        throw new Error(
+          `Cannot resolve phase directory ${JSON.stringify(dirName)}: another directory sharing its legacy `
+          + 'number already claimed a different phase, and this directory\'s own slug shares no relation to '
+          + 'the one remaining candidate phase heading. Refusing rather than guessing which phase it '
+          + 'identifies:\n'
+          + `  ${lines[tied[0].candidate.mapping.lineIndex]}`,
+        );
+      }
     }
     winner.candidate.used = true;
     const hit = winner.candidate;
