@@ -2279,6 +2279,127 @@ describe('roadmap upgrade --convention bracket', () => {
     });
   });
 
+  // #4144 round 7 B2: the READERS' own checklist grammar
+  // (`src/roadmap.cts:770` checklistPattern — the exact scan
+  // `missing_phase_details` is computed from) requires an EXACT bold `**`
+  // immediately before the `Phase` label. This migrator's own long-standing
+  // tolerance additionally accepts 0 or 1 asterisks — a plain, non-bold
+  // `- [x] Phase 3: Gamma` has converted since round 1 and must keep doing
+  // so. Round 6 dropped the checklist regex's colon requirement (B4) AND
+  // turned an unresolved bullet into a hard refusal, so a non-bold to-do
+  // bullet naming a phase number no heading defines (e.g.
+  // `- [ ] Phase 2 retrospective write-up`, where no "Phase 2" heading
+  // exists anywhere) now refuses the whole migration even though NO reader
+  // treats a non-bold bullet as a phase reference (roadmap.cts:770 requires
+  // bold, roadmap-parser.cts:1446 requires `**Phase`, phase.cts's checkbox
+  // branch requires a separator). Two tiers: Tier 1 (the readers' own
+  // grammar — an EXACT `**` bold intro) converts when it resolves, refuses
+  // when it does not (the partial-conversion rule, unchanged). Tier 2 (this
+  // migrator's own wider, non-bold tolerance) converts when it resolves
+  // (e.g. `- [ ] Phase 1 demo video`, a plain to-do naming a real "Phase 1"
+  // heading in its own enclosing section — `## Notes` is not itself a
+  // `## vN.M` heading, so it never ends the enclosing milestone section;
+  // `milestoneSections` only ever breaks a section at the next versioned
+  // heading), otherwise stays byte-identical — never refused, and (per the
+  // OUTSIDE-every-section ambiguity search a few lines below) never
+  // resolved by guessing across sections the way Tier 1 alone may.
+  describe('refuses only checklist bullets the readers\' own grammar recognizes as phase references (#4144 round 7 B2)', () => {
+    function buildNonBoldFixture() {
+      const cwd = materializeEmptyFixture('nonbold-checklist');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'config.json'),
+        JSON.stringify({ project_code: 'GSD', phase_id_convention: null }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v1.0 Core',
+          '',
+          '- [ ] **Phase 1: Alpha** - a',
+          '',
+          '### Phase 1: Alpha',
+          '**Goal**: a',
+          '',
+          '## Notes',
+          '',
+          '- [ ] Phase 2 retrospective write-up',
+          '- [ ] Phase 1 demo video',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      fs.mkdirSync(path.join(phasesDir, '01-alpha'), { recursive: true });
+      fs.writeFileSync(path.join(phasesDir, '01-alpha', '01-01-PLAN.md'), '---\nphase: "01"\n---\n', 'utf8');
+      return cwd;
+    }
+
+    test('a non-bold to-do bullet naming an unresolvable phase number stays byte-identical; a resolvable one still converts', () => {
+      const cwd = buildNonBoldFixture();
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'non-bold checklist dry-run');
+
+      assert.equal(
+        plan.roadmapEdits.some(({ from }) => from === '- [ ] Phase 2 retrospective write-up'),
+        false,
+        'no heading defines "Phase 2" anywhere — left untouched, not refused',
+      );
+      assert.equal(
+        plan.roadmapEdits.find(({ from }) => from === '- [ ] Phase 1 demo video')?.to,
+        '- [ ] [GSD.01] 01 demo video',
+        'a non-bold bullet that DOES resolve (a real "Phase 1" heading in its own section) still converts',
+      );
+      assert.ok(plan.roadmapEdits.some(({ from }) => from === '- [ ] **Phase 1: Alpha** - a'), 'the bold bullet still converts');
+
+      const applied = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(applied, 0, 'non-bold checklist apply');
+      const roadmap = fs.readFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), 'utf8');
+      assert.match(roadmap, /- \[ \] Phase 2 retrospective write-up/);
+      assert.match(roadmap, /- \[ \] \[GSD\.01\] 01 demo video/);
+      assert.match(roadmap, /- \[ \] \*\*\[GSD\.01\] 01: Alpha\*\* - a/);
+    });
+
+    test('a bold to-do bullet naming an unresolvable phase number still refuses before any write', () => {
+      const cwd = materializeEmptyFixture('bold-unresolvable-checklist');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'config.json'),
+        JSON.stringify({ project_code: 'GSD', phase_id_convention: null }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v1.0 Core',
+          '',
+          '- [ ] **Phase 1: Alpha** - a',
+          '',
+          '### Phase 1: Alpha',
+          '**Goal**: a',
+          '',
+          '## Notes',
+          '',
+          '- [ ] **Phase 2** retrospective write-up',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      fs.mkdirSync(path.join(phasesDir, '01-alpha'), { recursive: true });
+      fs.writeFileSync(path.join(phasesDir, '01-alpha', '01-01-PLAN.md'), '---\nphase: "01"\n---\n', 'utf8');
+      const before = snapshotTree(cwd, { skipGit: true });
+
+      const result = runBracketUpgrade(cwd);
+
+      assertExited(result, 1, 'bold unresolvable checklist bullet dry-run');
+      assert.match(result.stderr, /recognize as a phase reference/i);
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'a refusal must write nothing');
+    });
+  });
+
   // #4144 round 6 B3: the same legacy phase NUMBER in two different sections
   // (the exact ambiguity M-NN exists to resolve) is claimed by directories in
   // LISTING order, because `matchBracketSourceDir`'s legacy branch matches

@@ -1520,6 +1520,20 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     const legacyChecklist = line.match(legacyChecklistRe);
     if (!legacyChecklist) continue;
     const key = legacyLookupKey(legacyChecklist[2]);
+    // #4144 round 7 B2: the READERS' own checklist grammar
+    // (`src/roadmap.cts` checklistPattern, the exact scan
+    // `missing_phase_details` is computed from) requires an EXACT bold `**`
+    // immediately before the `Phase` label. This migrator's own
+    // long-standing tolerance additionally accepts 0 or 1 asterisks
+    // (`\*{0,2}` in CHECKLIST_BULLET_PREFIX_SRC above) — captured group 1
+    // therefore ends in `**` if and only if the bullet is the exact shape a
+    // reader recognizes. A bullet the readers recognize that cannot be
+    // attributed to any converted phase is a genuine partial-conversion
+    // hazard and must refuse; a bullet only THIS migrator's wider tolerance
+    // matches is not a phase reference to any reader — converted when it
+    // resolves (keeps the long-standing non-bold conversion case green),
+    // left byte-identical rather than refused when it does not.
+    const isReaderRecognizedBullet = /\*\*$/.test(legacyChecklist[1]);
     let resolved: { token: string; milestoneInt: number } | undefined;
     // #4144 round 7 B1: a checklist bullet naming a SENTINEL phase (999.x
     // icebox / 0.x backlog) bypasses section attribution entirely — the same
@@ -1542,10 +1556,14 @@ function computeBracketPlan(cwd: string): MigrationPlan {
         .find((section) => section.milestoneInt !== null) ?? null;
       if (bulletSection) {
         resolved = sectionLegacyMap.get(bulletSection.start)?.get(key);
-      } else {
+      } else if (isReaderRecognizedBullet) {
         // Outside every section (a global summary list): unambiguous only
         // when exactly one section (or the no-section bucket) defines this
-        // legacy token.
+        // legacy token. #4144 round 7 B2: this cross-section search is
+        // reserved for Tier 1 (reader-recognized) bullets — Tier 2's own
+        // wider, non-reader-recognized tolerance only ever resolves WITHIN
+        // its own section (see the `!resolved` branch below); it never
+        // reaches across sections to guess at an unrelated to-do bullet.
         const candidates: Array<{ token: string; milestoneInt: number }> = [];
         for (const lookup of sectionLegacyMap.values()) {
           const candidate = lookup.get(key);
@@ -1563,6 +1581,14 @@ function computeBracketPlan(cwd: string): MigrationPlan {
       }
     }
     if (!resolved) {
+      if (!isReaderRecognizedBullet) {
+        // #4144 round 7 B2: no reader treats this bullet as a phase
+        // reference (roadmap.cts:770 requires bold, roadmap-parser.cts:1446
+        // requires `**Phase`, phase.cts's checkbox branch requires a
+        // separator after the token) — there is nothing for a "done"
+        // migration to have missed. Left byte-identical, never refused.
+        continue;
+      }
       // #4144 round 6 B4: the readers' own grammar recognizes this bullet as
       // a phase reference (mnnChecklistRe/legacyChecklistRe just matched
       // it), but this migrator could not attribute it to any converted
