@@ -363,6 +363,24 @@ function listMilestoneHeadings(content: string): Array<{ heading: string; versio
 const MILESTONE_HEADING_LINE_SOURCE = '^#{1,3}\\s+(?!Phase\\s+\\S)[^\\n]*';
 
 /**
+ * #4304: classify one level-1..3 heading through the same milestone grammar
+ * the window locator owns. Phase headings are excluded first through the
+ * reader's own legacy/bracket discriminators, regardless of words or markers
+ * in their titles; `Failed Payment Recovery` and `Done ✅` remain phase
+ * titles, never milestone section boundaries. Version-bearing headings route
+ * through `listMilestoneHeadings`; version-less bracket headings route through
+ * `isBracketMilestoneBoundary`, the discriminator also used by the bracket
+ * fallback locator.
+ */
+function isRecognizedMilestoneHeading(headingText: string, level: number): boolean {
+  if (level < 1 || level > 3) return false;
+  if (/^Phase\s+\S/i.test(headingText) || BRACKET_PHASE_TAIL_RE.test(headingText)) return false;
+  const line = `${'#'.repeat(level)} ${headingText}`;
+  return listMilestoneHeadings(line).length > 0
+    || isBracketMilestoneBoundary(headingText, level, null);
+}
+
+/**
  * #3184: the sole milestone-heading locator. Boundary-matched on the version
  * token with `\b`, NOT the stricter `(?![\w.-])`: this function keeps `\b`
  * because a milestone STATE legitimately selects its own sub-milestone
@@ -2327,6 +2345,9 @@ export = {
   computeMilestoneSectionEnd,
   locateMilestoneHeadings,
   listMilestoneHeadings,
+  // #4304: historical mutation guards consume the window locator's
+  // milestone-vs-phase decision before applying CLOSED markers.
+  isRecognizedMilestoneHeading,
   selectMilestoneHeading,
   classifyMilestoneWindow,
   // #3184: the sole "give me this version's window" composition — see its
@@ -2404,4 +2425,3 @@ function extractPhaseFieldMultiline(section: string, label: string): string | nu
   }
   return [firstLine, ...contLines].join(' ').trim() || null;
 }
-

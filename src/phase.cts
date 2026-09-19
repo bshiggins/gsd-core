@@ -97,6 +97,7 @@ const {
   // (bracketOwnedLineOutsideActiveWindow) can recognize an archived section
   // instead of a re-typed copy of MILESTONE_CLOSED_MARKER_PATTERN.
   isClosedMilestoneHeading,
+  isRecognizedMilestoneHeading,
 } = roadmapParserMod;
 // #4129: the single owner of "count the ROADMAP's milestone Complete rows"
 // (pure computation, no I/O — no cycle on this path) for the intent-first
@@ -2900,10 +2901,12 @@ function bracketPhaseOwnSubphases(
 /**
  * #4304 (B1): identify ROADMAP lines owned by historical milestone sections.
  * A `<details>` block is archived regardless of its summary text. Outside
- * details, a CLOSED/ARCHIVED/SHIPPED milestone heading at level 1-3 owns the
- * section through the next heading at the same or shallower level. The marker
- * predicate is imported from roadmap-parser, so selection and mutation cannot
- * drift on which milestone headings are closed.
+ * details, a reader-recognized CLOSED/ARCHIVED/SHIPPED milestone heading owns
+ * the section through the next reader-recognized milestone heading at the
+ * same or shallower level. Recognition is imported from the window locator's
+ * milestone-vs-phase grammar before the marker predicate is applied, so an
+ * ordinary phase title containing FAILED or ✅ never opens or resets a
+ * historical section.
  *
  * This is the single owner consumed by both the active-window safety guard and
  * bracket removal's rewrite pass. Historical lines are evidence of neither an
@@ -2923,8 +2926,9 @@ function archivedOrClosedMilestoneLineStarts(content: string): Set<number> {
     const headingMatch = /^(#{1,6})[ \t]+(.*)$/.exec(text);
     if (headingMatch) {
       const level = headingMatch[1].length;
-      if (closedHeadingLevel && level <= closedHeadingLevel) closedHeadingLevel = 0;
-      if (!closedHeadingLevel && level <= 3 && isClosedMilestoneHeading(headingMatch[2])) {
+      const milestoneHeading = isRecognizedMilestoneHeading(headingMatch[2], level);
+      if (milestoneHeading && closedHeadingLevel && level <= closedHeadingLevel) closedHeadingLevel = 0;
+      if (!closedHeadingLevel && milestoneHeading && isClosedMilestoneHeading(headingMatch[2])) {
         closedHeadingLevel = level;
       }
     }

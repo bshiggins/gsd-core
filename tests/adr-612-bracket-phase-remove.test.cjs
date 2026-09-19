@@ -1059,7 +1059,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
       [
         '# Roadmap',
         '',
-        '## [CK.02] v2.0 — Shipped ✅',
+        '## [CK.02] v2.0 — Phase Recovery Shipped ✅',
         '',
         '- [x] [CK.02] 01: Old One',
         '- [x] [CK.02] 02: Old Two',
@@ -2781,6 +2781,47 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(roadmap.includes('### [CK.02] 02: Three'), true);
     assert.deepEqual(out.references_left_untouched, []);
   });
+
+  // #4304 round 12 (B1): the historical-section marker predicate recognizes
+  // words such as FAILED and the check mark, but those words can also appear
+  // in an ordinary phase title. A phase heading is never a milestone section
+  // boundary, even when its title carries a closed-milestone marker.
+  for (const phaseTitle of ['Failed Payment Recovery', 'Done ✅']) {
+    test(`renumbers an active phase titled ${JSON.stringify(phaseTitle)} instead of treating it as history`, () => {
+      replaceSeed(
+        [
+          '# Roadmap',
+          '',
+          '## [CK.02] v2.0 — Current 🚧',
+          '',
+          '### [CK.02] 01: One',
+          '**Goal:** keep',
+          '',
+          '### [CK.02] 02: Two',
+          '**Goal:** remove',
+          '',
+          `### [CK.02] 03: ${phaseTitle}`,
+          '**Goal:** renumber',
+          '',
+        ],
+        [
+          ['CK.02-01-one', []],
+          ['CK.02-02-two', []],
+          ['CK.02-03-three', []],
+        ],
+      );
+
+      const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+      assert.equal(result.success, true, result.error || result.output);
+      const out = JSON.parse(result.output);
+      const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+
+      assert.equal(fs.existsSync(planning('phases', 'CK.02-02-three')), true);
+      assert.equal(roadmap.includes(`### [CK.02] 02: ${phaseTitle}`), true);
+      assert.equal(roadmap.includes(`### [CK.02] 03: ${phaseTitle}`), false);
+      assert.deepEqual(out.references_left_untouched, []);
+    });
+  }
   // #4304 round 10 (W1, .planning/2026-09-18-4773-opus-round9-correctness.json
   // finding 2): the round-9 guard was additionally gated on `targetDir`, so a
   // ROADMAP-only target (a phase `phase add` created with no directory yet)
