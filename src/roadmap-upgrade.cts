@@ -1344,27 +1344,43 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     coreUtilsMod.generateSlugInternal(text.replace(/\(INSERTED\)/i, '').trim()) ?? ''
   );
 
-  // #4144 round 7 W2: a plan-level ambiguity check that runs BEFORE the
-  // resolution loop below and never touches its (unmodified, round-6)
-  // algorithm. For every directory that structurally ties with more than
-  // one candidate at its own best specificity, group directories by the
-  // EXACT set of candidates they tie with — two directories tying with the
-  // identical candidate set are contesting the identical pool — and refuse
-  // when that group's directory count does not equal its candidate count.
-  // A stale duplicate-number directory sorting between two real ones (e.g.
-  // `01-gamma`, `01-gamma-old`, `01-zeta`, all three tying with {Zeta,
-  // Gamma}) is exactly this: 3 directories for 2 candidates. Left
-  // unchecked, the resolution loop's own "only one candidate left" shortcut
-  // (used when a directory's tie has already shrunk to a single remaining
-  // candidate) accepts whichever directory is visited LAST in that group
-  // WITHOUT ever verifying its slug — silently dropping the true match for
-  // the other leftover directory from the plan. A BALANCED group (equal
+  // #4144 round 7 W2, corrected round 8 B1: a plan-level ambiguity check
+  // that runs BEFORE the resolution loop below and never touches its
+  // (unmodified, round-6) algorithm. For every directory that structurally
+  // ties with more than one candidate at its own best specificity, group
+  // directories by the EXACT set of candidates they tie with — two
+  // directories tying with the identical candidate set are contesting the
+  // identical pool — and refuse ONLY when that group's directory count
+  // EXCEEDS its candidate count. A stale duplicate-number directory sorting
+  // between two real ones (e.g. `01-gamma`, `01-gamma-old`, `01-zeta`, all
+  // three tying with {Zeta, Gamma}) is exactly this: 3 directories for 2
+  // candidates. Left unchecked, the resolution loop's own "only one
+  // candidate left" shortcut (used when a directory's tie has already
+  // shrunk to a single remaining candidate) accepts whichever directory is
+  // visited LAST in that group WITHOUT ever verifying its slug — silently
+  // dropping the true match for the other leftover directory from the plan.
+  //
+  // round 8 B1: the round-7 condition (`dirs.length !== mappingLines.length`)
+  // over-refused — it also caught the far MORE common shape where a tie
+  // group has FEWER directories than candidates: a later milestone that
+  // reuses a legacy number but is only planned (no directory yet), an
+  // archived `<details>` milestone whose directory was already cleaned up,
+  // or a decimal insert whose sibling milestone has no directory at all.
+  // That shape is never the silent-drop hazard above: the depletion loop
+  // below only ever drops a directory WITHOUT a slug check when a tie group
+  // has MORE directories than unused candidates (a directory visited with no
+  // unused candidate left just falls through its own `if (tied.length === 0)
+  // continue`, below). With fewer (or equal) directories than candidates,
+  // every directory the loop below visits is either resolved by its own
+  // slug comparison or refused loudly on its own — a BALANCED group (equal
   // counts — e.g. exactly `01-gamma`/`01-zeta` tying with {Zeta, Gamma}) is
-  // left entirely to the resolution loop below, unchanged: that loop's own
-  // slug-driven, elimination-assisted pairing already resolves a balanced
-  // group correctly (round 6 B3), including a directory whose own slug is a
-  // paraphrase of its phase's name rather than an exact match — this check
-  // only catches a genuine CARDINALITY mismatch, never re-litigates a
+  // one instance of this and is left entirely to the resolution loop below,
+  // unchanged: that loop's own slug-driven, elimination-assisted pairing
+  // already resolves a balanced group correctly (round 6 B3), including a
+  // directory whose own slug is a paraphrase of its phase's name rather than
+  // an exact match. So the safe pre-check condition is `dirs > candidates`,
+  // never `dirs !== candidates` — this check only catches a genuine
+  // directory-count SURPLUS, never a deficit and never re-litigates a
   // balanced pairing.
   {
     const allMappings = [...idMapping.values()];
@@ -1390,7 +1406,10 @@ function computeBracketPlan(cwd: string): MigrationPlan {
       ambiguityGroups.get(groupKey)!.dirs.push(dirName);
     }
     for (const group of ambiguityGroups.values()) {
-      if (group.dirs.length === group.mappingLines.length) continue;
+      // round 8 B1: only a directory SURPLUS is the silent-drop hazard this
+      // check exists for; fewer (or exactly as many) directories than
+      // candidates is left to the slug-driven resolution loop below.
+      if (group.dirs.length <= group.mappingLines.length) continue;
       throw new Error(
         'Cannot safely migrate ROADMAP.md to the bracket convention: '
         + `${group.dirs.length} phase director${group.dirs.length === 1 ? 'y' : 'ies'} `

@@ -2707,6 +2707,164 @@ describe('roadmap upgrade --convention bracket', () => {
     });
   });
 
+  // #4144 round 8 B1: the round-7 W2 pre-check above refused a tie group
+  // whenever `dirs.length !== mappingLines.length`, which also caught the far
+  // more common shape where a tie group has FEWER directories than
+  // candidates — a later milestone that reuses a legacy number but is only
+  // planned (no directory yet), an archived `<details>` milestone whose
+  // directory was cleaned up, or a decimal insert whose sibling has no
+  // directory. The depletion loop only ever drops a directory silently when a
+  // tie group has MORE directories than candidates (a directory visited with
+  // no unused candidate left just `continue`s); with fewer directories every
+  // directory is either resolved by slug or refused loudly on its own, so the
+  // safe pre-check condition is `dirs > candidates`, never `!==`.
+  describe('resolves a tie group with fewer directories than candidates by slug (#4144 round 8 B1)', () => {
+    test('a legacy number shared by a started and an unstarted milestone resolves the started one by slug', () => {
+      const cwd = materializeEmptyFixture('fewer-dirs-unstarted');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'config.json'),
+        JSON.stringify({ project_code: 'GSD', phase_id_convention: null }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v1.0 Core',
+          '',
+          '- [x] **Phase 1: Alpha**',
+          '',
+          '### Phase 1: Alpha',
+          '**Goal**: a',
+          '',
+          '## v2.0 Scale',
+          '',
+          '- [ ] **Phase 1: Beta**',
+          '',
+          '### Phase 1: Beta',
+          '**Goal**: b',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      fs.mkdirSync(path.join(cwd, '.planning', 'phases', '01-alpha'), { recursive: true });
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'phases', '01-alpha', '01-01-PLAN.md'),
+        '---\nphase: "01"\n---\n# alpha plan\n',
+        'utf8',
+      );
+
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'fewer-dirs-than-candidates dry-run');
+
+      assert.deepEqual(
+        plan.phases.map(({ oldDir, newDir }) => ({ oldDir, newDir })),
+        [{ oldDir: '01-alpha', newDir: 'GSD.01-01-alpha' }],
+        'the only directory must resolve to the milestone whose slug it actually matches',
+      );
+      assert.ok(
+        plan.roadmapEdits.some(({ to }) => to === '### [GSD.02] 01: Beta'),
+        'the unstarted milestone\'s heading must still convert even with no directory of its own',
+      );
+    });
+
+    test('an archived milestone whose directory was cleaned up leaves the live milestone resolvable by slug', () => {
+      const cwd = materializeEmptyFixture('fewer-dirs-archived');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'config.json'),
+        JSON.stringify({ project_code: 'GSD', phase_id_convention: null }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '<details>',
+          '<summary>✅ v1.0 MVP (Phases 1-2) — SHIPPED 2026-01-01</summary>',
+          '',
+          '### Phase 1: Foundation',
+          '**Goal**: f',
+          '',
+          '### Phase 2: Auth',
+          '**Goal**: a',
+          '',
+          '</details>',
+          '',
+          '## v2.0 Scale',
+          '',
+          '- [ ] **Phase 1: Beta**',
+          '',
+          '### Phase 1: Beta',
+          '**Goal**: b',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      fs.mkdirSync(path.join(cwd, '.planning', 'phases', '01-beta'), { recursive: true });
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'phases', '01-beta', '01-01-PLAN.md'),
+        '---\nphase: "01"\n---\n# beta plan\n',
+        'utf8',
+      );
+
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'archived-milestone-cleaned-dir dry-run');
+
+      assert.deepEqual(
+        plan.phases.map(({ oldDir, newDir }) => ({ oldDir, newDir })),
+        [{ oldDir: '01-beta', newDir: 'GSD.02-01-beta' }],
+        'the live milestone\'s directory must resolve by slug rather than being refused for a cardinality mismatch',
+      );
+    });
+
+    test('a decimal insert whose sibling milestone has no directory resolves the existing one by slug', () => {
+      const cwd = materializeEmptyFixture('fewer-dirs-decimal');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'config.json'),
+        JSON.stringify({ project_code: 'GSD', phase_id_convention: null }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v1.0 Core',
+          '',
+          '### Phase 2: Alpha',
+          '### Phase 2.1: Fix (INSERTED)',
+          '',
+          '## v2.0 Scale',
+          '',
+          '### Phase 2: Beta',
+          '### Phase 2.1: Patch (INSERTED)',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      fs.mkdirSync(path.join(cwd, '.planning', 'phases', '02-alpha'), { recursive: true });
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'phases', '02-alpha', '02-01-PLAN.md'),
+        '---\nphase: "02"\n---\n# alpha plan\n',
+        'utf8',
+      );
+      fs.mkdirSync(path.join(cwd, '.planning', 'phases', '02-beta'), { recursive: true });
+      fs.mkdirSync(path.join(cwd, '.planning', 'phases', '02.1-fix'), { recursive: true });
+
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'decimal-insert-no-sibling-dir dry-run');
+
+      assert.deepEqual(
+        plan.phases.map(({ oldDir, newDir }) => ({ oldDir, newDir })).sort((a, b) => a.oldDir.localeCompare(b.oldDir)),
+        [
+          { oldDir: '02-alpha', newDir: 'GSD.01-01-alpha' },
+          { oldDir: '02-beta', newDir: 'GSD.02-01-beta' },
+          { oldDir: '02.1-fix', newDir: 'GSD.01-02-fix' },
+        ],
+        '02.1-fix must resolve to Fix (its own slug, milestone 1) even though Patch (v2.0) has no directory at all',
+      );
+    });
+  });
+
   // #4144 round 6 B4: the READERS' own checklist grammar
   // (`src/roadmap.cts:770`, `missing_phase_details`) requires a bold `**`
   // before the `Phase` label but no colon anywhere after the token — a
