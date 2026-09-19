@@ -92,6 +92,11 @@ const {
   // marker set below recognizes a version-less bracket milestone heading
   // too, not only a version-token one.
   isBracketMilestoneBoundary,
+  // #4304 round 10 (B1): the SAME closed/shipped-heading predicate
+  // currentMilestoneRawRanges uses, reused so the pre-mutation window guard
+  // (bracketOwnedLineOutsideActiveWindow) can recognize an archived section
+  // instead of a re-typed copy of MILESTONE_CLOSED_MARKER_PATTERN.
+  isClosedMilestoneHeading,
 } = roadmapParserMod;
 // #4129: the single owner of "count the ROADMAP's milestone Complete rows"
 // (pure computation, no I/O — no cycle on this path) for the intent-first
@@ -2928,7 +2933,32 @@ function bracketOwnedLineOutsideActiveWindow(
   let checklistInside = false;
   let firstOutsideHeading: { lineNumber: number; text: string } | null = null;
   let firstOutsideChecklist: { lineNumber: number; text: string } | null = null;
+  // #4304 round 10 (B1, regression from round 9's own guard above,
+  // .planning/2026-09-18-4773-opus-round9-correctness.json finding 1): a
+  // line archived inside <details> or sitting under a CLOSED milestone
+  // heading (isClosedMilestoneHeading — the SAME predicate
+  // currentMilestoneRawRanges itself uses to skip a closed heading when
+  // selecting the active one) is a SHIPPED milestone's own line — never
+  // evidence the ACTIVE window is mislocated. Same-code point releases
+  // (milestoneToken folds v2.0/v2.1 to one bracket id) legitimately carry
+  // the same [CODE.MM] NN identity in both the shipped archive/section and
+  // the active phase's heading-only entry (exactly what `phase add` writes,
+  // with no checklist bullet of its own) — this never widens what counts as
+  // OUTSIDE, only narrows which OUTSIDE lines count as evidence.
+  let inDetails = false;
+  let closedHeadingLevel = 0;
   for (const line of splitRoadmapLineRecords(content)) {
+    const text = line.text;
+    if (/^\s*<details\b/i.test(text)) inDetails = true;
+    if (/^\s*<\/details\s*>/i.test(text)) { inDetails = false; continue; }
+    const headingMatch = /^(#{1,6})[ \t]+(.*)$/.exec(text);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      if (closedHeadingLevel && level <= closedHeadingLevel) closedHeadingLevel = 0;
+      if (!closedHeadingLevel && level <= 3 && isClosedMilestoneHeading(headingMatch[2])) {
+        closedHeadingLevel = level;
+      }
+    }
     const owned = classifyBracketOwnedLine(line.text);
     if (!owned.id || (owned.kind !== 'heading' && owned.kind !== 'checklist')) continue;
     if (!sameBracketPhaseId(owned.id, targetId)) continue;
@@ -2938,6 +2968,7 @@ function bracketOwnedLineOutsideActiveWindow(
         || (ranges.details !== null
           && line.start >= ranges.details.start && line.start < ranges.details.end)),
     );
+    if (!insideActive && (inDetails || closedHeadingLevel > 0)) continue;
     if (owned.kind === 'heading') {
       if (insideActive) headingInside = true;
       else if (!firstOutsideHeading) firstOutsideHeading = { lineNumber: line.lineNumber, text: line.text.trim() };

@@ -2359,6 +2359,12 @@ export = {
   // section boundaries, instead of a narrower, independently-typed copy.
   isBracketMilestoneBoundary,
   bracketFallbackHeadingMatches,
+  // #4304 round 10 (B1): exported so `phase.cts`'s pre-mutation window guard
+  // (bracketOwnedLineOutsideActiveWindow) can recognize a CLOSED/shipped
+  // milestone heading through the SAME predicate `currentMilestoneRawRanges`
+  // itself already uses to skip a closed heading when selecting the active
+  // one, instead of a re-typed copy of MILESTONE_CLOSED_MARKER_PATTERN.
+  isClosedMilestoneHeading,
 };
 
 
