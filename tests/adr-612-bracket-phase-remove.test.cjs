@@ -2690,7 +2690,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
       ],
     );
     const before = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
-    const shippedIdentityLinesBefore = before.split('\n').filter((line) =>
+    const shippedIdentityLinesBefore = splitLines(before).filter((line) =>
       line.includes('[CK.02] 03') && (line.includes('Old Three') || line.includes('Complete')));
 
     const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
@@ -2701,7 +2701,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     // The archived <details> block's shipped heading, checklist, and progress
     // lines are byte-identical. Phase 03 is the discriminator: active 03 must
     // renumber, while shipped 03 must not.
-    const shippedIdentityLinesAfter = roadmap.split('\n').filter((line) =>
+    const shippedIdentityLinesAfter = splitLines(roadmap).filter((line) =>
       line.includes('[CK.02] 03') && (line.includes('Old Three') || line.includes('Complete')));
     assert.deepEqual(shippedIdentityLinesAfter, shippedIdentityLinesBefore);
     // Active section: 02 removed, 03 renumbered onto 02.
@@ -2766,7 +2766,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
       ],
     );
     const before = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
-    const shippedIdentityLinesBefore = before.split('\n').filter((line) =>
+    const shippedIdentityLinesBefore = splitLines(before).filter((line) =>
       line.includes('[CK.02] 03') && (line.includes('Old Three') || line.includes('Complete')));
 
     const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
@@ -2774,7 +2774,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     const out = JSON.parse(result.output);
     const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
 
-    const shippedIdentityLinesAfter = roadmap.split('\n').filter((line) =>
+    const shippedIdentityLinesAfter = splitLines(roadmap).filter((line) =>
       line.includes('[CK.02] 03') && (line.includes('Old Three') || line.includes('Complete')));
     assert.deepEqual(shippedIdentityLinesAfter, shippedIdentityLinesBefore);
     assert.equal(roadmap.includes('### [CK.02] 02: Two'), false);
