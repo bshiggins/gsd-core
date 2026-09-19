@@ -2610,6 +2610,103 @@ describe('roadmap upgrade --convention bracket', () => {
     });
   });
 
+  // #4144 round 7 W2: a stale duplicate-number directory sorting between two
+  // REAL ones claims whichever candidate is still unused by the time it is
+  // visited, and the real directory for that candidate is then silently
+  // dropped from the plan. `01-gamma`, `01-gamma-old`, `01-zeta` (Zeta in
+  // v1.0, Gamma in v2.0, both legacy token "1") is the exact repro: 01-gamma
+  // resolves to Gamma by slug; only Zeta is left "unused" by the time
+  // 01-gamma-old is visited, so it claims Zeta's identity WITHOUT its own
+  // slug agreeing (bySlug is skipped entirely when only one candidate
+  // remains) — and 01-zeta itself is left with no candidate at all.
+  describe('refuses when duplicate-number directories leave a phase unclaimed (#4144 round 7 W2)', () => {
+    test('a stale leftover directory sharing a legacy number with two real ones is refused, not silently dropped', () => {
+      const cwd = materializeEmptyFixture('leftover-dup');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'config.json'),
+        JSON.stringify({ project_code: 'GSD', phase_id_convention: null }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v1.0 Core',
+          '',
+          '### Phase 1: Zeta',
+          '**Goal**: z',
+          '',
+          '## v2.0 Scale',
+          '',
+          '### Phase 1: Gamma',
+          '**Goal**: g',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      for (const [dir, note] of [['01-gamma', 'gamma plan'], ['01-gamma-old', 'stale gamma plan'], ['01-zeta', 'zeta plan']]) {
+        fs.mkdirSync(path.join(phasesDir, dir), { recursive: true });
+        fs.writeFileSync(path.join(phasesDir, dir, '01-01-PLAN.md'), `---\nphase: "01"\n---\n# ${note}\n`, 'utf8');
+      }
+      const before = snapshotTree(cwd, { skipGit: true });
+
+      const result = runBracketUpgrade(cwd);
+
+      assertExited(result, 1, 'leftover duplicate-number directory dry-run');
+      assert.match(result.stderr, /01-gamma-old/, 'the refusal must name the directory that cannot resolve its own slug');
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'a refusal must write nothing — 01-zeta must never be silently dropped');
+
+      const apply = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(apply, 1, 'leftover duplicate-number directory apply');
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'apply refusal must also write nothing');
+    });
+
+    test('the same two-candidate, two-directory shape still resolves cleanly (no leftover) — round 6 B3 regression guard', () => {
+      const cwd = materializeEmptyFixture('dirorder-regression');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'config.json'),
+        JSON.stringify({ project_code: 'GSD', phase_id_convention: null }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v1.0 Core',
+          '',
+          '### Phase 1: Zeta',
+          '**Goal**: z',
+          '',
+          '## v2.0 Scale',
+          '',
+          '### Phase 1: Gamma',
+          '**Goal**: g',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      for (const [dir, note] of [['01-zeta', 'zeta plan'], ['01-gamma', 'gamma plan']]) {
+        fs.mkdirSync(path.join(phasesDir, dir), { recursive: true });
+        fs.writeFileSync(path.join(phasesDir, dir, '01-01-PLAN.md'), `---\nphase: "01"\n---\n# ${note}\n`, 'utf8');
+      }
+
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'two-candidate dir-order dry-run');
+
+      assert.deepEqual(
+        plan.phases.map(({ oldDir, newDir }) => ({ oldDir, newDir })).sort((a, b) => a.oldDir.localeCompare(b.oldDir)),
+        [
+          { oldDir: '01-gamma', newDir: 'GSD.02-01-gamma' },
+          { oldDir: '01-zeta', newDir: 'GSD.01-01-zeta' },
+        ],
+        'Gamma (v2.0) must keep its own identity; Zeta (v1.0) must keep its own — never swapped, never dropped',
+      );
+    });
+  });
+
   // #4144 round 6 B4: the READERS' own checklist grammar
   // (`src/roadmap.cts:770`, `missing_phase_details`) requires a bold `**`
   // before the `Phase` label but no colon anywhere after the token — a

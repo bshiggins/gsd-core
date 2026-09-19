@@ -1344,6 +1344,64 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     coreUtilsMod.generateSlugInternal(text.replace(/\(INSERTED\)/i, '').trim()) ?? ''
   );
 
+  // #4144 round 7 W2: a plan-level ambiguity check that runs BEFORE the
+  // resolution loop below and never touches its (unmodified, round-6)
+  // algorithm. For every directory that structurally ties with more than
+  // one candidate at its own best specificity, group directories by the
+  // EXACT set of candidates they tie with — two directories tying with the
+  // identical candidate set are contesting the identical pool — and refuse
+  // when that group's directory count does not equal its candidate count.
+  // A stale duplicate-number directory sorting between two real ones (e.g.
+  // `01-gamma`, `01-gamma-old`, `01-zeta`, all three tying with {Zeta,
+  // Gamma}) is exactly this: 3 directories for 2 candidates. Left
+  // unchecked, the resolution loop's own "only one candidate left" shortcut
+  // (used when a directory's tie has already shrunk to a single remaining
+  // candidate) accepts whichever directory is visited LAST in that group
+  // WITHOUT ever verifying its slug — silently dropping the true match for
+  // the other leftover directory from the plan. A BALANCED group (equal
+  // counts — e.g. exactly `01-gamma`/`01-zeta` tying with {Zeta, Gamma}) is
+  // left entirely to the resolution loop below, unchanged: that loop's own
+  // slug-driven, elimination-assisted pairing already resolves a balanced
+  // group correctly (round 6 B3), including a directory whose own slug is a
+  // paraphrase of its phase's name rather than an exact match — this check
+  // only catches a genuine CARDINALITY mismatch, never re-litigates a
+  // balanced pairing.
+  {
+    const allMappings = [...idMapping.values()];
+    const ambiguityGroups = new Map<string, { dirs: string[]; mappingLines: number[] }>();
+    for (const dirName of existingDirs) {
+      let bestSpecificity = -1;
+      let tied: BracketMapping[] = [];
+      for (const mapping of allMappings) {
+        if (!matchBracketSourceDir(dirName, mapping)) continue;
+        const specificity = bracketMappingSpecificity(mapping);
+        if (specificity > bestSpecificity) {
+          bestSpecificity = specificity;
+          tied = [mapping];
+        } else if (specificity === bestSpecificity) {
+          tied.push(mapping);
+        }
+      }
+      if (tied.length <= 1) continue;
+      const groupKey = tied.map((mapping) => mapping.lineIndex).sort((a, b) => a - b).join(',');
+      if (!ambiguityGroups.has(groupKey)) {
+        ambiguityGroups.set(groupKey, { dirs: [], mappingLines: tied.map((mapping) => mapping.lineIndex) });
+      }
+      ambiguityGroups.get(groupKey)!.dirs.push(dirName);
+    }
+    for (const group of ambiguityGroups.values()) {
+      if (group.dirs.length === group.mappingLines.length) continue;
+      throw new Error(
+        'Cannot safely migrate ROADMAP.md to the bracket convention: '
+        + `${group.dirs.length} phase director${group.dirs.length === 1 ? 'y' : 'ies'} `
+        + `(${group.dirs.map((dir) => JSON.stringify(dir)).join(', ')}) tie with the same `
+        + `${group.mappingLines.length} candidate phase heading(s) — an unresolvable count mismatch. `
+        + 'Refusing rather than silently dropping a real directory from the plan:\n'
+        + group.mappingLines.map((lineIndex) => `  ${lines[lineIndex]}`).join('\n'),
+      );
+    }
+  }
+
   const orderedMappings = [...idMapping.values()].map((mapping) => ({ mapping, used: false }));
   const phases: PhaseRename[] = [];
   for (const dirName of existingDirs) {
@@ -1366,6 +1424,12 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     // than keeping only the first-encountered one, then disambiguate by
     // comparing the directory's OWN slug against each candidate's phase name
     // slugified the same way `toDir` sanitizes one; exactly one match wins.
+    //
+    // #4144 round 7 W2: the plan-level check above already refuses a
+    // genuine cardinality mismatch (more directories than candidates in a
+    // shared tie group), so by the time this loop runs, any directory whose
+    // tie shrinks to exactly one still-unused candidate belongs to a
+    // BALANCED group and that candidate is its correct match.
     let bestSpecificity = -1;
     let tied: Array<{ candidate: (typeof orderedMappings)[number]; match: { slug: string; matchedToken: string } }> = [];
     for (const candidate of orderedMappings) {
