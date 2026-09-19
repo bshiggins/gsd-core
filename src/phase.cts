@@ -3184,6 +3184,18 @@ function lineStartsInMilestoneOwnTable(
   );
 }
 
+// #4304 round 8 (W2): the ONE textual expression of "this heading is
+// titled Progress" — the title starts with the word "Progress", any
+// suffix admitted ("Progress", "Progress (v2.1)", "Progress — current"),
+// case-insensitive. `bracketProgressSectionRange` below already tolerated a
+// suffix at its own fixed level-2 anchor; `isProgressHeading` inside
+// `bracketOwnProgressSectionRanges` required an EXACT "progress" match, so
+// a suffixed OWN heading ("## Progress (v2.1)", "### Progress (v2.0)")
+// never engaged the own-section scope even though the document-first scope
+// already matched the same suffix. Both interpolate this one source now.
+const BRACKET_PROGRESS_HEADING_TITLE_SRC = 'Progress\\b';
+const BRACKET_PROGRESS_HEADING_TITLE_RE = new RegExp(`^${BRACKET_PROGRESS_HEADING_TITLE_SRC}`, 'i');
+
 /**
  * #4304 round 6 (W1): the SAME `## Progress`-section scope legacy's
  * updateRoadmapAfterPhaseRemoval already uses (#2012, src/phase.cts:2482-2500)
@@ -3194,7 +3206,7 @@ function lineStartsInMilestoneOwnTable(
  * in scope for the target row's own deletion, exactly as it already was.
  */
 function bracketProgressSectionRange(content: string): { start: number; end: number } | null {
-  const match = content.match(/^##[ \t]+Progress\b/im);
+  const match = content.match(new RegExp(`^##[ \\t]+${BRACKET_PROGRESS_HEADING_TITLE_SRC}`, 'im'));
   if (!match || match.index === undefined) return null;
   const start = match.index;
   const fromHeading = content.slice(start);
@@ -3282,19 +3294,42 @@ function bracketProgressSectionOwnedByOtherMilestone(
 }
 
 /**
- * #4304 round 7 (W1): the active milestone's OWN heading literally titled
- * "Progress" (any level, case-insensitive), found ANYWHERE inside its
- * primary or details ranges — regardless of what precedes it within those
- * ranges. `bracketMilestoneOwnTableEnd`/`lineStartsInMilestoneOwnTable`
- * above anchor ONLY at the milestone/details heading itself, so an
- * intervening heading of level <= the milestone's own — a `## Notes` aside
- * (r8), or the milestone's OWN `## Progress` heading when a shipped sibling
- * sharing the bracket code sorts its own `## Progress` first in the
- * document (r1c) — closed that "own table" window before ever reaching the
- * table it was meant to include. This is ADDITIVE, never a replacement for
- * it: the existing bare-table-directly-after-phase-headings scope still
+ * #4304 round 7 (W1) / round 8 (W2): the active milestone's OWN heading
+ * titled "Progress" (`BRACKET_PROGRESS_HEADING_TITLE_RE` — any suffix, any
+ * level, case-insensitive), found ANYWHERE inside its primary or details
+ * ranges — regardless of what precedes it within those ranges.
+ * `bracketMilestoneOwnTableEnd`/`lineStartsInMilestoneOwnTable` above anchor
+ * ONLY at the milestone/details heading itself, so an intervening heading of
+ * level <= the milestone's own — a `## Notes` aside (r8), or the
+ * milestone's OWN `## Progress` heading when a shipped sibling sharing the
+ * bracket code sorts its own `## Progress` first in the document (r1c) —
+ * closed that "own table" window before ever reaching the table it was
+ * meant to include. This is ADDITIVE, never a replacement for it: the
+ * existing bare-table-directly-after-phase-headings scope still
  * independently keeps an unrelated `## Requirements Traceability` table
- * (q4, r1b) out of scope, because that heading is not literally "Progress".
+ * (q4, r1b) out of scope, because that heading is not titled "Progress".
+ *
+ * Round 7 required the heading text to be EXACTLY "progress", so a suffixed
+ * title ("## Progress (v2.1)", "### Progress (v2.0)") never engaged this
+ * scope even though the document-first `bracketProgressSectionRange` scope
+ * already matched the same suffix — a same-code two-versions shipped/active
+ * pair each titling their own table "Progress (vX.Y)" left the ACTIVE
+ * milestone's own table unrecognized as its own.
+ *
+ * A second gap the same title-widening exposes: a LEVEL-2 own Progress
+ * heading whose title EMBEDS the active milestone's own version token
+ * ("## Progress (v2.1)", level 2, same level as the milestone heading
+ * itself) is exactly what `currentMilestoneRawRanges`' own section-end scan
+ * mistakes for a NEW milestone's heading (it stops at any heading matching
+ * `v\d+\.\d+|✅|📋|🚧`, not just a real milestone one) — ending `ranges`
+ * immediately BEFORE this heading, so it never falls inside
+ * `ranges.primary`/`.details` even once titled "Progress". A heading is
+ * never titled merely "Progress" AND is a different milestone's own
+ * section-opening heading at once, so a Progress-titled heading sitting
+ * EXACTLY at the wide range's own end boundary is still the active
+ * milestone's own — the range ended there only because this heading's own
+ * suffix looked like a marker, not because a real, different milestone
+ * heading intervened.
  */
 function bracketOwnProgressSectionRanges(
   content: string,
@@ -3302,10 +3337,12 @@ function bracketOwnProgressSectionRanges(
   headings: readonly HeadingToken[],
 ): { start: number; end: number }[] {
   if (!ranges) return [];
-  const isProgressHeading = (h: HeadingToken): boolean => h.text.trim().toLowerCase() === 'progress';
+  const isProgressHeading = (h: HeadingToken): boolean => BRACKET_PROGRESS_HEADING_TITLE_RE.test(h.text.trim());
   const withinActive = (offset: number): boolean =>
     (offset >= ranges.primary.start && offset < ranges.primary.end)
-    || Boolean(ranges.details && offset >= ranges.details.start && offset < ranges.details.end);
+    || Boolean(ranges.details && offset >= ranges.details.start && offset < ranges.details.end)
+    || offset === ranges.primary.end
+    || Boolean(ranges.details && offset === ranges.details.end);
   const out: { start: number; end: number }[] = [];
   for (const h of headings) {
     if (!isProgressHeading(h) || !withinActive(h.offset)) continue;
