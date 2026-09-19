@@ -118,9 +118,9 @@ const BASE_SITES = [
   { file: 'state.cts', site: 'cmdStateSync roadmapPhaseCount', baseline: B.LABEL_ONLY, src: 'Phase\\s+' },
   { file: 'state.cts', site: 'extractRetiredPhaseNumbers phaseRef',
     baseline: B.LABEL_ONLY, src: 'Phase\\s+' },
-  // #4304 PR-4: phase remove now selects the convention-gated heading intro
-  // before rewriting ROADMAP phase sections.
-  { file: 'phase.cts', site: 'cmdPhaseRemove phase heading matcher',
+  // #4304 PR-4: phase insert now selects the convention-gated heading intro
+  // before locating its target phase's heading.
+  { file: 'phase.cts', site: 'cmdPhaseInsert headingIntro',
     baseline: B.LABEL_ONLY, src: 'Phase\\s+' },
   { file: 'phase.cts', site: 'bracket phase-remove owned-line classifier',
     baseline: B.LABEL_ONLY, src: 'Phase\\s+' },

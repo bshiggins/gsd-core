@@ -503,6 +503,61 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     );
   });
 
+  // #4304 round-5 W4 (fix): `phase insert 1.1` normalized its bare argument
+  // through the legacy normalizePhaseName, which pads only the FIRST
+  // segment ("1.1" -> "01.1") and never matches the bracket-canonical
+  // "01.01" heading, so it errored "Phase 1.1 not found" even though
+  // `phase remove 1.1` (via phaseToken) resolves the very same phase.
+  // `phase insert 01.01` (default nested) died with an uncaught
+  // "toDir: invalid phase" throw instead of a clean refusal, because
+  // nesting one level under an already-decimal phase produces a
+  // three-level id bracket cannot represent. Both spellings now
+  // canonicalize identically (through phaseToken, like remove) and both
+  // refuse cleanly with the SAME message naming the correctly-resolved
+  // "01.01" — proving canonicalization found the real phase rather than
+  // reporting it missing.
+  test('phase insert canonicalizes a bare decimal argument the way phase remove does', () => {
+    const dir = project('adr-612-bracket-insert-decimal-canon-');
+    writeBracketFixture(dir);
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-01.01-first-sub'), { recursive: true });
+    fs.appendFileSync(
+      planning(dir, 'ROADMAP.md'),
+      '### [CK.02] 01.01: First Sub (INSERTED)\n\n**Goal:** Existing\n',
+    );
+    const before = fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8');
+    const dirsBefore = fs.readdirSync(planning(dir, 'phases')).sort();
+
+    const bare = runGsdTools(['phase', 'insert', '1.1', 'Urgent fix'], dir);
+    const padded = runGsdTools(['phase', 'insert', '01.01', 'Urgent fix'], dir);
+
+    assert.equal(bare.success, false, bare.output);
+    assert.equal(padded.success, false, padded.output);
+    assert.match(bare.error, /01\.01/);
+    assert.match(padded.error, /01\.01/);
+    assert.doesNotMatch(bare.error, /not found/i);
+    assert.match(bare.error, /decimal level/i);
+    assert.match(padded.error, /decimal level/i);
+    assert.equal(bare.error, padded.error);
+    assert.equal(fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8'), before);
+    assert.equal(fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8'), before);
+    assert.deepEqual(fs.readdirSync(planning(dir, 'phases')).sort(), dirsBefore);
+  });
+
+  test('phase insert --sibling under a decimal afterPhase still succeeds (only nested three-level ids are refused)', () => {
+    const dir = project('adr-612-bracket-insert-decimal-sibling-');
+    writeBracketFixture(dir);
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-01.01-first-sub'), { recursive: true });
+    fs.appendFileSync(
+      planning(dir, 'ROADMAP.md'),
+      '### [CK.02] 01.01: First Sub (INSERTED)\n\n**Goal:** Existing\n',
+    );
+
+    const out = run(['phase', 'insert', '1.1', 'Second Sub', '--sibling'], dir);
+
+    assert.equal(out.phase_number, '01.02');
+    assert.equal(fs.existsSync(planning(dir, 'phases', 'CK.02-01.02-second-sub')), true);
+  });
+
   test('state descriptive writes use bracket display while operational fields stay compatible', () => {
     const dir = project();
     writeBracketFixture(dir);

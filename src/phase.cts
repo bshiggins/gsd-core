@@ -1921,7 +1921,34 @@ function cmdPhaseInsert(
     const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
     const content = extractCurrentMilestone(rawContent, cwd);
 
-    const normalizedAfter = normalizePhaseName(afterPhase);
+    // #4304 round 5 (W4): canonicalize a bare bracket argument through the
+    // SAME adapter `phase remove` uses (phaseToken), not the legacy
+    // normalizePhaseName — which pads only the phase's FIRST segment
+    // ("1.1" -> "01.1", never matching the bracket-canonical "01.01"
+    // heading). Every other convention keeps its untouched
+    // normalizePhaseName behavior.
+    let normalizedAfter: string;
+    if (bracketContext) {
+      const canonical = phaseToken(afterPhase);
+      if (canonical === null) {
+        error(`Phase ${afterPhase} cannot be resolved to a bracket phase number`);
+      }
+      normalizedAfter = canonical!;
+    } else {
+      normalizedAfter = normalizePhaseName(afterPhase);
+    }
+    // #4304 round 5 (W4): a bracket id supports at most one decimal level
+    // (phase.subphase). Nesting one level deeper under an already-decimal
+    // afterPhase would produce a three-level id no bracket function can
+    // represent — bracketPhaseId/toDir would otherwise throw uncaught deep
+    // inside directory/heading computation instead of refusing cleanly,
+    // before any mutation. Sibling allocation is unaffected: it joins
+    // afterPhase's PARENT level, which is always representable.
+    if (bracketContext && allocation === 'nested' && normalizedAfter.includes('.')) {
+      error(
+        `Cannot insert a nested sub-phase under phase ${normalizedAfter}: bracket phase ids support at most one decimal level. Use --sibling, or insert after the parent phase instead.`,
+      );
+    }
     const afterPhaseEscaped = phaseMarkdownRegexSource(normalizedAfter);
     const headingIntro = phaseHeadingPrefixSrcFor(
       PHASE_HEADING_BASELINE.LABEL_ONLY,
@@ -1953,7 +1980,11 @@ function cmdPhaseInsert(
     }
 
     const phasesDir = path.join(planningDir(cwd), 'phases');
-    const normalizedBase = normalizePhaseName(afterPhase);
+    // #4304 round 5 (W4): reuse the SAME canonicalization computed above
+    // (phaseToken on bracket, normalizePhaseName otherwise) rather than a
+    // second, independent normalizePhaseName(afterPhase) call that would
+    // silently disagree with it on bracket.
+    const normalizedBase = normalizedAfter;
     const decimalSet = bracketContext
       ? scanExistingBracketDecimalPhaseNumbers(phasesDir, content, normalizedBase, bracketContext)
       : scanExistingDecimalPhaseNumbers(phasesDir, rawContent, normalizedBase);
