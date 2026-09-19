@@ -2651,4 +2651,57 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(roadmap.includes('### [CK.02] 02: Three'), true);
     assert.deepEqual(out.references_left_untouched, []);
   });
+  // #4304 round 10 (W1, .planning/2026-09-18-4773-opus-round9-correctness.json
+  // finding 2): the round-9 guard was additionally gated on `targetDir`, so a
+  // ROADMAP-only target (a phase `phase add` created with no directory yet)
+  // on a mislocated window still half-applied: later directories renamed and
+  // their ROADMAP lines renumbered onto the target's identity while the
+  // target's own heading/checklist survived, with an empty report. The
+  // guard reads only ROADMAP content, so the extra gate protected nothing.
+  test('refuses a ROADMAP-only removal target (no phase directory) when a decoy heading mislocates the active window', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## Goals for v2.0',
+        '',
+        'Ship.',
+        '',
+        '## [CK.02] v2.0 — Current 🚧',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] 01 | 0/1 | Planned |',
+        '| [CK.02] 02 | 0/1 | Planned |',
+        '| [CK.02] 03 | 0/1 | Planned |',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-03-three', []],
+      ],
+    );
+    const before = snapshotTree(planning());
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+
+    assert.equal(result.success, false, result.output);
+    assert.match(result.error, /lies outside/i);
+    assert.deepEqual(snapshotTree(planning()), before);
+  });
 });

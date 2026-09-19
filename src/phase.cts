@@ -3911,7 +3911,18 @@ function cmdPhaseRemove(
   // ROADMAP rewrite silently never reaches the target's real lines. Does not
   // attempt to fix the window's own selection (PR-6 / #4751 territory) —
   // only refuses instead of half-applying.
-  if (removeContext && targetDir) {
+  //
+  // #4304 round 10 (W1, .planning/2026-09-18-4773-opus-round9-correctness.json
+  // finding 2): NOT additionally gated on `targetDir` — a ROADMAP-only
+  // target (a phase `phase add` created with no directory materialized yet)
+  // on a mislocated window still half-applied under the `targetDir` gate:
+  // later directories renamed and their ROADMAP lines renumbered onto the
+  // target's identity while the target's own heading/checklist survived,
+  // with an empty report. The guard reads only ROADMAP content (never
+  // `targetDir` itself), so gating it on a directory that may not exist
+  // protected nothing; with no directory and no matching ROADMAP line the
+  // guard already returns null.
+  if (removeContext) {
     const guardTargetId = bracketPhaseId(removeContext, removedInt, removedSubphase);
     const outside = bracketOwnedLineOutsideActiveWindow(
       roadmapContentBeforeRemoval!,
