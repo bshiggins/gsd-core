@@ -2162,4 +2162,113 @@ describe('roadmap upgrade --convention bracket', () => {
       assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'a refusal must write nothing');
     });
   });
+
+  // #4144 round 6 B3: the same legacy phase NUMBER in two different sections
+  // (the exact ambiguity M-NN exists to resolve) is claimed by directories in
+  // LISTING order, because `matchBracketSourceDir`'s legacy branch matches
+  // purely on the numeric token — it has no idea which milestone a directory
+  // belongs to. A directory can therefore be silently renamed into a
+  // DIFFERENT phase's identity.
+  describe('resolves duplicate legacy numbers by slug and refuses ambiguity (#4144 round 6 B3)', () => {
+    function buildDirOrderFixture() {
+      const cwd = materializeEmptyFixture('dirorder');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'config.json'),
+        JSON.stringify({ project_code: 'GSD', phase_id_convention: null }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v1.0 Core',
+          '',
+          '### Phase 1: Zeta',
+          '**Goal**: z',
+          '',
+          '## v2.0 Scale',
+          '',
+          '### Phase 1: Gamma',
+          '**Goal**: g',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      for (const [dir, note] of [['01-zeta', 'zeta plan'], ['01-gamma', 'gamma plan']]) {
+        fs.mkdirSync(path.join(phasesDir, dir), { recursive: true });
+        fs.writeFileSync(path.join(phasesDir, dir, '01-01-PLAN.md'), `---\nphase: "01"\n---\n# ${note}\n`, 'utf8');
+      }
+      return cwd;
+    }
+
+    test('each directory maps to the phase its own slug names, never a directory-listing-order guess', () => {
+      const cwd = buildDirOrderFixture();
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'dir-order dry-run');
+
+      assert.deepEqual(
+        plan.phases
+          .map(({ oldDir, newDir }) => ({ oldDir, newDir }))
+          .sort((a, b) => a.oldDir.localeCompare(b.oldDir)),
+        [
+          { oldDir: '01-gamma', newDir: 'GSD.02-01-gamma' },
+          { oldDir: '01-zeta', newDir: 'GSD.01-01-zeta' },
+        ],
+        'Gamma (v2.0) must keep its own identity; Zeta (v1.0) must keep its own — never swapped',
+      );
+    });
+
+    test('the same directory-listing order still resolves correctly when directories are visited in the opposite order', () => {
+      const cwd = buildDirOrderFixture();
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      const real = fs.readdirSync;
+      const dirMock = mock.method(fs, 'readdirSync', (dir, opts) => {
+        if (dir === phasesDir) {
+          const entries = real.call(fs, dir, opts);
+          return [...entries].reverse();
+        }
+        return real.call(fs, dir, opts);
+      });
+      try {
+        const { computeMigrationPlan: computePlanDirect } = require('../gsd-core/bin/lib/roadmap-upgrade.cjs');
+        const plan = computePlanDirect(cwd, { convention: 'bracket' });
+        assert.deepEqual(
+          plan.phases.map(({ oldDir, newDir }) => ({ oldDir, newDir })).sort((a, b) => a.oldDir.localeCompare(b.oldDir)),
+          [
+            { oldDir: '01-gamma', newDir: 'GSD.02-01-gamma' },
+            { oldDir: '01-zeta', newDir: 'GSD.01-01-zeta' },
+          ],
+        );
+      } finally {
+        dirMock.mock.restore();
+      }
+    });
+
+    test('the same legacy token twice under one milestone is a duplicate identity, refused before any write', () => {
+      const cwd = materializeEmptyFixture('dirorder-dup');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'config.json'),
+        JSON.stringify({ project_code: 'GSD', phase_id_convention: null }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        '# R\n\n## v1.0\n\n## Phase 1: Alpha\n\n### Phase 1: Alpha\n\n### Phase 2: Beta\n',
+        'utf8',
+      );
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      fs.mkdirSync(path.join(phasesDir, '01-alpha'), { recursive: true });
+      fs.writeFileSync(path.join(phasesDir, '01-alpha', '01-01-PLAN.md'), '---\nphase: "01"\n---\n', 'utf8');
+      fs.mkdirSync(path.join(phasesDir, '02-beta'), { recursive: true });
+      fs.writeFileSync(path.join(phasesDir, '02-beta', '02-01-PLAN.md'), '---\nphase: "02"\n---\n', 'utf8');
+      const before = snapshotTree(cwd, { skipGit: true });
+
+      const result = runBracketUpgrade(cwd);
+
+      assertExited(result, 1, 'duplicate legacy token dry-run');
+      assert.match(result.stderr, /more than once|duplicate/i);
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'a refusal must write nothing');
+    });
+  });
 });

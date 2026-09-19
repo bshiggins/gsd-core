@@ -410,9 +410,26 @@ interface BracketMapping {
   token: string;
   source: 'legacy' | 'mnn';
   sourceToken: string;
+  /**
+   * #4144 round 6 B3: the heading's own display name (`headingTail`, minus
+   * its leading colon-separator whitespace), carried through so a directory
+   * that structurally matches more than one candidate mapping can be
+   * disambiguated by comparing its slug against each candidate's OWN name —
+   * never by which candidate happened to be encountered first.
+   */
+  phaseName: string;
 }
 
 const pad2 = (value: number): string => String(value).padStart(2, '0');
+
+/**
+ * #4144 round 6 B2/B3: the section-keyed maps below (`sectionLegacyMap`) key
+ * on a `milestoneSections` range's own `start` offset, which is always >= 0
+ * for a real section. This sentinel covers legacy entries with NO attributed
+ * section at all (single-section / STATE.md-fallback repositories), where
+ * there is only one bucket to begin with.
+ */
+const GLOBAL_SECTION_KEY = -1;
 
 /**
  * #4144 round 5 Blocker 4 (Warn): the line indices `parseBracketSourcePhases`
@@ -542,6 +559,7 @@ function assignBracketTokens(entries: BracketSourceEntry[], lines: string[]): Ma
       token,
       source: 'mnn',
       sourceToken: entry.sourceToken!,
+      phaseName: (entry.headingTail ?? '').trim(),
     });
   }
 
@@ -563,6 +581,7 @@ function assignBracketTokens(entries: BracketSourceEntry[], lines: string[]): Ma
       token: pad2(candidate),
       source: 'legacy',
       sourceToken: entry.sourceToken!,
+      phaseName: (entry.headingTail ?? '').trim(),
     });
   }
 
@@ -1124,6 +1143,30 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     );
   }
 
+  // #4144 round 6 B3: the same legacy phase number appearing TWICE within
+  // one milestone SECTION (the same granularity B2's checklist attribution
+  // uses) is a duplicate identity, not two phases — `assignBracketTokens`'s
+  // own per-milestone counter would otherwise silently invent a phantom
+  // phase for the second heading (a distinct bracket token backed by no
+  // second directory). Refuse before any write rather than guess.
+  const legacyBySectionToken = new Map<string, BracketSourceEntry[]>();
+  for (const entry of sourcePhases) {
+    if (entry.source !== 'legacy') continue;
+    if (legacySentinelMilestone(entry.sourceToken!) !== null) continue;
+    const sectionKey = entry.attributedSection ? entry.attributedSection.start : GLOBAL_SECTION_KEY;
+    const dedupeKey = `${sectionKey}::${legacyLookupKey(entry.sourceToken!)}`;
+    if (!legacyBySectionToken.has(dedupeKey)) legacyBySectionToken.set(dedupeKey, []);
+    legacyBySectionToken.get(dedupeKey)!.push(entry);
+  }
+  const duplicateLegacy = [...legacyBySectionToken.values()].filter((group) => group.length > 1).flat();
+  if (duplicateLegacy.length > 0) {
+    throw new Error(
+      'Cannot safely migrate ROADMAP.md to the bracket convention: the same legacy phase number appears '
+      + 'more than once in one milestone section. Refusing rather than inventing a phantom phase:\n'
+      + duplicateLegacy.map((entry) => `  ${lines[entry.lineIndex]}`).join('\n'),
+    );
+  }
+
   const idMapping = assignBracketTokens(sourcePhases, lines);
 
   // #4144 round 6 B2: keyed by SECTION identity (a section's own `start`
@@ -1135,7 +1178,6 @@ function computeBracketPlan(cwd: string): MigrationPlan {
   // section's in this same map. `GLOBAL_SECTION_KEY` covers legacy entries
   // with no attributed section at all (single-section / STATE.md-fallback
   // repositories), where there is only one bucket to begin with.
-  const GLOBAL_SECTION_KEY = -1;
   const sectionLegacyMap = new Map<number, Map<string, { token: string; milestoneInt: number }>>();
   for (const entry of sourcePhases) {
     if (entry.source !== 'legacy') continue;
@@ -1155,6 +1197,8 @@ function computeBracketPlan(cwd: string): MigrationPlan {
   }
   const existingDirs = phaseDirListing.value;
 
+  const slugify = (text: string): string => (coreUtilsMod.generateSlugInternal(text, null) ?? '');
+
   const orderedMappings = [...idMapping.values()].map((mapping) => ({ mapping, used: false }));
   const phases: PhaseRename[] = [];
   for (const dirName of existingDirs) {
@@ -1168,10 +1212,17 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     // unmapped. Specificity is independent of both roadmap-heading order and
     // directory-listing order, so this resolves correctly regardless of
     // which directory this loop visits first.
-    let hit: { mapping: BracketMapping; used: boolean } | undefined;
-    let matchedSlug = '';
-    let matchedToken = '';
+    //
+    // #4144 round 6 B3: more than one candidate can tie at the SAME best
+    // specificity — e.g. the identical legacy number "1" under two different
+    // milestones (`## v1.0` Zeta, `## v2.0` Gamma) both structurally match a
+    // directory named after either one, since `matchBracketSourceDir`'s
+    // legacy branch does not know about milestones. Collect every tie rather
+    // than keeping only the first-encountered one, then disambiguate by
+    // comparing the directory's OWN slug against each candidate's phase name
+    // slugified the same way `toDir` sanitizes one; exactly one match wins.
     let bestSpecificity = -1;
+    let tied: Array<{ candidate: (typeof orderedMappings)[number]; match: { slug: string; matchedToken: string } }> = [];
     for (const candidate of orderedMappings) {
       if (candidate.used) continue;
       const match = matchBracketSourceDir(dirName, candidate.mapping);
@@ -1179,13 +1230,31 @@ function computeBracketPlan(cwd: string): MigrationPlan {
       const specificity = bracketMappingSpecificity(candidate.mapping);
       if (specificity > bestSpecificity) {
         bestSpecificity = specificity;
-        hit = candidate;
-        matchedSlug = match.slug;
-        matchedToken = match.matchedToken;
+        tied = [{ candidate, match }];
+      } else if (specificity === bestSpecificity) {
+        tied.push({ candidate, match });
       }
     }
-    if (!hit) continue;
-    hit.used = true;
+    if (tied.length === 0) continue;
+
+    let winner = tied[0];
+    if (tied.length > 1) {
+      const dirSlug = slugify(tied[0].match.slug);
+      const bySlug = tied.filter((entry) => slugify(entry.candidate.mapping.phaseName) === dirSlug);
+      if (bySlug.length !== 1) {
+        throw new Error(
+          `Cannot resolve phase directory ${JSON.stringify(dirName)}: it matches ${tied.length} candidate `
+          + `phase heading(s) with the same specificity and ${bySlug.length === 0 ? 'none of them' : 'more than one of them'} `
+          + 'share its slug. Refusing rather than guessing which phase it identifies:\n'
+          + tied.map((entry) => `  ${lines[entry.candidate.mapping.lineIndex]}`).join('\n'),
+        );
+      }
+      winner = bySlug[0];
+    }
+    winner.candidate.used = true;
+    const hit = winner.candidate;
+    const matchedSlug = winner.match.slug;
+    const matchedToken = winner.match.matchedToken;
 
     const newDir = buildBracketDirName(code, hit.mapping, matchedSlug, dirName);
     if (newDir !== dirName) {
