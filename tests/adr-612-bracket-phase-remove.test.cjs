@@ -1118,4 +1118,94 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(activeSection.includes('### [CK.02] 03: Three'), false);
     assert.equal((activeSection.match(/^### \[CK\.02\] 02:/gm) ?? []).length, 1);
   });
+
+  // #4304 round 6 (B1): currentMilestoneRawRanges' details-range END omitted
+  // the bracketBoundary the SAME function applies to the primary range end
+  // (roadmap-parser.cts:2298), so on version-less bracket milestone headings
+  // the active details window ran through the NEXT sibling milestone's own
+  // "(Phase Details)" section. Removal's active-range rewrite and its W2
+  // pre-delete ranges both consume this window, so the sibling's own bare
+  // artifact token ('**Plans:** `03-01-PLAN.md`') was rewritten to point at
+  // a file that does not exist on disk.
+  test('does not leak the details range into a sibling milestone when headings carry no version token', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] Current',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '## [CK.03] Future',
+        '',
+        '- [ ] [CK.03] 03: Future Three',
+        '',
+        '## [CK.02] Current (Phase Details)',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '**Plans:** `03-01-PLAN.md`',
+        '',
+        '## [CK.03] Future (Phase Details)',
+        '',
+        '### [CK.03] 03: Future Three',
+        '**Goal:** untouched',
+        '**Plans:** `03-01-PLAN.md`',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', ['03-01-PLAN.md']],
+        ['CK.03-03-future-three', ['03-01-PLAN.md']],
+      ],
+    );
+    fs.writeFileSync(
+      planning('STATE.md'),
+      '---\nmilestone: v2.0\n---\n\n# State\n\n**Status:** Planning\n**Last Activity:** 2026-09-01\n',
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+    assert.deepEqual(out.references_left_untouched, []);
+
+    // The sibling milestone's own Phase Details section is untouched — in
+    // particular its own bare artifact token still names the file that
+    // actually exists on disk, not '02-01-PLAN.md' (round 5's own W2 fix
+    // already keeps the HEADING out of the leaked window; this pins the
+    // bare-artifact-token rewrite the leaked window also drove).
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    const ck03SectionAfter = roadmap.slice(roadmap.indexOf('## [CK.03] Future (Phase Details)'));
+    assert.equal(
+      ck03SectionAfter,
+      [
+        '## [CK.03] Future (Phase Details)',
+        '',
+        '### [CK.03] 03: Future Three',
+        '',
+        '**Goal:** untouched',
+        '**Plans:** `03-01-PLAN.md`',
+        '',
+      ].join('\n'),
+    );
+    assert.equal(fs.existsSync(planning('phases', 'CK.03-03-future-three', '03-01-PLAN.md')), true);
+
+    // The active milestone's own phase 03 correctly renumbers to 02.
+    const ck02Section = roadmap.slice(
+      roadmap.indexOf('## [CK.02] Current (Phase Details)'),
+      roadmap.indexOf('## [CK.03] Future (Phase Details)'),
+    );
+    assert.equal(ck02Section.includes('### [CK.02] 02: Three'), true);
+    assert.equal(ck02Section.includes('`02-01-PLAN.md`'), true);
+    assert.equal(fs.existsSync(planning('phases', 'CK.02-02-three', '02-01-PLAN.md')), true);
+  });
 });

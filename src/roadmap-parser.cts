@@ -2271,7 +2271,7 @@ function currentMilestoneRawRanges(
 
   const bracketBoundaryActive = bracketScopeConvention === 'bracket';
   const currentMilestoneHeadings = tokenizeHeadings(content);
-  const { sectionEnd } = bracketAwareMilestoneSection(
+  const { sectionEnd, bracketBoundary } = bracketAwareMilestoneSection(
     content,
     selected,
     sectionStart,
@@ -2295,7 +2295,18 @@ function currentMilestoneRawRanges(
   let details: { start: number; end: number } | null = null;
   if (detailsMatch) {
     const detailsStart = detailsMatch.index ?? 0;
-    details = { start: detailsStart, end: computeMilestoneSectionEnd(content, detailsMatch[0], detailsStart) };
+    // #4304 round 6 (B1): pass the SAME bracketBoundary (and heading tokens)
+    // bracketAwareMilestoneSection already derived for the primary range —
+    // extractCurrentMilestoneScoped's own details lookup (line ~1312) has
+    // always done this; this copy omitted both trailing arguments, so a
+    // version-less bracket milestone heading (no v\d+.\d+/emoji marker) never
+    // stopped this details window at the NEXT milestone's own "(Phase
+    // Details)" section, and the two copies silently disagreed on the active
+    // details window.
+    details = {
+      start: detailsStart,
+      end: computeMilestoneSectionEnd(content, detailsMatch[0], detailsStart, bracketBoundary, currentMilestoneHeadings),
+    };
   }
 
   return { primary: { start: sectionStart, end: sectionEnd }, details };

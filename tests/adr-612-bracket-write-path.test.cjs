@@ -244,6 +244,90 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     );
   });
 
+  // #4304 round 6 (B1): currentMilestoneRawRanges' details-range end
+  // (roadmap-parser.cts:2298) called computeMilestoneSectionEnd WITHOUT the
+  // bracketBoundary the SAME function already applies to the primary range
+  // (bracketAwareMilestoneSection, consumed a few lines above) — so on a
+  // version-less bracket milestone heading (no v\d+.\d+ / emoji marker) the
+  // active details window ran through the NEXT sibling milestone's OWN
+  // "(Phase Details)" section instead of stopping at it. Insert's header
+  // search (which walks this SAME details range, discovered by round 5's
+  // B3 fix) then planted the new section inside the wrong milestone.
+  test('phase insert locates its Phase Details heading correctly when milestone headings carry no version token', () => {
+    const dir = project('adr-612-bracket-insert-versionless-details-');
+    writeConfig(dir, 'bracket');
+    fs.writeFileSync(planning(dir, 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    fs.writeFileSync(
+      planning(dir, 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] Current',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '## [CK.03] Future',
+        '',
+        '- [ ] [CK.03] 03: Future Three',
+        '',
+        '## [CK.02] Current (Phase Details)',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '**Plans:** `03-01-PLAN.md`',
+        '',
+        '## [CK.03] Future (Phase Details)',
+        '',
+        '### [CK.03] 03: Future Three',
+        '**Goal:** untouched',
+        '**Plans:** `03-01-PLAN.md`',
+        '',
+      ].join('\n'),
+    );
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-01-one'), { recursive: true });
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-03-three'), { recursive: true });
+    fs.writeFileSync(planning(dir, 'phases', 'CK.02-03-three', '03-01-PLAN.md'), '# artifact\n');
+    fs.mkdirSync(planning(dir, 'phases', 'CK.03-03-future-three'), { recursive: true });
+    fs.writeFileSync(planning(dir, 'phases', 'CK.03-03-future-three', '03-01-PLAN.md'), '# artifact\n');
+
+    const result = runGsdTools(['phase', 'insert', '3', 'Urgent fix'], dir);
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+
+    assert.equal(out.phase_number, '03.01');
+    assert.equal(fs.existsSync(planning(dir, 'phases', 'CK.02-03.01-urgent-fix')), true);
+    // The sibling milestone's own Phase Details section is byte-identical:
+    // the leaked window used to insert the new section INSIDE it, before
+    // its own '### [CK.03] 03: Future Three' heading.
+    assert.equal(fs.existsSync(planning(dir, 'phases', 'CK.03-03.01-urgent-fix')), false);
+
+    const roadmap = fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8');
+    const ck03Details = roadmap.slice(roadmap.indexOf('## [CK.03] Future (Phase Details)'));
+    assert.equal(ck03Details.includes('[CK.02] 03.01'), false);
+    assert.equal(
+      ck03Details,
+      [
+        '## [CK.03] Future (Phase Details)',
+        '',
+        '### [CK.03] 03: Future Three',
+        '',
+        '**Goal:** untouched',
+        '**Plans:** `03-01-PLAN.md`',
+        '',
+      ].join('\n'),
+    );
+    const ck02Details = roadmap.slice(
+      roadmap.indexOf('## [CK.02] Current (Phase Details)'),
+      roadmap.indexOf('## [CK.03] Future (Phase Details)'),
+    );
+    assert.equal(ck02Details.includes('### [CK.02] 03.01: Urgent fix (INSERTED)'), true);
+  });
+
   test('an insert that fails to locate its header leaves the planning tree byte-identical', () => {
     const dir = project('adr-612-bracket-insert-refuse-');
     writeConfig(dir, 'bracket');
