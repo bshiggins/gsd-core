@@ -1647,4 +1647,224 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
       assert.deepEqual(out.references_left_untouched, [dependsLine], `[${name}] references_left_untouched`);
     }
   });
+
+  // #4304 round 7 (W1): bracketMilestoneOwnTableEnd anchored ONLY at the
+  // milestone heading itself and stopped at the very NEXT heading of level
+  // <= 2, regardless of what it was — so a "## Notes" aside sitting between
+  // the phase headings and the milestone's own "### Progress" table closed
+  // the "own table" window before the table it was meant to include was
+  // ever reached, leaving the removed identity's row stale after renumbering.
+  test('deletes a progress row that sits behind a "## Notes" aside before its own "### Progress" table', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current 🚧',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '',
+        '## Notes',
+        '',
+        'Some notes.',
+        '',
+        '### Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] 01 | 0/1 | Planned |',
+        '| [CK.02] 02 | 0/1 | Planned |',
+        '| [CK.02] 03 | 0/1 | Planned |',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', []],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+
+    assert.equal((roadmap.match(/^\| \[CK\.02\] 02 \| 0\/1 \| Planned \|$/gm) ?? []).length, 1);
+    assert.equal(roadmap.includes('| [CK.02] 03 | 0/1 | Planned |'), false);
+    assert.deepEqual(out.references_left_untouched, []);
+  });
+
+  // #4304 round 7 (W1): each milestone owning its OWN "## Progress" section
+  // — a shipped milestone's, sorting first in the document, and the active
+  // milestone's own, sorting second — is a shape the round-6 fix regressed
+  // on two ways at once: the document-first "## Progress" scope claimed the
+  // SHIPPED section (never the active one it was meant to scope this
+  // removal to), while bracketMilestoneOwnTableEnd closed the active
+  // milestone's own "own table" window AT its own "## Progress" heading,
+  // excluding the very table beneath it.
+  test('scopes progress-row deletion to each milestone\'s own "## Progress" section, not the document-first one', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.01] v1.0 — Shipped ✅',
+        '',
+        '- [x] [CK.01] 01: Old One',
+        '- [x] [CK.01] 02: Old Two',
+        '',
+        '### [CK.01] 01: Old One',
+        '**Goal:** shipped',
+        '',
+        '### [CK.01] 02: Old Two',
+        '**Goal:** shipped',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.01] 01 | 1/1 | Complete |',
+        '| [CK.01] 02 | 1/1 | Complete |',
+        '',
+        '## [CK.02] v2.0 — Current 🚧',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] 01 | 0/1 | Planned |',
+        '| [CK.02] 02 | 0/1 | Planned |',
+        '| [CK.02] 03 | 0/1 | Planned |',
+        '',
+      ],
+      [
+        ['CK.01-01-old-one', []],
+        ['CK.01-02-old-two', []],
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', []],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+
+    // Shipped CK.01's own Progress section survives byte-identical.
+    assert.equal(roadmap.includes('| [CK.01] 01 | 1/1 | Complete |'), true);
+    assert.equal(roadmap.includes('| [CK.01] 02 | 1/1 | Complete |'), true);
+
+    // Active CK.02's own target row is gone; its later sibling renumbers
+    // onto that slot without duplicating.
+    const ck02Progress = roadmap.slice(roadmap.lastIndexOf('## Progress'));
+    assert.equal((ck02Progress.match(/^\| \[CK\.02\] 02 \| 0\/1 \| Planned \|$/gm) ?? []).length, 1);
+    assert.equal(ck02Progress.includes('| [CK.02] 03 | 0/1 | Planned |'), false);
+    assert.deepEqual(out.references_left_untouched, []);
+  });
+
+  // #4304 round 7 (W1): the same-code two-versions shape (a shipped v2.0 and
+  // an active v2.1 folding to the SAME `[CK.02]` bracket, each with its own
+  // "## Progress") is the sharpest form of the bug: the document-first
+  // "## Progress" scope silently deleted the SHIPPED milestone's own Complete
+  // row for the just-removed identity instead of the active milestone's
+  // Planned row, because nothing distinguished "the first Progress heading"
+  // from "the active milestone's own Progress heading".
+  test('scopes progress-row deletion to the active version\'s own "## Progress" when a shipped milestone shares the bracket code', () => {
+    fs.writeFileSync(
+      planning('STATE.md'),
+      '---\nmilestone: v2.1\n---\n\n# State\n\n**Status:** Planning\n**Last Activity:** 2026-09-01\n',
+    );
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Shipped ✅',
+        '',
+        '- [x] [CK.02] 01: Old One',
+        '- [x] [CK.02] 02: Old Two',
+        '',
+        '### [CK.02] 01: Old One',
+        '**Goal:** shipped',
+        '',
+        '### [CK.02] 02: Old Two',
+        '**Goal:** shipped',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] 01 | 1/1 | Complete |',
+        '| [CK.02] 02 | 1/1 | Complete |',
+        '',
+        '## [CK.02] v2.1 — Current 🚧',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] 01 | 0/1 | Planned |',
+        '| [CK.02] 02 | 0/1 | Planned |',
+        '| [CK.02] 03 | 0/1 | Planned |',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', []],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+
+    // The shipped v2.0 section (same bracket code) keeps BOTH Complete
+    // rows — round 6 silently deleted its phase-02 row instead of the
+    // active version's.
+    assert.equal(roadmap.includes('| [CK.02] 01 | 1/1 | Complete |'), true);
+    assert.equal(roadmap.includes('| [CK.02] 02 | 1/1 | Complete |'), true);
+
+    // The active v2.1 section's target row is gone, no duplicate.
+    const activeProgress = roadmap.slice(roadmap.lastIndexOf('## Progress'));
+    assert.equal((activeProgress.match(/^\| \[CK\.02\] 02 \| 0\/1 \| Planned \|$/gm) ?? []).length, 1);
+    assert.equal(activeProgress.includes('| [CK.02] 03 | 0/1 | Planned |'), false);
+    assert.deepEqual(out.references_left_untouched, []);
+  });
 });

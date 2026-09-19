@@ -3168,6 +3168,73 @@ function bracketProgressSectionRange(content: string): { start: number; end: num
   return { start, end: start + length };
 }
 
+/**
+ * #4304 round 7 (W1): does the DOCUMENT-FIRST `## Progress` heading
+ * `bracketProgressSectionRange` found belong to a DIFFERENT, non-active
+ * milestone's OWN dedicated section, rather than being a genuinely
+ * document-level/shared table? The active milestone owns a
+ * "Progress"-titled heading in its own right whenever
+ * `bracketOwnProgressSectionRanges` finds one (any level, anywhere in its
+ * primary/details ranges). When it DOES, and the document-first heading is
+ * a different one, the document-first heading is necessarily some OTHER
+ * milestone's own dedicated section — the same-code two-versions shape (a
+ * shipped v2.0 and an active v2.1 sharing one `[CK.02]` bracket, each with
+ * its OWN `## Progress`) sorts the shipped one first, and this scope
+ * silently claimed it instead of the active milestone's, deleting the
+ * shipped row. When the active milestone has NO dedicated "Progress"
+ * heading of its own, the document-first one is either genuinely global
+ * (r1b: a global table before any milestone heading) or a later sibling
+ * milestone's SHARED, cross-milestone table that also lists the active
+ * milestone's own rows (one `## Progress` after a THIRD milestone's section,
+ * carrying rows for every milestone in the document) — legacy's own #2012
+ * scope, which stays eligible exactly as before. Ownership is therefore
+ * decided by "does the active milestone have its own separate Progress
+ * heading elsewhere", never by which heading happens to sit nearest —
+ * nearness alone cannot tell a milestone's OWN trailing Progress section
+ * apart from an unrelated later milestone's heading that simply happens to
+ * precede a shared, whole-document table.
+ */
+function bracketProgressSectionOwnedByOtherMilestone(
+  progressStart: number,
+  ownProgressSectionRanges: readonly { start: number; end: number }[],
+): boolean {
+  return ownProgressSectionRanges.length > 0
+    && !ownProgressSectionRanges.some((r) => r.start === progressStart);
+}
+
+/**
+ * #4304 round 7 (W1): the active milestone's OWN heading literally titled
+ * "Progress" (any level, case-insensitive), found ANYWHERE inside its
+ * primary or details ranges — regardless of what precedes it within those
+ * ranges. `bracketMilestoneOwnTableEnd`/`lineStartsInMilestoneOwnTable`
+ * above anchor ONLY at the milestone/details heading itself, so an
+ * intervening heading of level <= the milestone's own — a `## Notes` aside
+ * (r8), or the milestone's OWN `## Progress` heading when a shipped sibling
+ * sharing the bracket code sorts its own `## Progress` first in the
+ * document (r1c) — closed that "own table" window before ever reaching the
+ * table it was meant to include. This is ADDITIVE, never a replacement for
+ * it: the existing bare-table-directly-after-phase-headings scope still
+ * independently keeps an unrelated `## Requirements Traceability` table
+ * (q4, r1b) out of scope, because that heading is not literally "Progress".
+ */
+function bracketOwnProgressSectionRanges(
+  content: string,
+  ranges: ReturnType<typeof currentMilestoneRawRanges>,
+  headings: readonly HeadingToken[],
+): { start: number; end: number }[] {
+  if (!ranges) return [];
+  const isProgressHeading = (h: HeadingToken): boolean => h.text.trim().toLowerCase() === 'progress';
+  const withinActive = (offset: number): boolean =>
+    (offset >= ranges.primary.start && offset < ranges.primary.end)
+    || Boolean(ranges.details && offset >= ranges.details.start && offset < ranges.details.end);
+  const out: { start: number; end: number }[] = [];
+  for (const h of headings) {
+    if (!isProgressHeading(h) || !withinActive(h.offset)) continue;
+    out.push({ start: h.offset, end: bracketMilestoneOwnTableEnd(content, h.offset, headings) });
+  }
+  return out;
+}
+
 // #4304 round 5 (B5): shared "tolerant" trailing boundary for the
 // reporting-only detection regexes below. `(?!\d|\.\d)` blocks extending
 // into more digits or a ".digit" continuation (so a bare identity never
@@ -3320,15 +3387,24 @@ function updateRoadmapAfterBracketPhaseRemoval(
     );
     let roadmapLinesRewritten = content === originalContent ? 0 : 1;
     const ranges = currentMilestoneRawRanges(content, cwd, 'bracket');
-    // #4304 round 6 (W1): progress/table-row deletion is scoped to the
-    // active milestone's OWN table content (bracketMilestoneOwnTableEnd —
-    // narrower than `ranges` itself, see its own doc comment) plus a
-    // document-level `## Progress` section (legacy's own #2012 scope) —
-    // never the whole document. Without this, a same-identity row in ANY
+    // #4304 round 6 (W1) / round 7 (W1 fix): progress/table-row deletion is
+    // scoped to the active milestone's OWN table content
+    // (bracketMilestoneOwnTableEnd — narrower than `ranges` itself, see its
+    // own doc comment) plus its own "Progress"-titled heading found ANYWHERE
+    // in its ranges (bracketOwnProgressSectionRanges — round 7, additive:
+    // covers a `## Notes` aside or a per-milestone `## Progress` the plain
+    // own-table-end closes over too early) plus a document-level
+    // `## Progress` section that is not itself owned by a DIFFERENT
+    // milestone (legacy's own #2012 scope, round 7 adds the ownership gate)
+    // — never the whole document. Without this, a same-identity row in ANY
     // pipe table anywhere (a shipped milestone sharing the same bracket
     // code, an unrelated Requirements Traceability table) was deleted.
     const headingsForOwnTable = tokenizeHeadings(content);
     const progressSectionRange = bracketProgressSectionRange(content);
+    const ownProgressSectionRanges = bracketOwnProgressSectionRanges(content, ranges, headingsForOwnTable);
+    const progressSectionOwnedElsewhere = progressSectionRange
+      ? bracketProgressSectionOwnedByOtherMilestone(progressSectionRange.start, ownProgressSectionRanges)
+      : false;
 
     // #4304 round 5 (B5): the referencesLeftUntouched report is computed
     // from each KEPT line's ORIGINAL (pre-rewrite) text, never the
@@ -3346,9 +3422,11 @@ function updateRoadmapAfterBracketPhaseRemoval(
       const active = lineStartsInActiveMilestone(line.start, ranges);
       const owned = classifyBracketOwnedLine(line.text);
       const inMilestoneOwnTable = owned.kind === 'progress'
-        && lineStartsInMilestoneOwnTable(content, line.start, ranges, headingsForOwnTable);
+        && (lineStartsInMilestoneOwnTable(content, line.start, ranges, headingsForOwnTable)
+          || ownProgressSectionRanges.some((r) => line.start >= r.start && line.start < r.end));
       const inProgressSection = owned.kind === 'progress' && Boolean(
         progressSectionRange
+        && !progressSectionOwnedElsewhere
         && line.start >= progressSectionRange.start
         && line.start < progressSectionRange.end,
       );
