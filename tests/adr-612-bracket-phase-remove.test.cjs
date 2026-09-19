@@ -1044,4 +1044,78 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(roadmap.includes('**Plans:** `02-01-PLAN.md`'), true);
     assert.deepEqual(out.references_left_untouched.sort((a, b) => a - b), [blockedLine, dirNameLine].sort((a, b) => a - b));
   });
+
+  // #4304 round-5 W2 (fix): deleteSection removes the FIRST matching
+  // heading in the whole document, not the one inside the active milestone
+  // — a shipped v2.0 milestone and an active v2.1 milestone sharing the
+  // same bracket code (milestoneToken folds both to [CK.02]) let a shipped
+  // "## [CK.02] v2.0" section's own "### [CK.02] 02" detail heading be
+  // deleted while the ACTIVE v2.1 section's own "### [CK.02] 02" survives
+  // untouched, then gets duplicated by the renumber. Scope the deletion to
+  // the same active-milestone ranges (primary + Phase Details) the
+  // checklist-row deletion already uses.
+  test('scopes detail-section deletion to the active milestone, leaving a shipped section with the same bracket code untouched', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Shipped ✅',
+        '',
+        '- [x] [CK.02] 01: Old One',
+        '- [x] [CK.02] 02: Old Two',
+        '',
+        '### [CK.02] 01: Old One',
+        '**Goal:** shipped',
+        '',
+        '### [CK.02] 02: Old Two',
+        '**Goal:** shipped',
+        '',
+        '## [CK.02] v2.1 — Current 🚧',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', []],
+      ],
+    );
+    fs.writeFileSync(
+      planning('STATE.md'),
+      '---\nmilestone: v2.1\n---\n\n# State\n\n**Status:** Planning\n**Last Activity:** 2026-09-01\n',
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+
+    // The shipped section's own detail heading is untouched.
+    assert.equal(roadmap.includes('### [CK.02] 02: Old Two'), true);
+    assert.equal(roadmap.includes('**Goal:** shipped'), true);
+    const shippedSection = roadmap.slice(
+      roadmap.indexOf('## [CK.02] v2.0'),
+      roadmap.indexOf('## [CK.02] v2.1'),
+    );
+    assert.equal(shippedSection.includes('### [CK.02] 02: Old Two'), true);
+    // The active section's own target heading is gone, and its later
+    // sibling is renumbered — not duplicated onto the removed heading's slot.
+    const activeSection = roadmap.slice(roadmap.indexOf('## [CK.02] v2.1'));
+    assert.equal(activeSection.includes('### [CK.02] 02: Two'), false);
+    assert.equal(activeSection.includes('**Goal:** remove'), false);
+    assert.equal(activeSection.includes('### [CK.02] 02: Three'), true);
+    assert.equal(activeSection.includes('### [CK.02] 03: Three'), false);
+    assert.equal((activeSection.match(/^### \[CK\.02\] 02:/gm) ?? []).length, 1);
+  });
 });

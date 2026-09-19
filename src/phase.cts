@@ -3020,6 +3020,15 @@ function updateRoadmapAfterBracketPhaseRemoval(
     const originalContent = fs.readFileSync(roadmapPath, 'utf-8');
     const targetId = bracketPhaseId(context, removedInt, removedSubphase);
     const targetDisplay = renderPhaseId(targetId);
+    // #4304 round 5 (W2): scope the section deletion to the active
+    // milestone's own ranges — the SAME primary+details discovery the
+    // checklist-row deletion below already uses — computed from the
+    // content BEFORE deletion. Without this, deleteSection removes the
+    // FIRST matching heading in the whole document: a shipped milestone
+    // and the active one sharing the same bracket code (milestoneToken
+    // folds e.g. v2.0 and v2.1 to one [CK.02]) let the shipped section's
+    // own detail heading be deleted while the active one survives.
+    const preDeleteRanges = currentMilestoneRawRanges(originalContent, cwd, 'bracket');
     let content = deleteSection(
       originalContent,
       (heading) => {
@@ -3027,7 +3036,16 @@ function updateRoadmapAfterBracketPhaseRemoval(
           return false;
         }
         const remainder = heading.text.slice(targetDisplay.length);
-        return /^(?:\s*\([^\r\n)]{0,200}\))?\s*:/.test(remainder);
+        if (!/^(?:\s*\([^\r\n)]{0,200}\))?\s*:/.test(remainder)) return false;
+        if (!preDeleteRanges) return true;
+        return (
+          (heading.offset >= preDeleteRanges.primary.start && heading.offset < preDeleteRanges.primary.end)
+          || Boolean(
+            preDeleteRanges.details
+            && heading.offset >= preDeleteRanges.details.start
+            && heading.offset < preDeleteRanges.details.end,
+          )
+        );
       },
     );
     let roadmapLinesRewritten = content === originalContent ? 0 : 1;
