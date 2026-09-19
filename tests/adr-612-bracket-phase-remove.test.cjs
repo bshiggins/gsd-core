@@ -1412,4 +1412,79 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
     assert.equal(roadmap.includes('### [CK.02] 02.01: Two Sub B'), true);
   });
+
+  // #4304 round 6 (W3): the read grammar admits BOTH `[CK.02] 02:` and the
+  // labeled `[CK.02] Phase 02:` spelling (pinned at
+  // tests/adr-612-bracket-grammar.test.cjs:644), and this PR's own owned-
+  // line classifier (BRACKET_HEADING_LINE_RE et al) already admits it too —
+  // but deleteSection's predicate compared heading.text against the
+  // label-less display form with a literal startsWith, and
+  // replaceQualifiedBracketReference matched the label-less literal
+  // substring only, so a labeled removal was half-applied: rows deleted,
+  // the target's own detail section kept, later phases renamed on disk
+  // with NONE of their ROADMAP headings/rows renumbered.
+  test('removes and fully renumbers the labeled "[CK.MM] Phase NN:" bracket spelling', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '- [ ] [CK.02] Phase 01: One',
+        '- [ ] [CK.02] Phase 02: Two',
+        '- [ ] [CK.02] Phase 03: Three',
+        '',
+        '### [CK.02] Phase 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] Phase 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] Phase 03: Three',
+        '**Goal:** renumber',
+        '**Plans:** `03-01-PLAN.md`',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] Phase 01 | 0/1 | Planned |',
+        '| [CK.02] Phase 02 | 0/1 | Planned |',
+        '| [CK.02] Phase 03 | 0/1 | Planned |',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', ['03-01-PLAN.md']],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+
+    assert.deepEqual(
+      fs.readdirSync(planning('phases')).sort(),
+      ['CK.02-01-one', 'CK.02-02-three'],
+    );
+    assert.equal(fs.existsSync(planning('phases', 'CK.02-02-three', '02-01-PLAN.md')), true);
+
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    // The target is completely gone: checklist row, detail section, progress row.
+    assert.equal(roadmap.includes('- [ ] [CK.02] Phase 02: Two'), false);
+    assert.equal(roadmap.includes('### [CK.02] Phase 02: Two'), false);
+    assert.equal(roadmap.includes('**Goal:** remove'), false);
+    // Phase 03 is fully renumbered to 02, label preserved, disk agreeing —
+    // and the target's own progress row is gone (only ONE "Phase 02" row
+    // remains, the renumbered one; the count assertions below pin this,
+    // since the target and renumbered rows share identical placeholder text).
+    assert.equal(roadmap.includes('- [ ] [CK.02] Phase 02: Three'), true);
+    assert.equal(roadmap.includes('### [CK.02] Phase 02: Three'), true);
+    assert.equal(roadmap.includes('### [CK.02] Phase 03: Three'), false);
+    assert.equal((roadmap.match(/^### \[CK\.02\] Phase 02:/gm) ?? []).length, 1);
+    assert.equal((roadmap.match(/^\| \[CK\.02\] Phase 02 \|/gm) ?? []).length, 1);
+    assert.equal(roadmap.includes('`02-01-PLAN.md`'), true);
+    assert.deepEqual(out.references_left_untouched, []);
+  });
 });

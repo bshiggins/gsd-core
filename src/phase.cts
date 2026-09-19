@@ -50,6 +50,7 @@ const {
   scopeToPhase,
   parsePhaseId,
   renderPhaseId,
+  renderMilestoneId,
   toDir,
   phaseHeadingPrefixSrcFor,
   PHASE_HEADING_BASELINE,
@@ -2957,21 +2958,39 @@ function dashBracketPhaseId(id: BracketRoadmapPhaseId): string {
   return `${id.project}.${id.milestone}-${id.phase}${id.subphase ? `.${id.subphase}` : ''}`;
 }
 
+/** The `PP[.SS][-LL]` tail of a rendered bracket phase id — renderPhaseId minus its milestone-bracket prefix. */
+function bracketPhaseNumberSrc(id: BracketRoadmapPhaseId): string {
+  return renderPhaseId(id).slice(renderMilestoneId(id).length + 1);
+}
+
 function replaceQualifiedBracketReference(
   line: string,
   oldId: BracketRoadmapPhaseId,
   newId: BracketRoadmapPhaseId,
 ): string {
   const boundary = 'A-Za-z0-9.-';
-  const oldDisplay = renderPhaseId(oldId);
-  const newDisplay = renderPhaseId(newId);
+  const milestoneSrc = `\\[${escapeRegex(oldId.project)}\\.${escapeRegex(oldId.milestone)}\\]`;
+  const oldNumber = bracketPhaseNumberSrc(oldId);
+  const newNumber = bracketPhaseNumberSrc(newId);
+  // #4304 round 6 (W3): the shared read grammar (phaseHeadingPrefixSrcFor's
+  // bracketAlt, `\[${id}\][ \t]*(?:Phase\s+|(?=\d))`) admits an OPTIONAL
+  // "Phase " label between the bracket and the phase number — pinned at
+  // tests/adr-612-bracket-grammar.test.cjs:644 — so a hand-authored
+  // "[CK.02] Phase 03" mention is a real phase reference, not merely
+  // "[CK.02] 03". The prior literal-substring replace only ever recognized
+  // the label-less display form, so a labeled later-phase mention (a
+  // heading, a checklist/progress row, a "**Depends on:**" line) was never
+  // renumbered. Capture whichever spelling the line actually used (group 1)
+  // and re-emit it verbatim, so a labeled mention stays labeled and a bare
+  // one stays bare.
+  const qualifiedRe = new RegExp(
+    `(?<![${boundary}])(${milestoneSrc}[ \\t]+(?:Phase[ \\t]+)?)${escapeRegex(oldNumber)}(?![${boundary}])`,
+    'g',
+  );
   const oldDash = dashBracketPhaseId(oldId);
   const newDash = dashBracketPhaseId(newId);
   return line
-    .replace(
-      new RegExp(`(?<![${boundary}])${escapeRegex(oldDisplay)}(?![${boundary}])`, 'g'),
-      () => newDisplay,
-    )
+    .replace(qualifiedRe, (_match: string, intro: string) => `${intro}${newNumber}`)
     .replace(
       new RegExp(`(?<![${boundary}])${escapeRegex(oldDash)}(?![${boundary}])`, 'g'),
       () => newDash,
@@ -3096,7 +3115,16 @@ function bracketQualifiedMentionedInLine(line: string, id: BracketRoadmapPhaseId
 function bracketLegacyPhaseMentionedInLine(line: string, id: BracketRoadmapPhaseId): boolean {
   const token = bracketArtifactToken(id);
   return new RegExp(
-    `\\bPhase[ \\t]+${escapeRegex(token)}${BRACKET_REPORT_TOLERANT_BOUNDARY_SRC}`,
+    // #4304 round 6 (W3): a bracket-QUALIFIED, labeled mention
+    // ("[CK.02] Phase 03") is handled completely by
+    // replaceQualifiedBracketReference now — it is never "the legacy bare
+    // 'Phase NN' spelling this detector exists for. Without the negative
+    // lookbehind, the token search matched INSIDE that qualified mention
+    // too (nothing distinguished "Phase 03" preceded by "[CK.02] " from a
+    // genuinely unqualified "Phase 03:" heading), so a correctly-renumbered
+    // labeled line was reported as a dangling reference to the OLD id it no
+    // longer contains.
+    `(?<!\\][ \\t]{0,10})\\bPhase[ \\t]+${escapeRegex(token)}${BRACKET_REPORT_TOLERANT_BOUNDARY_SRC}`,
     'i',
   ).test(line);
 }
@@ -3161,7 +3189,6 @@ function updateRoadmapAfterBracketPhaseRemoval(
   return withPlanningLock(cwd, () => {
     const originalContent = fs.readFileSync(roadmapPath, 'utf-8');
     const targetId = bracketPhaseId(context, removedInt, removedSubphase);
-    const targetDisplay = renderPhaseId(targetId);
     // #4304 round 5 (W2): scope the section deletion to the active
     // milestone's own ranges — the SAME primary+details discovery the
     // checklist-row deletion below already uses — computed from the
@@ -3174,11 +3201,21 @@ function updateRoadmapAfterBracketPhaseRemoval(
     let content = deleteSection(
       originalContent,
       (heading) => {
-        if (heading.level < 2 || heading.level > 4 || !heading.text.startsWith(targetDisplay)) {
+        // #4304 round 6 (W3): classify the heading through the SAME shared
+        // owned-line grammar (classifyBracketOwnedLine / BRACKET_HEADING_LINE_RE)
+        // the checklist/progress-row deletion below already uses, instead of
+        // a literal `startsWith(targetDisplay)` — that comparison only ever
+        // recognized the display spelling ("[CK.02] 02"), so the read-grammar-
+        // admitted labeled spelling ("[CK.02] Phase 02:", pinned at
+        // tests/adr-612-bracket-grammar.test.cjs:644) was never matched here
+        // and its detail section survived a "removal" that deleted every
+        // other owned line for the same identity.
+        if (heading.level < 2 || heading.level > 4) return false;
+        const headingLine = '#'.repeat(heading.level) + ' ' + heading.text;
+        const owned = classifyBracketOwnedLine(headingLine);
+        if (owned.kind !== 'heading' || !owned.id || !sameBracketPhaseId(owned.id, targetId)) {
           return false;
         }
-        const remainder = heading.text.slice(targetDisplay.length);
-        if (!/^(?:\s*\([^\r\n)]{0,200}\))?\s*:/.test(remainder)) return false;
         if (!preDeleteRanges) return true;
         return (
           (heading.offset >= preDeleteRanges.primary.start && heading.offset < preDeleteRanges.primary.end)
