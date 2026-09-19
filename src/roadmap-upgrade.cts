@@ -132,12 +132,23 @@ const PROJECT_CODE_RE = new RegExp(`^${BRACKET_PROJECT_CODE_SRC}$`);
 // trading a silent skip for a silent half-migration. M-NN needs no such
 // pairing — it has exactly one consumer (this bracket-only source parser),
 // per MNN_SOURCE_TOKEN_SOURCE's own comment above.
+// #4144 round 6 (W-CRLF): the trailing capture is `(.*\r?)`, not `(.*)`. JS
+// `.` never matches `\r` (it is its own LineTerminator, ECMA-262), so a CRLF
+// roadmap's `\r` sat just past the `(.*)` group's end — present in the LINE
+// but absent from `headingTail`, which the heading rebuild below is built
+// from. Since `applyRoadmapEdits` replaces a touched line's FULL text with
+// the rebuilt one, every converted heading silently lost its `\r` while
+// every untouched line (and every checklist bullet, whose rewrite instead
+// slices the line's own remainder rather than reassembling captured groups)
+// kept it — a mixed-EOL file despite this function's own "preserve every
+// terminator" contract. The explicit `\r?` re-admits it into the SAME group
+// `headingTail` is read from, so the rebuilt line carries it forward.
 const LEGACY_PHASE_HEADING_BRACKET_RE = new RegExp(
-  `^(#{2,4})\\s*(?:\\[[^\\]]{1,200}\\]\\s*)?Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})(${OPTIONAL_PHASE_TAG_SOURCE})\\s*:(.*)`,
+  `^(#{2,4})\\s*(?:\\[[^\\]]{1,200}\\]\\s*)?Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})(${OPTIONAL_PHASE_TAG_SOURCE})\\s*:(.*\\r?)`,
   'i',
 );
 const MNN_PHASE_HEADING_BRACKET_RE = new RegExp(
-  `^(#{2,4})\\s*(?:\\[[^\\]]{1,200}\\]\\s*)?Phase\\s+(${MNN_SOURCE_TOKEN_SOURCE})(${OPTIONAL_PHASE_TAG_SOURCE})\\s*:(.*)`,
+  `^(#{2,4})\\s*(?:\\[[^\\]]{1,200}\\]\\s*)?Phase\\s+(${MNN_SOURCE_TOKEN_SOURCE})(${OPTIONAL_PHASE_TAG_SOURCE})\\s*:(.*\\r?)`,
   'i',
 );
 

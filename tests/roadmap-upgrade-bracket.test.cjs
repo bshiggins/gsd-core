@@ -2353,4 +2353,54 @@ describe('roadmap upgrade --convention bracket', () => {
       assert.ok(plan.roadmapEdits.some(({ from, to }) => from === '- [ ] **Phase 1:** Alpha' && to === '- [ ] **[GSD.01] 01:** Alpha'));
     });
   });
+
+  // #4144 round 6 (W-CRLF): on a CRLF ROADMAP.md, every converted HEADING
+  // line lost its trailing `\r` (checklist bullets kept theirs, since their
+  // rewrite slices the line's own remainder instead of reassembling
+  // captured regex groups), leaving a mixed-EOL file despite
+  // applyRoadmapEdits' own "preserve every terminator" contract.
+  describe('preserves CRLF line terminators on converted headings (#4144 round 6 W-CRLF)', () => {
+    test('every line stays CRLF after apply, including converted headings', () => {
+      const cwd = materializeEmptyFixture('crlf');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'config.json'),
+        JSON.stringify({ project_code: 'GSD', phase_id_convention: null }, null, 2) + '\n',
+        'utf8',
+      );
+      const roadmap = [
+        '# Roadmap',
+        '',
+        '## v1.0 Core',
+        '',
+        '### Phase 1: Alpha',
+        '**Goal**: a',
+        '',
+        '### Phase 2.1 (Cluster B): Beta',
+        '**Goal**: b',
+        '',
+        '### Phase 3: Gamma',
+        '**Goal**: g',
+        '',
+      ].join('\r\n');
+      fs.writeFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), roadmap, 'utf8');
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      for (const dir of ['01-alpha', '02.1-beta', '03-gamma']) {
+        fs.mkdirSync(path.join(phasesDir, dir), { recursive: true });
+        fs.writeFileSync(path.join(phasesDir, dir, '01-01-PLAN.md'), '---\nphase: "01"\n---\n', 'utf8');
+      }
+
+      const result = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(result, 0, 'CRLF apply');
+
+      const after = fs.readFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), 'utf8');
+      assert.equal(
+        after.replace(/\r\n/g, '').includes('\n'),
+        false,
+        'no line terminator may be a bare LF — every terminator must be a full CRLF pair',
+      );
+      assert.match(after, /### \[GSD\.01\] 01: Alpha\r\n/);
+      assert.match(after, /### \[GSD\.01\] 02 \(Cluster B\): Beta\r\n/);
+      assert.match(after, /### \[GSD\.01\] 03: Gamma\r\n/);
+    });
+  });
 });
