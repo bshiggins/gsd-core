@@ -83,6 +83,10 @@ const {
   findMilestoneScopeHeadingLines,
   getMilestoneInfo,
   scanMilestonePhaseIds,
+  // #4304 round 8 (W1): every recognized milestone heading in the document,
+  // not just the active one — see bracketProgressSectionOwnedByOtherMilestone.
+  listMilestoneHeadings,
+  selectMilestoneHeading,
 } = roadmapParserMod;
 // #4129: the single owner of "count the ROADMAP's milestone Complete rows"
 // (pure computation, no I/O — no cycle on this path) for the intent-first
@@ -3200,37 +3204,81 @@ function bracketProgressSectionRange(content: string): { start: number; end: num
 }
 
 /**
- * #4304 round 7 (W1): does the DOCUMENT-FIRST `## Progress` heading
- * `bracketProgressSectionRange` found belong to a DIFFERENT, non-active
- * milestone's OWN dedicated section, rather than being a genuinely
- * document-level/shared table? The active milestone owns a
- * "Progress"-titled heading in its own right whenever
- * `bracketOwnProgressSectionRanges` finds one (any level, anywhere in its
- * primary/details ranges). When it DOES, and the document-first heading is
- * a different one, the document-first heading is necessarily some OTHER
- * milestone's own dedicated section — the same-code two-versions shape (a
- * shipped v2.0 and an active v2.1 sharing one `[CK.02]` bracket, each with
- * its OWN `## Progress`) sorts the shipped one first, and this scope
- * silently claimed it instead of the active milestone's, deleting the
- * shipped row. When the active milestone has NO dedicated "Progress"
- * heading of its own, the document-first one is either genuinely global
- * (r1b: a global table before any milestone heading) or a later sibling
- * milestone's SHARED, cross-milestone table that also lists the active
- * milestone's own rows (one `## Progress` after a THIRD milestone's section,
- * carrying rows for every milestone in the document) — legacy's own #2012
- * scope, which stays eligible exactly as before. Ownership is therefore
- * decided by "does the active milestone have its own separate Progress
- * heading elsewhere", never by which heading happens to sit nearest —
- * nearness alone cannot tell a milestone's OWN trailing Progress section
- * apart from an unrelated later milestone's heading that simply happens to
- * precede a shared, whole-document table.
+ * #4304 round 8 (W1): every distinct RECOGNIZED milestone heading in the
+ * document (one carrying a version token — `listMilestoneHeadings`' own
+ * grammar), one representative offset per version, via the SAME selection
+ * rule (`selectMilestoneHeading`) `currentMilestoneRawRanges` already uses
+ * to pick "the" heading for a single version. Sorted ascending. Used to
+ * decide which milestone (if any) a document-first `## Progress` heading
+ * sits immediately after, with nothing of its own kind in between.
+ */
+function bracketRecognizedMilestoneMarkers(content: string): number[] {
+  const versions = new Set(listMilestoneHeadings(content).map((h: { version: string }) => h.version));
+  const markers: number[] = [];
+  for (const version of versions) {
+    const selected = selectMilestoneHeading(content, version);
+    if (selected?.index !== undefined) markers.push(selected.index);
+  }
+  return markers.sort((a: number, b: number) => a - b);
+}
+
+/**
+ * #4304 round 7 (W1) / round 8 (W1 fix): does the DOCUMENT-FIRST
+ * `## Progress` heading `bracketProgressSectionRange` found belong to a
+ * DIFFERENT, non-active milestone's OWN dedicated section, rather than
+ * being a genuinely document-level/shared table?
+ *
+ * Round 7's answer — "the active milestone has a Progress heading of its
+ * own, and this isn't it, so it must be someone else's" — over-claims: a
+ * genuinely global `## Progress` that lists every milestone's rows (before
+ * any milestone heading at all, r1b/s7; or trailing after the LAST
+ * recognized milestone heading with nothing bounding it on the far side,
+ * s4 shape d) is neither the active milestone's own nor any OTHER
+ * milestone's dedicated section, yet round 7 called it "owned elsewhere"
+ * merely because it wasn't the active one's.
+ *
+ * The fix asks a POSITIONAL question instead, over every recognized
+ * milestone heading in the document (`bracketRecognizedMilestoneMarkers`),
+ * not just the active one: is this Progress heading SANDWICHED strictly
+ * between two recognized milestone headings — i.e. does it immediately
+ * follow one specific milestone's own heading (nothing else of that kind in
+ * between) AND does some other recognized milestone heading follow it
+ * later in the document? Only then is it unambiguously that earlier
+ * milestone's own trailing section (r1, r1c, the same-code two-versions
+ * shape). A Progress heading with NOTHING preceding it (top of document) or
+ * NOTHING following it (trailing after the last recognized milestone
+ * heading) is open, shared territory — never "elsewhere" — because a
+ * milestone's own dedicated section and a document-wide table that merely
+ * happens to sit after the last milestone's content are textually
+ * indistinguishable by position alone once nothing bounds the far side.
  */
 function bracketProgressSectionOwnedByOtherMilestone(
+  content: string,
   progressStart: number,
+  activeRanges: ReturnType<typeof currentMilestoneRawRanges>,
   ownProgressSectionRanges: readonly { start: number; end: number }[],
 ): boolean {
-  return ownProgressSectionRanges.length > 0
-    && !ownProgressSectionRanges.some((r) => r.start === progressStart);
+  // Fast path: exactly one of the ACTIVE milestone's own recognized
+  // Progress-titled headings (any level) is never "elsewhere".
+  if (ownProgressSectionRanges.some((r) => r.start === progressStart)) return false;
+
+  const markers = bracketRecognizedMilestoneMarkers(content);
+  let precedingIndex = -1;
+  for (let i = 0; i < markers.length; i++) {
+    if (markers[i] <= progressStart) precedingIndex = i;
+    else break;
+  }
+  // Nothing precedes it (top-of-document global table): not owned by anyone.
+  if (precedingIndex === -1) return false;
+
+  // Sandwiched under the ACTIVE milestone's own heading: not "elsewhere".
+  const precedingOffset = markers[precedingIndex];
+  if (activeRanges && precedingOffset === activeRanges.primary.start) return false;
+
+  // Owned by a DIFFERENT milestone only when something else recognized
+  // follows it — a trailing section after the LAST recognized milestone
+  // heading is open territory, never exclusively that last milestone's own.
+  return precedingIndex < markers.length - 1;
 }
 
 /**
@@ -3445,7 +3493,7 @@ function updateRoadmapAfterBracketPhaseRemoval(
     const progressSectionRange = bracketProgressSectionRange(content);
     const ownProgressSectionRanges = bracketOwnProgressSectionRanges(content, ranges, headingsForOwnTable);
     const progressSectionOwnedElsewhere = progressSectionRange
-      ? bracketProgressSectionOwnedByOtherMilestone(progressSectionRange.start, ownProgressSectionRanges)
+      ? bracketProgressSectionOwnedByOtherMilestone(content, progressSectionRange.start, ranges, ownProgressSectionRanges)
       : false;
 
     // #4304 round 5 (B5): the referencesLeftUntouched report is computed

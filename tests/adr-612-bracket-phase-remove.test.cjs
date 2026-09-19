@@ -2038,4 +2038,145 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.match(result.error, /\[CK\.02\] 02\.01/);
     assert.deepEqual(snapshotTree(planning()), before);
   });
+
+  // #4304 round 8 (W1): round 7's ownership gate treated the document-first
+  // "## Progress" as "owned elsewhere" whenever the ACTIVE milestone had its
+  // own separate "Progress" heading, regardless of where the document-first
+  // one actually sat — so a genuinely global table BEFORE any milestone
+  // heading kept the removed identity's row once the active milestone also
+  // had its own dedicated "### Progress". The row is global (nothing
+  // precedes it) and must be deleted here, same as the active's own table.
+  test('deletes the removed phase\'s row from a global Progress table at the top of the document', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] 01 | 0/1 | Planned |',
+        '| [CK.02] 02 | 0/1 | Planned |',
+        '| [CK.02] 03 | 0/1 | Planned |',
+        '| [CK.03] 01 | 0/1 | Planned |',
+        '',
+        '## [CK.02] v2.0 — Current 🚧',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '',
+        '### Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] 01 | 0/1 | Planned |',
+        '| [CK.02] 02 | 0/1 | Planned |',
+        '| [CK.02] 03 | 0/1 | Planned |',
+        '',
+        '## [CK.03] v3.0 — Future',
+        '',
+        '- [ ] [CK.03] 01: F-One',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', []],
+        ['CK.03-01-f-one', []],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+
+    const globalProgress = roadmap.slice(0, roadmap.indexOf('## [CK.02]'));
+    assert.equal(globalProgress.includes('| [CK.02] 01 | 0/1 | Planned |'), true);
+    assert.equal((globalProgress.match(/^\| \[CK\.02\] 02 \| 0\/1 \| Planned \|$/gm) ?? []).length, 1);
+    assert.equal(globalProgress.includes('| [CK.03] 01 | 0/1 | Planned |'), true);
+
+    const ownProgress = roadmap.slice(roadmap.lastIndexOf('### Progress'));
+    assert.equal((ownProgress.match(/^\| \[CK\.02\] 02 \| 0\/1 \| Planned \|$/gm) ?? []).length, 1);
+    assert.equal(ownProgress.includes('| [CK.02] 03 | 0/1 | Planned |'), false);
+    assert.deepEqual(out.references_left_untouched, []);
+  });
+
+  // #4304 round 8 (W1): the OTHER shape the same over-claim broke — a
+  // genuinely global "## Progress" table sitting AFTER a LATER milestone's
+  // own heading, with nothing recognized following it. Round 7 treated it
+  // as owned by that later milestone (or, before this fix, by whichever
+  // milestone the active one's own separate Progress heading pushed it
+  // toward), leaving the removed identity's row stale.
+  test('deletes the removed phase\'s row from a global Progress table trailing after a later milestone', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current 🚧',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '',
+        '### Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] 01 | 0/1 | Planned |',
+        '| [CK.02] 02 | 0/1 | Planned |',
+        '| [CK.02] 03 | 0/1 | Planned |',
+        '',
+        '## [CK.03] v3.0 — Future',
+        '',
+        '- [ ] [CK.03] 01: F-One',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] 01 | 0/1 | Planned |',
+        '| [CK.02] 02 | 0/1 | Planned |',
+        '| [CK.02] 03 | 0/1 | Planned |',
+        '| [CK.03] 01 | 0/1 | Planned |',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', []],
+        ['CK.03-01-f-one', []],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+
+    const globalProgress = roadmap.slice(roadmap.lastIndexOf('## Progress'));
+    assert.equal(globalProgress.includes('| [CK.02] 01 | 0/1 | Planned |'), true);
+    assert.equal((globalProgress.match(/^\| \[CK\.02\] 02 \| 0\/1 \| Planned \|$/gm) ?? []).length, 1);
+    assert.equal(globalProgress.includes('| [CK.03] 01 | 0/1 | Planned |'), true);
+    assert.deepEqual(out.references_left_untouched, []);
+  });
 });
