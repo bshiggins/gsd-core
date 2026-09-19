@@ -57,6 +57,8 @@ const {
   OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
   OPTIONAL_PHASE_TAG_SOURCE,
   PHASE_NUMBER_TOKEN_SOURCE,
+  bracketQualifiedIntroSrcFor,
+  foldBracketId,
 } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdDisplayMod = require('./phase-id-display.cjs');
@@ -2940,17 +2942,31 @@ const BRACKET_OWNED_PHASE_INTRO_SRC = phaseHeadingPrefixSrcFor(
 );
 const BRACKET_OWNED_PHASE_TOKEN_CAPTURE_SRC = `(${PHASE_NUMBER_TOKEN_SOURCE})`;
 const BRACKET_OWNED_TAG_SRC = '(?:[ \\t]*\\([^)\\r\\n]{0,200}\\))?';
+// #4304 round 7 (B1): every reader compiles BRACKET_OWNED_PHASE_INTRO_SRC's
+// own source (phaseHeadingPrefixSrcFor's bracket alternative) with the `i`
+// flag — `BRACKET_PROJECT_CODE_SRC` is deliberately spelled `[A-Z]...` on the
+// understanding that recognition folds case at compile time, never in the
+// source. Round 6 derived the SOURCE correctly here but compiled these three
+// `new RegExp(...)` calls with no flags at all, so `[ck.02] 02:`,
+// `[CK.02] phase 02:` and `[CK.02] PHASE 02:` (case variants the read
+// grammar and this PR's own `phase insert`/`phase add` already accept) never
+// classified as owned lines here — the owning heading/checklist/progress row
+// for those spellings was never recognized as belonging to the phase being
+// removed.
 const BRACKET_HEADING_LINE_RE = new RegExp(
   `^ {0,3}#{2,4}[ \\t]*${BRACKET_OWNED_PHASE_INTRO_SRC}`
   + `${BRACKET_OWNED_PHASE_TOKEN_CAPTURE_SRC}${BRACKET_OWNED_TAG_SRC}[ \\t]*:`,
+  'i',
 );
 const BRACKET_CHECKLIST_LINE_RE = new RegExp(
   `^[ \\t]*[-*][ \\t]+\\[[ xX]\\][ \\t]+\\*{0,2}${BRACKET_OWNED_PHASE_INTRO_SRC}`
   + `${BRACKET_OWNED_PHASE_TOKEN_CAPTURE_SRC}${BRACKET_OWNED_TAG_SRC}[ \\t]*:?\\*{0,2}(?:[ \\t]|$)`,
+  'i',
 );
 const BRACKET_CELL_ID_RE = new RegExp(
   `^${BRACKET_OWNED_PHASE_INTRO_SRC}${BRACKET_OWNED_PHASE_TOKEN_CAPTURE_SRC}`
   + `${BRACKET_OWNED_TAG_SRC}(?:[ \\t]*:|[ \\t]|$)`,
+  'i',
 );
 
 function splitRoadmapLineRecords(content: string): RoadmapLineRecord[] {
@@ -2974,7 +2990,15 @@ function splitRoadmapLineRecords(content: string): RoadmapLineRecord[] {
 function phaseIdFromOwnedLineMatch(match: RegExpExecArray | null): BracketRoadmapPhaseId | null {
   if (!match?.[1] || !match[2]) return null;
   try {
-    return parsePhaseId(`[${match[1]}] ${match[2]}`);
+    // #4304 round 7 (B1): parsePhaseId's own display-form regex requires an
+    // uppercase project code and checks canonicality by requiring the
+    // re-rendered id to be byte-equal to the input, so a lowercase capture
+    // from the now-case-insensitive owned-line regexes above (`[ck.02]
+    // 02:`) threw here and silently classified as "not owned" — exactly the
+    // identity-recognition gap `foldBracketId`'s own doc comment in
+    // phase-id.cts warns about ("fold before any identity operation; never
+    // fold for display"). This is an identity operation.
+    return parsePhaseId(`[${foldBracketId(match[1])}] ${match[2]}`);
   } catch {
     return null;
   }
@@ -3018,23 +3042,26 @@ function replaceQualifiedBracketReference(
   newId: BracketRoadmapPhaseId,
 ): string {
   const boundary = 'A-Za-z0-9.-';
-  const milestoneSrc = `\\[${escapeRegex(oldId.project)}\\.${escapeRegex(oldId.milestone)}\\]`;
   const oldNumber = bracketPhaseNumberSrc(oldId);
   const newNumber = bracketPhaseNumberSrc(newId);
-  // #4304 round 6 (W3): the shared read grammar (phaseHeadingPrefixSrcFor's
-  // bracketAlt, `\[${id}\][ \t]*(?:Phase\s+|(?=\d))`) admits an OPTIONAL
-  // "Phase " label between the bracket and the phase number — pinned at
-  // tests/adr-612-bracket-grammar.test.cjs:644 — so a hand-authored
-  // "[CK.02] Phase 03" mention is a real phase reference, not merely
-  // "[CK.02] 03". The prior literal-substring replace only ever recognized
-  // the label-less display form, so a labeled later-phase mention (a
-  // heading, a checklist/progress row, a "**Depends on:**" line) was never
-  // renumbered. Capture whichever spelling the line actually used (group 1)
-  // and re-emit it verbatim, so a labeled mention stays labeled and a bare
-  // one stays bare.
+  // #4304 round 6 (W3) / round 7 (B1): the shared read grammar
+  // (phaseHeadingPrefixSrcFor's bracketAlt, now factored out as
+  // bracketAltIntroSrcFor / bracketQualifiedIntroSrcFor in phase-id.cts)
+  // admits an OPTIONAL "Phase " label between the bracket and the phase
+  // number, zero-or-more spacing, and any case — pinned at
+  // tests/adr-612-bracket-grammar.test.cjs:644 — so "[CK.02] Phase 03",
+  // "[CK.02] PHASE 03", "[ck.02] 03" and the no-space "[CK.02]03" are all
+  // real phase references, not merely the label-less, uppercase,
+  // one-space-or-more spelling this regex hand-composed before. Building
+  // the intro from the single-owner helper (instead of `[ \t]+` and a
+  // case-sensitive bracket) and compiling with `i` is what makes this
+  // rewriter accept exactly what the classifier above, `roadmap get-phase`,
+  // and `roadmap analyze` already do. Capture whichever spelling the line
+  // actually used (group 1) and re-emit it verbatim, so a labeled mention
+  // stays labeled, a bare one stays bare, and the line's own case survives.
   const qualifiedRe = new RegExp(
-    `(?<![${boundary}])(${milestoneSrc}[ \\t]+(?:Phase[ \\t]+)?)${escapeRegex(oldNumber)}(?![${boundary}])`,
-    'g',
+    `(?<![${boundary}])(${bracketQualifiedIntroSrcFor(oldId.project, oldId.milestone)})${escapeRegex(oldNumber)}(?![${boundary}])`,
+    'gi',
   );
   const oldDash = dashBracketPhaseId(oldId);
   const newDash = dashBracketPhaseId(newId);
@@ -3155,19 +3182,22 @@ const BRACKET_REPORT_TOLERANT_BOUNDARY_SRC = '(?!\\d|\\.\\d)';
 
 function bracketQualifiedMentionedInLine(line: string, id: BracketRoadmapPhaseId): boolean {
   const tolerant = BRACKET_REPORT_TOLERANT_BOUNDARY_SRC;
-  // #4304 round 6 (B5 follow-up): admit the SAME optional "Phase " label
-  // replaceQualifiedBracketReference already rewrites (mirroring
-  // phaseHeadingPrefixSrcFor's bracketAlt, `\[${id}\][ \t]*(?:Phase\s+|(?=\d))`,
-  // pinned at tests/adr-612-bracket-grammar.test.cjs:644) — not a second,
-  // independently-typed label grammar. Without this, a labeled mention of
-  // the REMOVED identity itself ("**Depends on:** [CK.02] Phase 02", which
-  // no rewriter ever touches because 02 no longer exists) was never
-  // recognized as dangling: this detector only ever matched the label-less
-  // display form ("[CK.02] 02"), which is not a substring of the labeled
-  // spelling.
-  const milestoneSrc = `\\[${escapeRegex(id.project)}\\.${escapeRegex(id.milestone)}\\]`;
-  const numberSrc = escapeRegex(bracketPhaseNumberSrc(id));
-  const qualifiedRe = new RegExp(`${milestoneSrc}[ \\t]+(?:Phase[ \\t]+)?${numberSrc}${tolerant}`);
+  // #4304 round 6 (B5 follow-up) / round 7 (B1): admit the SAME optional
+  // "Phase " label, zero-or-more spacing and any case
+  // replaceQualifiedBracketReference now rewrites — built from the SAME
+  // single-owner bracketQualifiedIntroSrcFor (phase-id.cts), never a
+  // second, independently-typed label grammar. Round 6 fixed the label
+  // itself but still hand-typed `[ \t]+` with no `i` flag, so a labeled
+  // mention using the read grammar's OTHER accepted spellings — lowercase
+  // code ("[ck.02] 02"), uppercase label ("[CK.02] PHASE 02"), or no space
+  // at all ("[CK.02]02") — was still invisible to this detector. Without
+  // this, a labeled/case/no-space mention of the REMOVED identity itself
+  // ("**Depends on:** [ck.02] phase 02", which no rewriter ever touches
+  // because 02 no longer exists) was never recognized as dangling.
+  const qualifiedRe = new RegExp(
+    `${bracketQualifiedIntroSrcFor(id.project, id.milestone)}${escapeRegex(bracketPhaseNumberSrc(id))}${tolerant}`,
+    'i',
+  );
   if (qualifiedRe.test(line)) return true;
   const dash = dashBracketPhaseId(id);
   return new RegExp(`(?<![A-Za-z0-9.-])${escapeRegex(dash)}${tolerant}`).test(line);

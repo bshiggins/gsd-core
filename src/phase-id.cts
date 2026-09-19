@@ -328,6 +328,46 @@ const PHASE_HEADING_BASELINE = Object.freeze({
  *
  * Pure: takes the resolved convention, never reads config.
  */
+// #4304 round 7 (B1): `bracketAlt`'s own alternation, factored out to a named
+// function so every write-side consumer that needs "this bracket, optionally
+// followed by the literal Phase label, then a digit" derives from the SAME
+// expression the read grammar compiles — never a hand-retyped `[ \t]+` /
+// case-sensitive copy. `idSrc` is the regex SOURCE for the bracket's
+// `{CODE}.{MM}` interior: the generic `BRACKET_ID_SRC` class (capturing or
+// not) for a classifier that must recognize ANY bracket identity, or one
+// escaped, already-known project/milestone pair (via
+// `bracketQualifiedIntroSrcFor` below) for a rewriter/detector that already
+// knows exactly which identity it means. Returns only the regex SOURCE —
+// every caller compiles it themselves (every reader uses the `i` flag), so
+// this composes with `g`, an outer capturing group, or a trailing literal
+// number.
+function bracketAltIntroSrcFor(idSrc: string): string {
+  // `[ \t]*` not `\s*`: `\s` spans newlines, so a bracket-terminated heading
+  // followed by a blank line and a digit-leading prose line read as one phase.
+  return `\\[${idSrc}\\][ \\t]*(?:Phase\\s+|(?=\\d))`;
+}
+
+/**
+ * #4304 round 7 (B1): the qualified-mention intro for ONE already-known
+ * bracket identity — `[{PROJECT}.{MM}]` (both escaped literals, not a
+ * class), optionally followed by the `Phase` label — built from
+ * `bracketAltIntroSrcFor` so a rewriter or detector anchoring a specific
+ * phase-number token right after it accepts exactly the spellings
+ * `phaseHeadingPrefixSrcFor`'s bracket alternative does: any case (compile
+ * with `i`), zero-or-more spaces, an optional `Phase` label. phase.cts's
+ * write-side bracket-identity regexes (the qualified-reference replacer, the
+ * qualified-mention detector) build their intro through this instead of
+ * re-typing `[ \t]+` / case-sensitive brackets independently of the read
+ * grammar — the exact drift B1 found (round 6 shipped hand-composed,
+ * case-sensitive, `[ \t]+`-spaced copies that silently rejected
+ * `[ck.02] 02:`, `[CK.02] PHASE 02:`, and the no-space `[CK.02]02:`, all of
+ * which `roadmap get-phase` / `roadmap analyze` / this PR's own `phase
+ * insert` and `phase add` already accept as real phases).
+ */
+function bracketQualifiedIntroSrcFor(project: unknown, milestone: unknown): string {
+  return bracketAltIntroSrcFor(`${escapeRegex(String(project))}\\.${escapeRegex(String(milestone))}`);
+}
+
 function phaseHeadingPrefixSrcFor(
   baseline: string,
   convention?: string | null,
@@ -338,8 +378,6 @@ function phaseHeadingPrefixSrcFor(
     : BASE_PHASE_LABEL_PREFIX_SRC;
   if (convention !== 'bracket') return base;
   const id = capturing ? `(${BRACKET_ID_SRC})` : BRACKET_ID_SRC;
-  // `[ \t]*` not `\s*`: `\s` spans newlines, so a bracket-terminated heading
-  // followed by a blank line and a digit-leading prose line read as one phase.
   // BOTH bracket forms are admitted at both baselines, and both CAPTURE. The
   // any-bracket base already matches `[GSD.999] Phase 07:` on its own — but
   // through the base alternative, which captures nothing, so the reader saw
@@ -347,7 +385,7 @@ function phaseHeadingPrefixSrcFor(
   // counted a labeled icebox heading as a real phase while the label-less form
   // beside it was excluded. Two derivations of one ROADMAP disagreed. The
   // bracket alternative is tried FIRST so it wins the capture.
-  const bracketAlt = `\\[${id}\\][ \\t]*(?:Phase\\s+|(?=\\d))`;
+  const bracketAlt = bracketAltIntroSrcFor(id);
   return `(?:${bracketAlt}|${base})`;
 }
 
@@ -1665,6 +1703,7 @@ export = {
   BASE_PHASE_LABEL_PREFIX_SRC,
   PHASE_HEADING_BASELINE,
   phaseHeadingPrefixSrcFor,
+  bracketQualifiedIntroSrcFor,
   foldBracketId,
   bracketQualifiedKey,
   stripProjectCodePrefix,

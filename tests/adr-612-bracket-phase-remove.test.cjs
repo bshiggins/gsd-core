@@ -1540,4 +1540,111 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(roadmap.includes('**Depends on:** [CK.02] Phase 02'), true);
     assert.deepEqual(out.references_left_untouched, [dependsLine]);
   });
+
+  // #4304 round 7 (B1): the read grammar (phase-id.cts's bracketAlt, compiled
+  // with `i` at roadmap-parser.cts's BRACKET_PHASE_ENTRY_HEADING_RE) and this
+  // PR's own `phase insert`/`phase add` (canonicalizeBracketPhaseArgument)
+  // already accept a lowercase project code ("[ck.02] 02:"), a lowercase or
+  // uppercase "Phase" label ("[CK.02] phase 02:" / "[CK.02] PHASE 02:"),
+  // extra internal spacing, and no space at all between the bracket and the
+  // number ("[CK.02]02:") as real phases. Round 6's write-side regexes
+  // (BRACKET_HEADING_LINE_RE et al, replaceQualifiedBracketReference,
+  // bracketQualifiedMentionedInLine) were hand-composed case-sensitively
+  // with `[ \t]+` instead of being derived from that same grammar, so
+  // `phase remove` on any of these spellings deleted and renamed on disk
+  // but left the target's own heading/checklist/progress row and the later
+  // phase's stale number in ROADMAP, reporting references_left_untouched: []
+  // over a ROADMAP that still named both the removed and the pre-rename
+  // identity.
+  test('removes and fully renumbers every case/spacing variant of the bracket phase spelling', () => {
+    const spellings = [
+      ['lower-code', (n) => `[ck.02] ${n}`],
+      ['lower-label', (n) => `[CK.02] phase ${n}`],
+      ['upper-label', (n) => `[CK.02] PHASE ${n}`],
+      ['extra-spaces', (n) => `[CK.02]  Phase  ${n}`],
+      ['no-space', (n) => `[CK.02]${n}`],
+    ];
+    for (const [name, spell] of spellings) {
+      replaceSeed(
+        [
+          '# Roadmap',
+          '',
+          '## [CK.02] v2.0 — Current 🚧',
+          '',
+          `- [ ] ${spell('01')}: One`,
+          `- [ ] ${spell('02')}: Two`,
+          `- [ ] ${spell('03')}: Three`,
+          '',
+          `### ${spell('01')}: One`,
+          '**Goal:** keep',
+          '',
+          `### ${spell('02')}: Two`,
+          '**Goal:** remove',
+          '',
+          `### ${spell('03')}: Three`,
+          '**Goal:** renumber',
+          `**Depends on:** ${spell('02')}`,
+          '**Plans:** `03-01-PLAN.md`',
+          '',
+          '## Progress',
+          '',
+          '| Phase | Plans | Status |',
+          '| --- | --- | --- |',
+          `| ${spell('01')} | 0/1 | Planned |`,
+          `| ${spell('02')} | 0/1 | Planned |`,
+          `| ${spell('03')} | 0/1 | Planned |`,
+          '',
+        ],
+        [
+          ['CK.02-01-one', []],
+          ['CK.02-02-two', []],
+          ['CK.02-03-three', ['03-01-PLAN.md']],
+        ],
+      );
+
+      const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+      assert.equal(result.success, true, `[${name}] ${result.error || result.output}`);
+      const out = JSON.parse(result.output);
+
+      assert.deepEqual(
+        fs.readdirSync(planning('phases')).sort(),
+        ['CK.02-01-one', 'CK.02-02-three'],
+        `[${name}] directories`,
+      );
+      assert.equal(
+        fs.existsSync(planning('phases', 'CK.02-02-three', '02-01-PLAN.md')),
+        true,
+        `[${name}] renamed artifact`,
+      );
+
+      const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+      // The target is completely gone: checklist row, detail section
+      // (its own "Goal" line), and progress row — in the line's own spelling.
+      assert.equal(roadmap.includes(`${spell('02')}: Two`), false, `[${name}] target gone`);
+      assert.equal(roadmap.includes('**Goal:** remove'), false, `[${name}] target section gone`);
+      // Phase 03 is fully renumbered to 02, spelling and case preserved,
+      // disk agreeing — and the target's own row is gone (only ONE
+      // instance of the renumbered heading/row survives).
+      assert.equal(roadmap.includes(`### ${spell('02')}: Three`), true, `[${name}] renumbered heading`);
+      assert.equal(roadmap.includes(`### ${spell('03')}: Three`), false, `[${name}] old heading gone`);
+      assert.equal(roadmap.includes(`- [ ] ${spell('02')}: Three`), true, `[${name}] renumbered checklist`);
+      assert.equal(
+        roadmap.includes(`| ${spell('02')} | 0/1 | Planned |`),
+        true,
+        `[${name}] renumbered progress row`,
+      );
+      const headingLines = splitLines(roadmap).filter((l) => l.startsWith(`### ${spell('02')}:`));
+      assert.equal(headingLines.length, 1, `[${name}] no duplicate heading`);
+      const progressLines = splitLines(roadmap).filter((l) => l.startsWith(`| ${spell('02')} |`));
+      assert.equal(progressLines.length, 1, `[${name}] no duplicate progress row`);
+
+      // The only genuinely dangling reference is the "Depends on" line
+      // naming the just-removed identity — never an empty report over a
+      // half-applied removal.
+      const lines = splitLines(roadmap);
+      const dependsLine = lines.indexOf(`**Depends on:** ${spell('02')}`) + 1;
+      assert.ok(dependsLine > 0, `[${name}] dangling Depends-on line must survive`);
+      assert.deepEqual(out.references_left_untouched, [dependsLine], `[${name}] references_left_untouched`);
+    }
+  });
 });
