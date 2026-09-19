@@ -1948,4 +1948,44 @@ describe('roadmap upgrade --convention bracket', () => {
       assert.match(migrated, /^### \[GSD\.01\] 01: Alpha$/m);
     });
   });
+
+  // #4144 round 5 follow-up (lint-plan-count-drift): computeDependsOnRewrites
+  // tested plan-file membership with a private inline `/-PLAN\.md$/i` regex —
+  // an independent re-derivation of the plan-scan owner's own root-plan-file
+  // test (isRootPlanFile, src/plan-scan.cts). That owner accepts more than
+  // the private regex did: a bare `PLAN.md`, and the legacy delimited slug
+  // form (`3-PLAN-01-setup.md`) gsd-plan-phase historically wrote — both of
+  // which the private regex rejected outright, silently skipping ANY
+  // depends_on alias registration for such a plan (neither its full id nor
+  // its canonical alias was ever indexed).
+  describe('selects plan files through the plan-scan owner in depends_on rewrites (#4144 round 5 follow-up)', () => {
+    test('a bare PLAN.md the old inline regex rejected still gets its depends_on alias registered and rewritten', () => {
+      const phaseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-bracket-root-plan-file-owner-'));
+      tempRoots.push(phaseDir);
+      const predecessor = '---\nphase: "03"\nplan: "01"\ndepends_on: []\n---\n\nBare-named predecessor.\n';
+      // References the bare-named predecessor by its CANONICAL alias — the
+      // same alias extractCanonicalPlanId derives from its bare filename.
+      const dependent = '---\nphase: "03"\nplan: "02"\ndepends_on: ["PLAN"]\n---\n\nDependent.\n';
+      fs.writeFileSync(path.join(phaseDir, 'PLAN.md'), predecessor, 'utf8');
+      fs.writeFileSync(path.join(phaseDir, '03-02-followup-PLAN.md'), dependent, 'utf8');
+
+      const rewrites = computeDependsOnRewrites(
+        phaseDir,
+        '03',
+        '01',
+        [
+          { oldName: 'PLAN.md', newName: '01-PLAN.md' },
+          { oldName: '03-02-followup-PLAN.md', newName: '01-02-followup-PLAN.md' },
+        ],
+      );
+
+      const followupRewrite = rewrites.find((r) => r.oldName === '03-02-followup-PLAN.md');
+      assert.ok(
+        followupRewrite,
+        'isRootPlanFile accepts the bare "PLAN.md" rename the old /-PLAN\\.md$/i test rejected outright, '
+        + 'so its alias must now be registered and this dependency rewritten',
+      );
+      assert.deepEqual(parsePlanDocument(followupRewrite.to).dependsOn, ['01']);
+    });
+  });
 });

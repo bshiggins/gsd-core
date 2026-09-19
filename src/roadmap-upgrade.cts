@@ -29,6 +29,8 @@ import phaseMod = require('./phase.cjs');
 import coreUtilsMod = require('./core-utils.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import markdownSectionizerMod = require('./markdown-sectionizer.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import planScanMod = require('./plan-scan.cjs');
 const { planningDir } = planningWorkspace;
 const { listAllPhaseDirs } = phaseLocatorMod;
 const { SCOPE } = planningScopeMod;
@@ -47,6 +49,11 @@ const { extractCanonicalPlanId } = coreUtilsMod;
 // (tokenizeHeadings is built on this same seam) — reused here instead of a
 // third independent fence parser.
 const { scanFencedBlocks } = markdownSectionizerMod;
+// #4144 round 5 follow-up (lint-plan-count-drift): the plan-scan owner's own
+// root-plan-file predicate (src/plan-scan.cts) — reused in
+// computeDependsOnRewrites instead of a private `/-PLAN\.md$/i` filename
+// re-derivation of the same membership test.
+const { isRootPlanFile } = planScanMod;
 const {
   BRACKET_ID_SRC,
   BRACKET_PROJECT_CODE_SRC,
@@ -765,7 +772,13 @@ function computeDependsOnRewrites(
     renamedPlanIdByToken.set(comparisonToken, newAlias);
   };
   for (const rename of fileRenames) {
-    if (!/-PLAN\.md$/i.test(rename.oldName) || !/-PLAN\.md$/i.test(rename.newName)) continue;
+    // #4144 round 5 follow-up: the plan-scan owner's own root-plan-file test
+    // (src/plan-scan.cts), not a private re-derivation of the `-PLAN.md`
+    // filename filter — the owner also accepts bare `PLAN.md` and the
+    // legacy delimited slug form (`3-PLAN-01-setup.md`), which the old
+    // inline `/-PLAN\.md$/i` regex rejected outright, silently skipping any
+    // depends_on alias registration for such a plan.
+    if (!isRootPlanFile(rename.oldName) || !isRootPlanFile(rename.newName)) continue;
     const oldPlanId = rename.oldName.replace(/-PLAN\.md$/i, '');
     const newPlanId = rename.newName.replace(/-PLAN\.md$/i, '');
     registerDependencyAlias(oldPlanId, newPlanId);
@@ -787,7 +800,7 @@ function computeDependsOnRewrites(
 
   const rewrites: DependsOnRewrite[] = [];
   for (const entry of entries) {
-    if (!entry.isFile() || !/-PLAN\.md$/i.test(entry.name)) continue;
+    if (!entry.isFile() || !isRootPlanFile(entry.name)) continue;
 
     const filePath = path.join(oldDirPath, entry.name);
     let content: string;
