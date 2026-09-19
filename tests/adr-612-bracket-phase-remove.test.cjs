@@ -881,4 +881,167 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(roadmap.includes('### [CK.02] 03: Three'), false);
     assert.deepEqual(out.references_left_untouched, []);
   });
+
+  // #4304 round-5 Blocker 5: references_left_untouched re-searched the
+  // PERSISTED (already-rewritten) content for pre-renumber ids, so whenever
+  // two or more phases shift, a later phase's NEW value collides textually
+  // with an earlier phase's OLD value and every correctly-rewritten line
+  // is reported as "untouched". Computing the report from the ORIGINAL
+  // line instead makes each occurrence unambiguous.
+  test('does not report correctly-renumbered lines as untouched when two phases shift', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '- [ ] [CK.02] 04: Four',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '**Plans:** `03-01-PLAN.md`',
+        '',
+        '### [CK.02] 04: Four',
+        '**Goal:** renumber',
+        '**Depends on:** [CK.02] 03',
+        '**Plans:** `04-01-PLAN.md`',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] 01 | 0/1 | Planned |',
+        '| [CK.02] 02 | 0/1 | Planned |',
+        '| [CK.02] 03 | 0/1 | Planned |',
+        '| [CK.02] 04 | 0/1 | Planned |',
+        '',
+      ],
+      [
+        ['CK.02-01-one', ['01-01-PLAN.md']],
+        ['CK.02-02-two', ['02-01-PLAN.md']],
+        ['CK.02-03-three', ['03-01-PLAN.md']],
+        ['CK.02-04-four', ['04-01-PLAN.md']],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+
+    assert.equal(roadmap.includes('### [CK.02] 02: Three'), true);
+    assert.equal(roadmap.includes('### [CK.02] 03: Four'), true);
+    assert.equal(roadmap.includes('**Depends on:** [CK.02] 02'), true);
+    assert.deepEqual(out.references_left_untouched, []);
+  });
+
+  // #4304 round-5 Blocker 5: dangling references to the REMOVED identity
+  // (not renumbered — deleted) were missed because the check only
+  // recognized the legacy "Phase NN" spelling, not the display or dash
+  // qualified forms.
+  test('reports dangling references to the removed identity in display and dash form', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '**Depends on:** [CK.02] 02',
+        'Also blocked by CK.02-02 and Phase 02.',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', []],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    const lines = roadmap.split('\n');
+    const dependsLine = lines.indexOf('**Depends on:** [CK.02] 02') + 1;
+    const blockedLine = lines.indexOf('Also blocked by CK.02-02 and Phase 02.') + 1;
+
+    assert.equal(roadmap.includes('**Depends on:** [CK.02] 02'), true);
+    assert.equal(roadmap.includes('Also blocked by CK.02-02 and Phase 02.'), true);
+    assert.deepEqual(out.references_left_untouched.sort((a, b) => a - b), [dependsLine, blockedLine].sort((a, b) => a - b));
+  });
+
+  // #4304 round-5 Blocker 5: a stale pre-renumber reference followed by
+  // sentence-final punctuation or a directory-name suffix was missed
+  // because the (?![\d.]) lookahead rejected any following '.', and a
+  // dash-form reference embedded in a directory path (a hyphen following
+  // the identity) was likewise never reported.
+  test('reports pre-renumber identities left stale by sentence-final punctuation and directory-name suffixes', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        'Blocked until [CK.02] 03.',
+        'Dir name: CK.02-03-three',
+        '**Plans:** `03-01-PLAN.md`',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', ['03-01-PLAN.md']],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    const lines = roadmap.split('\n');
+    const blockedLine = lines.indexOf('Blocked until [CK.02] 03.') + 1;
+    const dirNameLine = lines.indexOf('Dir name: CK.02-03-three') + 1;
+
+    // The rewrite itself is unchanged by this fix: both stale lines remain
+    // byte-identical (their own stricter boundary still declines to rewrite
+    // sentence-final punctuation or a directory-name-owned dash form), but
+    // the bare artifact reference on the next line IS rewritten.
+    assert.equal(roadmap.includes('Blocked until [CK.02] 03.'), true);
+    assert.equal(roadmap.includes('Dir name: CK.02-03-three'), true);
+    assert.equal(roadmap.includes('**Plans:** `02-01-PLAN.md`'), true);
+    assert.deepEqual(out.references_left_untouched.sort((a, b) => a - b), [blockedLine, dirNameLine].sort((a, b) => a - b));
+  });
 });

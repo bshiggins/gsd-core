@@ -2931,18 +2931,81 @@ function lineStartsInActiveMilestone(
     || Boolean(ranges.details && lineStart >= ranges.details.start && lineStart < ranges.details.end);
 }
 
+// #4304 round 5 (B5): shared "tolerant" trailing boundary for the
+// reporting-only detection regexes below. `(?!\d|\.\d)` blocks extending
+// into more digits or a ".digit" continuation (so a bare identity never
+// falsely matches inside a longer number or a different decimal sibling),
+// but — unlike the rewrite functions' own boundary — permits a following
+// '.', '-', letter, or end of line, so a genuinely stale mention survives
+// detection even when it sits before sentence-final punctuation or is
+// embedded in a directory-name suffix the rewriter deliberately declines
+// to touch (detection must be allowed to find more than the rewriter is
+// safe to fix).
+const BRACKET_REPORT_TOLERANT_BOUNDARY_SRC = '(?!\\d|\\.\\d)';
+
+function bracketQualifiedMentionedInLine(line: string, id: BracketRoadmapPhaseId): boolean {
+  const tolerant = BRACKET_REPORT_TOLERANT_BOUNDARY_SRC;
+  const display = renderPhaseId(id);
+  if (new RegExp(`${escapeRegex(display)}${tolerant}`).test(line)) return true;
+  const dash = dashBracketPhaseId(id);
+  return new RegExp(`(?<![A-Za-z0-9.-])${escapeRegex(dash)}${tolerant}`).test(line);
+}
+
+function bracketLegacyPhaseMentionedInLine(line: string, id: BracketRoadmapPhaseId): boolean {
+  const token = bracketArtifactToken(id);
+  return new RegExp(
+    `\\bPhase[ \\t]+${escapeRegex(token)}${BRACKET_REPORT_TOLERANT_BOUNDARY_SRC}`,
+    'i',
+  ).test(line);
+}
+
+function bracketArtifactMentionedInLine(line: string, id: BracketRoadmapPhaseId): boolean {
+  const token = bracketArtifactToken(id);
+  const filename = `${escapeRegex(token)}-\\d{2}(?:-[A-Za-z][A-Za-z0-9-]*)?-(?:PLAN|SUMMARY)\\.md`;
+  return new RegExp(`(?<![A-Za-z0-9_./-])${filename}(?![A-Za-z0-9_.-])`).test(line);
+}
+
+/**
+ * #4304 round 5 (B5): computed from the ORIGINAL (pre-rewrite) line, never
+ * the persisted content — re-searching the PERSISTED text for a
+ * pre-renumber id is how the prior implementation produced false
+ * positives whenever two or more phases shifted (a later phase's NEW
+ * value collides textually with an earlier phase's OLD value).
+ *
+ * The removed identity is a dangling reference by construction wherever it
+ * is mentioned — nothing ever rewrites a reference to a deleted phase — so
+ * every spelling is checked directly with the tolerant boundary. A
+ * renumbered (old -> new) identity is "left untouched" only if running the
+ * SAME rewrite this line would actually receive still leaves a mention of
+ * the old identity behind afterward: the qualified-reference and
+ * bare-artifact rewriters have their own, stricter boundaries (e.g. they
+ * decline to rewrite immediately before a sentence-final period, or a
+ * bare token embedded in a directory-path segment), so a mention can be
+ * real and still survive the rewrite. The legacy "Phase NN" spelling is
+ * never rewritten by any bracket rewriter, so it is always checked
+ * directly for a renumbered identity too.
+ */
 function lineContainsTrackedBracketIdentity(
-  line: string,
+  originalLine: string,
   removedId: BracketRoadmapPhaseId,
-  renumberedIds: BracketRoadmapPhaseId[],
+  mapping: BracketRenumberMapping[],
 ): boolean {
-  for (const id of renumberedIds) {
-    if (replaceQualifiedBracketReference(line, id, removedId) !== line) return true;
-    const token = bracketArtifactToken(id);
-    if (new RegExp(`\\bPhase[ \\t]+${escapeRegex(token)}(?![\\d.])`, 'i').test(line)) return true;
+  if (
+    bracketQualifiedMentionedInLine(originalLine, removedId)
+    || bracketLegacyPhaseMentionedInLine(originalLine, removedId)
+    || bracketArtifactMentionedInLine(originalLine, removedId)
+  ) {
+    return true;
   }
-  const removedToken = bracketArtifactToken(removedId);
-  return new RegExp(`\\bPhase[ \\t]+${escapeRegex(removedToken)}(?![\\d.])`, 'i').test(line);
+
+  for (const { oldId, newId } of mapping) {
+    if (bracketLegacyPhaseMentionedInLine(originalLine, oldId)) return true;
+    const afterQualified = replaceQualifiedBracketReference(originalLine, oldId, newId);
+    if (bracketQualifiedMentionedInLine(afterQualified, oldId)) return true;
+    const afterArtifact = replaceBareBracketArtifactReference(originalLine, oldId, newId);
+    if (bracketArtifactMentionedInLine(afterArtifact, oldId)) return true;
+  }
+  return false;
 }
 
 function updateRoadmapAfterBracketPhaseRemoval(
@@ -2970,6 +3033,17 @@ function updateRoadmapAfterBracketPhaseRemoval(
     let roadmapLinesRewritten = content === originalContent ? 0 : 1;
     const ranges = currentMilestoneRawRanges(content, cwd, 'bracket');
 
+    // #4304 round 5 (B5): the referencesLeftUntouched report is computed
+    // from each KEPT line's ORIGINAL (pre-rewrite) text, never the
+    // persisted (already-rewritten) content — re-searching persisted text
+    // for a pre-renumber id is how the prior implementation produced false
+    // positives whenever two or more phases shifted (a later phase's NEW
+    // value collides textually with an earlier phase's OLD value). A line
+    // that gets DELETED here (the target's own owned heading/checklist/
+    // progress row) can never be "left untouched" — it does not exist in
+    // the output at all — so only kept lines are considered.
+    const keptOriginalLines: { text: string; active: boolean }[] = [];
+
     const rewritten: string[] = [];
     for (const line of splitRoadmapLineRecords(content)) {
       const active = lineStartsInActiveMilestone(line.start, ranges);
@@ -2988,21 +3062,33 @@ function updateRoadmapAfterBracketPhaseRemoval(
       }
       if (next !== line.text) roadmapLinesRewritten += 1;
       rewritten.push(next + line.eol);
+      keptOriginalLines.push({ text: line.text, active });
     }
     content = rewritten.join('');
 
     platformWriteSync(roadmapPath, content);
+    // platformWriteSync's own markdown normalization (_normalizeMd) inserts
+    // blank lines around headings/fences/lists and collapses runs of 3+
+    // blank lines, so a KEPT line's position here can shift from its
+    // position in `keptOriginalLines`. Normalization only ever adds or
+    // collapses BLANK lines — it never reorders or edits a non-blank
+    // line's text — so the Nth non-blank kept (original) line always
+    // corresponds to the Nth non-blank persisted line; blank kept lines
+    // are skipped entirely since they can never contain a tracked identity.
     const persistedContent = fs.readFileSync(roadmapPath, 'utf-8');
-    const persistedRanges = currentMilestoneRawRanges(persistedContent, cwd, 'bracket');
+    const persistedNonBlankLineNumbers = splitRoadmapLineRecords(persistedContent)
+      .filter((line) => line.text.trim() !== '')
+      .map((line) => line.lineNumber);
+
     const referencesLeftUntouched: number[] = [];
-    for (const line of splitRoadmapLineRecords(persistedContent)) {
-      if (!lineStartsInActiveMilestone(line.start, persistedRanges)) continue;
-      if (lineContainsTrackedBracketIdentity(
-        line.text,
-        targetId,
-        mapping.map(({ oldId }) => oldId),
-      )) {
-        referencesLeftUntouched.push(line.lineNumber);
+    let nonBlankIndex = 0;
+    for (const { text, active } of keptOriginalLines) {
+      if (text.trim() === '') continue;
+      const persistedLineNumber = persistedNonBlankLineNumbers[nonBlankIndex];
+      nonBlankIndex += 1;
+      if (!active || persistedLineNumber === undefined) continue;
+      if (lineContainsTrackedBracketIdentity(text, targetId, mapping)) {
+        referencesLeftUntouched.push(persistedLineNumber);
       }
     }
     return {
