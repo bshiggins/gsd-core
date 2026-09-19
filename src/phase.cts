@@ -2882,6 +2882,75 @@ function bracketPhaseOwnSubphases(
   return [...bySubphase.keys()].sort((a, b) => a - b).map((s) => bySubphase.get(s)!);
 }
 
+/**
+ * #4304 round 9 (W2): a pre-mutation SAFETY CHECK, not a fix to the read
+ * side's own window selection (mislocating the active window is PR-6 /
+ * #4751 territory — this function does not touch that). When the read side
+ * mislocates the active milestone window — a non-closed heading carrying
+ * the active version token sits BEFORE the real milestone heading ("##
+ * Goals for v2.0"), a document-level Progress heading placed before the
+ * milestone heading, or no milestone heading exists at all — the checklist/
+ * heading rewrite loop in `updateRoadmapAfterBracketPhaseRemoval` never
+ * reaches the target's REAL heading/checklist lines, because they sit
+ * outside `ranges`. Nothing downstream of that silently-empty rewrite stops
+ * the destructive directory delete/rename that already ran by the time the
+ * ROADMAP rewrite would have reported the mismatch, so the command "succeeds"
+ * with an empty report while the target's heading and checklist survive
+ * beside the sibling renumbered onto its old identity.
+ *
+ * Scans the WHOLE document (not `ranges` — the located window is exactly
+ * what is in question) for the target's own heading/checklist lines via the
+ * SAME classifier (`classifyBracketOwnedLine`) the rewrite loop uses. If at
+ * least one is found and NONE of them fall inside the located `ranges`
+ * (primary or details) — including when `ranges` is null, i.e. no milestone
+ * window was located at all — the target is misplaced relative to what the
+ * read side thinks is active, and the caller must refuse before touching
+ * disk. A target correctly inside `ranges` (the overwhelmingly common case)
+ * returns null immediately; this never widens or narrows behavior for a
+ * correctly-located window.
+ */
+function bracketOwnedLineOutsideActiveWindow(
+  content: string,
+  targetId: BracketRoadmapPhaseId,
+  ranges: ReturnType<typeof currentMilestoneRawRanges>,
+): { lineNumber: number; text: string } | null {
+  // Heading deletion (`deleteSection`, scoped to `preDeleteRanges`) and
+  // checklist-row deletion (the per-line loop, gated on `active`) are two
+  // INDEPENDENT scoped operations in `updateRoadmapAfterBracketPhaseRemoval`
+  // — a degenerate window can legitimately contain one kind of owned line
+  // while missing the other (round-4 p8: the version-less bracket-fallback
+  // selects the first PHASE heading as if it were the milestone heading, so
+  // the resulting window happens to span every later phase HEADING to EOF
+  // while the checklist bullets — which sit ABOVE that heading — are still
+  // entirely outside it). Finding the heading safely inside must never mask
+  // a checklist row that is not, or vice versa: track each kind separately.
+  let headingInside = false;
+  let checklistInside = false;
+  let firstOutsideHeading: { lineNumber: number; text: string } | null = null;
+  let firstOutsideChecklist: { lineNumber: number; text: string } | null = null;
+  for (const line of splitRoadmapLineRecords(content)) {
+    const owned = classifyBracketOwnedLine(line.text);
+    if (!owned.id || (owned.kind !== 'heading' && owned.kind !== 'checklist')) continue;
+    if (!sameBracketPhaseId(owned.id, targetId)) continue;
+    const insideActive = Boolean(
+      ranges
+      && ((line.start >= ranges.primary.start && line.start < ranges.primary.end)
+        || (ranges.details !== null
+          && line.start >= ranges.details.start && line.start < ranges.details.end)),
+    );
+    if (owned.kind === 'heading') {
+      if (insideActive) headingInside = true;
+      else if (!firstOutsideHeading) firstOutsideHeading = { lineNumber: line.lineNumber, text: line.text.trim() };
+    } else {
+      if (insideActive) checklistInside = true;
+      else if (!firstOutsideChecklist) firstOutsideChecklist = { lineNumber: line.lineNumber, text: line.text.trim() };
+    }
+  }
+  if (firstOutsideHeading && !headingInside) return firstOutsideHeading;
+  if (firstOutsideChecklist && !checklistInside) return firstOutsideChecklist;
+  return null;
+}
+
 function renameBracketPhases(
   phasesDir: string,
   context: BracketWriteContext,
@@ -3798,6 +3867,41 @@ function cmdPhaseRemove(
         `Cannot remove phase ${normalized}: it still has sub-phase(s) `
         + `${ownSubphases.map((id) => renderPhaseId(id)).join(', ')}. `
         + 'Remove the sub-phase(s) first, then remove the phase.',
+      );
+    }
+  }
+
+  // #4304 round 9 (W2): refuse before any mutation when the target's own
+  // heading/checklist line lives entirely OUTSIDE the milestone window the
+  // read side located — a mislocated window (a decoy heading carrying the
+  // active version token before the real milestone heading, a document-level
+  // Progress heading placed before it, or no milestone heading at all)
+  // otherwise lets the destructive delete/rename below proceed while the
+  // ROADMAP rewrite silently never reaches the target's real lines. Does not
+  // attempt to fix the window's own selection (PR-6 / #4751 territory) —
+  // only refuses instead of half-applying.
+  if (removeContext && targetDir) {
+    const guardTargetId = bracketPhaseId(removeContext, removedInt, removedSubphase);
+    const outside = bracketOwnedLineOutsideActiveWindow(
+      roadmapContentBeforeRemoval!,
+      guardTargetId,
+      preRemovalRanges,
+    );
+    if (outside) {
+      const windowDescription = preRemovalRanges
+        ? `the located milestone window starting at line ${
+          roadmapContentBeforeRemoval!.slice(0, preRemovalRanges.primary.start).split('\n').length
+        } (${
+          roadmapContentBeforeRemoval!
+            .slice(preRemovalRanges.primary.start, roadmapContentBeforeRemoval!.indexOf('\n', preRemovalRanges.primary.start))
+            .trim()
+        })`
+        : 'no milestone heading at all';
+      error(
+        `Cannot remove phase ${normalized}: its own heading/checklist line `
+        + `(ROADMAP.md line ${outside.lineNumber}: ${JSON.stringify(outside.text)}) `
+        + `lies outside ${windowDescription}. ROADMAP.md's milestone heading was not `
+        + 'found where expected; verify the ROADMAP.md structure before removing.',
       );
     }
   }

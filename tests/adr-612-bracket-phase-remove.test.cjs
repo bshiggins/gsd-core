@@ -2335,6 +2335,119 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, []);
   });
 
+  // #4304 round 9 (W2, pre-existing since round 5): a non-closed heading
+  // carrying the ACTIVE version token sits BEFORE the real milestone
+  // heading ("## Goals for v2.0"). The read side selects THAT heading as
+  // the active one (`selectMilestoneHeading` picks the first non-closed
+  // match for the version), so the located window is just the Goals
+  // paragraph — ending exactly where the real milestone heading begins —
+  // and the target's real heading/checklist lines never fall inside it.
+  // Before this fix, `phase remove` still deleted the target's directory
+  // and renamed later ones while its heading/checklist survived in
+  // ROADMAP.md; the pre-mutation guard now refuses before touching disk.
+  test('refuses to remove a phase when a decoy heading carrying the active version precedes the real milestone heading', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## Goals for v2.0',
+        '',
+        'Ship the thing.',
+        '',
+        '## [CK.02] v2.0 — Current 🚧',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '**Depends on:** [CK.02] 02',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] 01 | 0/1 | Planned |',
+        '| [CK.02] 02 | 0/1 | Planned |',
+        '| [CK.02] 03 | 0/1 | Planned |',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', []],
+      ],
+    );
+    const before = snapshotTree(planning());
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+
+    assert.equal(result.success, false, result.output);
+    assert.match(result.error, /lies outside/i);
+    assert.match(result.error, /Goals for v2\.0/);
+    assert.deepEqual(snapshotTree(planning()), before);
+  });
+
+  // #4304 round 9 (W2, round-4's own still-open W1 class): no milestone
+  // heading exists in ROADMAP.md at all. The bracket-fallback selector
+  // (`bracketFallbackHeadingMatches`) has no phase-tail exclusion, so it
+  // picks the FIRST bracket phase heading ("### [CK.02] 01: One") as if it
+  // were the milestone heading, and the resulting window happens to span
+  // every LATER phase heading through EOF while the checklist bullets —
+  // which sit above that first heading — remain entirely outside it. A
+  // heading correctly falling inside must never mask a checklist row that
+  // does not: this is exactly the shape that motivates checking heading and
+  // checklist independently rather than "any owned line found inside".
+  test('refuses to remove a phase when ROADMAP.md has no milestone heading at all', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '**Plans:** `03-01-PLAN.md`',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] 01 | 0/1 | Planned |',
+        '| [CK.02] 02 | 0/1 | Planned |',
+        '| [CK.02] 03 | 0/1 | Planned |',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', ['03-01-PLAN.md']],
+      ],
+    );
+    const before = snapshotTree(planning());
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+
+    assert.equal(result.success, false, result.output);
+    assert.match(result.error, /lies outside/i);
+    assert.deepEqual(snapshotTree(planning()), before);
+  });
+
   // #4304 round 8 (W2): `isProgressHeading` required an EXACT "progress"
   // match while `bracketProgressSectionRange` already matched "## Progress"
   // with any suffix (`\b`), so a shipped milestone's "## Progress (v2.0)"
