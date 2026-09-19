@@ -1648,7 +1648,8 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     // its own line happens to sit inside on disk (nothing stops an author
     // from listing an icebox item next to the real phases it is scheduled
     // near).
-    if (legacySentinelMilestone(legacyChecklist[2]) !== null) {
+    const bulletSentinelMilestone = legacySentinelMilestone(legacyChecklist[2]);
+    if (bulletSentinelMilestone !== null) {
       resolved = sectionLegacyMap.get(GLOBAL_SECTION_KEY)?.get(key);
     } else {
       // #4144 round 6 B2: a bullet INSIDE a specific milestone section is
@@ -1702,6 +1703,21 @@ function computeBracketPlan(cwd: string): MigrationPlan {
       }
     }
     if (!resolved) {
+      if (bulletSentinelMilestone !== null) {
+        // #4144 round 8 W1: a sentinel bullet (999.x icebox / 0.x backlog)
+        // with no converted sentinel phase to resolve to — e.g. an icebox
+        // item with no matching `### Phase 999.x:` heading anywhere — is
+        // left byte-identical rather than refused. `roadmap analyze`
+        // deliberately excludes sentinel checklist entries from
+        // `missing_phase_details` (roadmap.cts:795-798, `!isSentinelPhase`),
+        // so the "a reader would report it missing" rationale the Tier-1
+        // refusal below exists for does not apply here: every reader still
+        // classifies the unconverted line as sentinel under bracket too
+        // (its checklist grammar captures no bracket id, and
+        // `isSentinelPhaseId` falls back to the same bare-999/0.x rule
+        // whether or not the line converted).
+        continue;
+      }
       if (!isReaderRecognizedBullet) {
         // #4144 round 7 B2: no reader treats this bullet as a phase
         // reference (roadmap.cts:770 requires bold, roadmap-parser.cts:1446

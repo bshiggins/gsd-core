@@ -2211,6 +2211,107 @@ describe('roadmap upgrade --convention bracket', () => {
     });
   });
 
+  // #4144 round 8 W1: a sentinel bullet with no matching sentinel heading
+  // anywhere (an icebox/backlog to-do jotted down before its own
+  // `### Phase 999.x:`/`### Phase 0.x:` heading exists) has no converted
+  // phase to resolve to. Round 7 B1's rewired sentinel lookup fell through
+  // to the Tier-1 partial-conversion refusal in that case, blocking the
+  // whole migration — but `roadmap analyze`'s own missing_phase_details scan
+  // deliberately excludes sentinel checklist entries (roadmap.cts:795-798),
+  // so nothing a reader would call "missing" is being left behind.
+  describe('leaves a headingless sentinel bullet untouched instead of refusing (#4144 round 8 W1)', () => {
+    test('a bold sentinel bullet with no heading, inside a real section, migrates untouched', () => {
+      const cwd = materializeEmptyFixture('sentinel-no-heading-in-section');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'config.json'),
+        JSON.stringify({ project_code: 'GSD', phase_id_convention: null }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v1.0 Core',
+          '',
+          '- [ ] **Phase 1: Alpha**',
+          '- [ ] **Phase 999.1: Someday idea**',
+          '',
+          '### Phase 1: Alpha',
+          '**Goal**: a',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      fs.mkdirSync(path.join(cwd, '.planning', 'phases', '01-alpha'), { recursive: true });
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'phases', '01-alpha', '01-01-PLAN.md'),
+        '---\nphase: "01"\n---\n# alpha plan\n',
+        'utf8',
+      );
+
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'headingless sentinel bullet in section dry-run');
+
+      assert.equal(
+        plan.roadmapEdits.some(({ from }) => from === '- [ ] **Phase 999.1: Someday idea**'),
+        false,
+        'no sentinel heading exists to resolve to — left untouched, not refused',
+      );
+      assert.equal(plan.roadmapEdits.find(({ from }) => from === '- [ ] **Phase 1: Alpha**')?.to, '- [ ] **[GSD.01] 01: Alpha**');
+
+      const applied = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(applied, 0, 'headingless sentinel bullet in section apply');
+      const roadmap = fs.readFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), 'utf8');
+      assert.match(roadmap, /- \[ \] \*\*Phase 999\.1: Someday idea\*\*/, 'the headingless sentinel bullet stays byte-identical');
+    });
+
+    test('the same headingless sentinel bullet in a global list before any section also migrates untouched', () => {
+      const cwd = materializeEmptyFixture('sentinel-no-heading-global');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'config.json'),
+        JSON.stringify({ project_code: 'GSD', phase_id_convention: null }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## Phases',
+          '',
+          '- [ ] **Phase 1: Alpha**',
+          '- [ ] **Phase 999.1: Someday idea**',
+          '',
+          '## v1.0 Core',
+          '',
+          '### Phase 1: Alpha',
+          '**Goal**: a',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      fs.mkdirSync(path.join(cwd, '.planning', 'phases', '01-alpha'), { recursive: true });
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'phases', '01-alpha', '01-01-PLAN.md'),
+        '---\nphase: "01"\n---\n# alpha plan\n',
+        'utf8',
+      );
+
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'headingless sentinel bullet global dry-run');
+
+      assert.equal(
+        plan.roadmapEdits.some(({ from }) => from === '- [ ] **Phase 999.1: Someday idea**'),
+        false,
+        'no sentinel heading exists to resolve to — left untouched, not refused',
+      );
+
+      const applied = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(applied, 0, 'headingless sentinel bullet global apply');
+      const roadmap = fs.readFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), 'utf8');
+      assert.match(roadmap, /- \[ \] \*\*Phase 999\.1: Someday idea\*\*/, 'the headingless sentinel bullet stays byte-identical');
+    });
+  });
+
   // #4144 round 6 B2: two milestone sections sharing the same leading major
   // integer (`## v2.0`, `## v2.1` — both resolve to bracket milestone 2) each
   // restart their own legacy phase numbering. Headings resolve correctly
