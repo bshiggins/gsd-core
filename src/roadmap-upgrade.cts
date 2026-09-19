@@ -1329,7 +1329,20 @@ function computeBracketPlan(cwd: string): MigrationPlan {
   }
   const existingDirs = phaseDirListing.value;
 
-  const slugify = (text: string): string => (coreUtilsMod.generateSlugInternal(text, null) ?? '');
+  // #4144 round 7 W1: derive the comparison slug the EXACT way the harness
+  // derives a DIRECTORY's own slug — never a bespoke unlimited-length
+  // slugify. `phase insert` writes "(INSERTED)" into the HEADING text
+  // (phase.cts) but never into the directory it creates (its slug comes
+  // from the bare `description`, which never carries the marker) — the
+  // same marker `roadmap.cts:494` strips before slugifying a heading name
+  // for its own comparisons. And `init`/`phase add` truncate at
+  // `generateSlugInternal`'s own default maxLen (60 — init.cts:1190/:2284),
+  // never `null` (unlimited). Comparing under a DIFFERENT rule than the one
+  // that created the directory refused two-milestone roadmaps the
+  // tooling's own commands produced.
+  const slugify = (text: string): string => (
+    coreUtilsMod.generateSlugInternal(text.replace(/\(INSERTED\)/i, '').trim()) ?? ''
+  );
 
   const orderedMappings = [...idMapping.values()].map((mapping) => ({ mapping, used: false }));
   const phases: PhaseRename[] = [];

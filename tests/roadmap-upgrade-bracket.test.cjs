@@ -2509,6 +2509,107 @@ describe('roadmap upgrade --convention bracket', () => {
     });
   });
 
+  // #4144 round 7 W1: the B3 tie-break slugified the heading NAME with
+  // `generateSlugInternal(text, null)` — never accounting for the way the
+  // HARNESS ITSELF derives a directory's own slug. `phase insert` writes
+  // "(INSERTED)" into the heading TEXT but not into the directory it
+  // creates (phase.cts's insert path slugifies the bare `description`,
+  // which never carries the marker — mirroring how `roadmap.cts:494`
+  // strips it before slugifying a heading name for its own comparisons);
+  // and `init`/`phase add` truncate at `generateSlugInternal`'s own default
+  // maxLen (60), never unlimited (`null`). Comparing under a DIFFERENT rule
+  // than the one that created the directory refused two-milestone roadmaps
+  // the tooling's own commands produced.
+  describe('derives the comparison slug the way the harness derives directory slugs (#4144 round 7 W1)', () => {
+    test('an inserted decimal sub-phase\'s "(INSERTED)" heading marker does not block its own directory match', () => {
+      const cwd = materializeEmptyFixture('inserted-slug');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'config.json'),
+        JSON.stringify({ project_code: 'GSD', phase_id_convention: null }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v1.0 Core',
+          '',
+          '### Phase 2: Beta',
+          '### Phase 2.1: Critical Fix (INSERTED)',
+          '',
+          '## v2.0 Scale',
+          '',
+          '### Phase 2: Delta',
+          '### Phase 2.1: Hot Patch (INSERTED)',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      for (const dir of ['02-beta', '02.1-critical-fix', '02-delta', '02.1-hot-patch']) {
+        fs.mkdirSync(path.join(phasesDir, dir), { recursive: true });
+        fs.writeFileSync(path.join(phasesDir, dir, '01-01-PLAN.md'), '---\nphase: "01"\n---\n', 'utf8');
+      }
+
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'inserted-marker slug dry-run');
+
+      assert.deepEqual(
+        plan.phases.map(({ oldDir, newDir }) => ({ oldDir, newDir })).sort((a, b) => a.oldDir.localeCompare(b.oldDir)),
+        [
+          { oldDir: '02-beta', newDir: 'GSD.01-01-beta' },
+          { oldDir: '02-delta', newDir: 'GSD.02-01-delta' },
+          { oldDir: '02.1-critical-fix', newDir: 'GSD.01-02-critical-fix' },
+          { oldDir: '02.1-hot-patch', newDir: 'GSD.02-02-hot-patch' },
+        ].sort((a, b) => a.oldDir.localeCompare(b.oldDir)),
+        'Critical Fix (v1.0) must keep its own identity; Hot Patch (v2.0) must keep its own — never refused',
+      );
+    });
+
+    test('a phase name truncated to the creators\' 60-char slug limit still matches its own directory', () => {
+      const long = 'A very long phase name that goes on and on and on past sixty characters total';
+      const cwd = materializeEmptyFixture('long-slug');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'config.json'),
+        JSON.stringify({ project_code: 'GSD', phase_id_convention: null }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v1.0 Core',
+          '',
+          `### Phase 1: ${long}`,
+          '',
+          '## v2.0 Scale',
+          '',
+          '### Phase 1: Other',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const { generateSlugInternal } = require('../gsd-core/bin/lib/core-utils.cjs');
+      const truncatedSlug = generateSlugInternal(long);
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      for (const dir of [`01-${truncatedSlug}`, '01-other']) {
+        fs.mkdirSync(path.join(phasesDir, dir), { recursive: true });
+      }
+
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'long-name slug dry-run');
+
+      assert.deepEqual(
+        plan.phases.map(({ oldDir, newDir }) => ({ oldDir, newDir })).sort((a, b) => a.oldDir.localeCompare(b.oldDir)),
+        [
+          { oldDir: `01-${truncatedSlug}`, newDir: `GSD.01-01-${truncatedSlug}` },
+          { oldDir: '01-other', newDir: 'GSD.02-01-other' },
+        ].sort((a, b) => a.oldDir.localeCompare(b.oldDir)),
+        'the directory created with the creators\' own 60-char-truncated slug must still resolve',
+      );
+    });
+  });
+
   // #4144 round 6 B4: the READERS' own checklist grammar
   // (`src/roadmap.cts:770`, `missing_phase_details`) requires a bold `**`
   // before the `Phase` label but no colon anywhere after the token — a
