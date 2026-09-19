@@ -2888,6 +2888,42 @@ function bracketPhaseOwnSubphases(
 }
 
 /**
+ * #4304 (B1): identify ROADMAP lines owned by historical milestone sections.
+ * A `<details>` block is archived regardless of its summary text. Outside
+ * details, a CLOSED/ARCHIVED/SHIPPED milestone heading at level 1-3 owns the
+ * section through the next heading at the same or shallower level. The marker
+ * predicate is imported from roadmap-parser, so selection and mutation cannot
+ * drift on which milestone headings are closed.
+ *
+ * This is the single owner consumed by both the active-window safety guard and
+ * bracket removal's rewrite pass. Historical lines are evidence of neither an
+ * active-window mismatch nor a reference that removal may rewrite or delete.
+ */
+function archivedOrClosedMilestoneLineStarts(content: string): Set<number> {
+  const historical = new Set<number>();
+  let inDetails = false;
+  let closedHeadingLevel = 0;
+  for (const line of splitRoadmapLineRecords(content)) {
+    const text = line.text;
+    if (/^\s*<details\b/i.test(text)) inDetails = true;
+    if (/^\s*<\/details\s*>/i.test(text)) {
+      inDetails = false;
+      continue;
+    }
+    const headingMatch = /^(#{1,6})[ \t]+(.*)$/.exec(text);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      if (closedHeadingLevel && level <= closedHeadingLevel) closedHeadingLevel = 0;
+      if (!closedHeadingLevel && level <= 3 && isClosedMilestoneHeading(headingMatch[2])) {
+        closedHeadingLevel = level;
+      }
+    }
+    if (inDetails || closedHeadingLevel > 0) historical.add(line.start);
+  }
+  return historical;
+}
+
+/**
  * #4304 (W2): a pre-mutation SAFETY CHECK, not a fix to the read
  * side's own window selection (mislocating the active window is PR-6 /
  * #4751 territory — this function does not touch that). When the read side
@@ -2945,20 +2981,8 @@ function bracketOwnedLineOutsideActiveWindow(
   // the active phase's heading-only entry (exactly what `phase add` writes,
   // with no checklist bullet of its own) — this never widens what counts as
   // OUTSIDE, only narrows which OUTSIDE lines count as evidence.
-  let inDetails = false;
-  let closedHeadingLevel = 0;
+  const historicalLineStarts = archivedOrClosedMilestoneLineStarts(content);
   for (const line of splitRoadmapLineRecords(content)) {
-    const text = line.text;
-    if (/^\s*<details\b/i.test(text)) inDetails = true;
-    if (/^\s*<\/details\s*>/i.test(text)) { inDetails = false; continue; }
-    const headingMatch = /^(#{1,6})[ \t]+(.*)$/.exec(text);
-    if (headingMatch) {
-      const level = headingMatch[1].length;
-      if (closedHeadingLevel && level <= closedHeadingLevel) closedHeadingLevel = 0;
-      if (!closedHeadingLevel && level <= 3 && isClosedMilestoneHeading(headingMatch[2])) {
-        closedHeadingLevel = level;
-      }
-    }
     const owned = classifyBracketOwnedLine(line.text);
     if (!owned.id || (owned.kind !== 'heading' && owned.kind !== 'checklist')) continue;
     if (!sameBracketPhaseId(owned.id, targetId)) continue;
@@ -2968,7 +2992,7 @@ function bracketOwnedLineOutsideActiveWindow(
         || (ranges.details !== null
           && line.start >= ranges.details.start && line.start < ranges.details.end)),
     );
-    if (!insideActive && (inDetails || closedHeadingLevel > 0)) continue;
+    if (!insideActive && historicalLineStarts.has(line.start)) continue;
     if (owned.kind === 'heading') {
       if (insideActive) headingInside = true;
       else if (!firstOutsideHeading) firstOutsideHeading = { lineNumber: line.lineNumber, text: line.text.trim() };
@@ -3659,6 +3683,13 @@ function lineContainsTrackedBracketIdentity(
   return false;
 }
 
+/**
+ * Remove the active bracket phase and renumber its later identities. Qualified
+ * references are rewritten roadmap-wide, including global sections and other
+ * project-code milestone sections, except for lines inside archived details or
+ * closed milestone sections. Those historical lines are never rewritten or
+ * deleted. Bare artifact references remain limited to the active milestone.
+ */
 function updateRoadmapAfterBracketPhaseRemoval(
   roadmapPath: string,
   removedInt: number,
@@ -3728,6 +3759,7 @@ function updateRoadmapAfterBracketPhaseRemoval(
     const progressSectionOwnedElsewhere = progressSectionRange
       ? bracketProgressSectionOwnedByOtherMilestone(content, progressSectionRange.start, ranges, ownProgressSectionRanges)
       : false;
+    const historicalLineStarts = archivedOrClosedMilestoneLineStarts(content);
 
     // #4304 (B5): the referencesLeftUntouched report is computed
     // from each KEPT line's ORIGINAL (pre-rewrite) text, never the
@@ -3743,6 +3775,7 @@ function updateRoadmapAfterBracketPhaseRemoval(
     const rewritten: string[] = [];
     for (const line of splitRoadmapLineRecords(content)) {
       const active = lineStartsInActiveMilestone(line.start, ranges);
+      const historical = historicalLineStarts.has(line.start);
       const owned = classifyBracketOwnedLine(line.text);
       const inMilestoneOwnTable = owned.kind === 'progress'
         && (lineStartsInMilestoneOwnTable(content, line.start, ranges, headingsForOwnTable)
@@ -3753,7 +3786,8 @@ function updateRoadmapAfterBracketPhaseRemoval(
         && line.start >= progressSectionRange.start
         && line.start < progressSectionRange.end,
       );
-      if (owned.id
+      if (!historical
+        && owned.id
         && sameBracketPhaseId(owned.id, targetId)
         && ((active && owned.kind === 'checklist') || inMilestoneOwnTable || inProgressSection)) {
         roadmapLinesRewritten += 1;
@@ -3761,9 +3795,11 @@ function updateRoadmapAfterBracketPhaseRemoval(
       }
 
       let next = line.text;
-      for (const { oldId, newId } of mapping) {
-        next = replaceQualifiedBracketReference(next, oldId, newId);
-        if (active) next = replaceBareBracketArtifactReference(next, oldId, newId);
+      if (!historical) {
+        for (const { oldId, newId } of mapping) {
+          next = replaceQualifiedBracketReference(next, oldId, newId);
+          if (active) next = replaceBareBracketArtifactReference(next, oldId, newId);
+        }
       }
       if (next !== line.text) roadmapLinesRewritten += 1;
       rewritten.push(next + line.eol);

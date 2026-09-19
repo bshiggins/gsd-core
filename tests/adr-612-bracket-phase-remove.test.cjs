@@ -2606,6 +2606,16 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
         '',
         '- [x] [CK.02] 01: Old One',
         '- [x] [CK.02] 02: Old Two',
+        '- [x] [CK.02] 03: Old Three',
+        '',
+        '### [CK.02] 03: Old Three',
+        '**Goal:** preserve shipped history',
+        '',
+        '### Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] 03 | 1/1 | Complete |',
         '',
         '</details>',
         '',
@@ -2636,17 +2646,93 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
       ],
     );
     const before = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
-    const archiveBefore = before.slice(0, before.indexOf('</details>') + '</details>'.length);
+    const shippedIdentityLinesBefore = before.split('\n').filter((line) =>
+      line.includes('[CK.02] 03') && (line.includes('Old Three') || line.includes('Complete')));
 
     const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
     assert.equal(result.success, true, result.error || result.output);
     const out = JSON.parse(result.output);
     const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
 
-    // The archived <details> block is byte-identical: the shipped
-    // milestone's own checklist lines are never touched.
-    assert.equal(roadmap.slice(0, roadmap.indexOf('</details>') + '</details>'.length), archiveBefore);
+    // The archived <details> block's shipped heading, checklist, and progress
+    // lines are byte-identical. Phase 03 is the discriminator: active 03 must
+    // renumber, while shipped 03 must not.
+    const shippedIdentityLinesAfter = roadmap.split('\n').filter((line) =>
+      line.includes('[CK.02] 03') && (line.includes('Old Three') || line.includes('Complete')));
+    assert.deepEqual(shippedIdentityLinesAfter, shippedIdentityLinesBefore);
     // Active section: 02 removed, 03 renumbered onto 02.
+    assert.equal(roadmap.includes('### [CK.02] 02: Two'), false);
+    assert.equal(roadmap.includes('### [CK.02] 02: Three'), true);
+    assert.deepEqual(out.references_left_untouched, []);
+  });
+
+  // #4304 round 11 (B1): shipped history can remain open rather than wrapped
+  // in <details>. A closed milestone heading owns history until the next
+  // heading at the same or shallower level; qualified references inside that
+  // section must remain byte-identical while the active point release with
+  // the same folded bracket code is renumbered.
+  test('preserves qualified phase identities under an open shipped milestone section', () => {
+    fs.writeFileSync(
+      planning('STATE.md'),
+      '---\nmilestone: v2.1\n---\n\n# State\n\n**Status:** Planning\n**Last Activity:** 2026-09-01\n',
+    );
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Shipped ✅',
+        '',
+        '- [x] [CK.02] 01: Old One',
+        '- [x] [CK.02] 02: Old Two',
+        '- [x] [CK.02] 03: Old Three',
+        '',
+        '### [CK.02] 03: Old Three',
+        '**Goal:** preserve shipped history',
+        '',
+        '### Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] 03 | 1/1 | Complete |',
+        '',
+        '## [CK.02] v2.1 — Current 🚧',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] 01 | 0/1 | Planned |',
+        '| [CK.02] 02 | 0/1 | Planned |',
+        '| [CK.02] 03 | 0/1 | Planned |',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', []],
+      ],
+    );
+    const before = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    const shippedIdentityLinesBefore = before.split('\n').filter((line) =>
+      line.includes('[CK.02] 03') && (line.includes('Old Three') || line.includes('Complete')));
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+
+    const shippedIdentityLinesAfter = roadmap.split('\n').filter((line) =>
+      line.includes('[CK.02] 03') && (line.includes('Old Three') || line.includes('Complete')));
+    assert.deepEqual(shippedIdentityLinesAfter, shippedIdentityLinesBefore);
     assert.equal(roadmap.includes('### [CK.02] 02: Two'), false);
     assert.equal(roadmap.includes('### [CK.02] 02: Three'), true);
     assert.deepEqual(out.references_left_untouched, []);
