@@ -1453,6 +1453,120 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(fs.readdirSync(planning('phases')).sort(), ['CK.02-01-one', 'CK.02-02-three']);
   });
 
+  // #4304 round 18 (B1): selecting the live heading is not enough. The
+  // section deletion itself must stop at the active container boundary when
+  // the target is the final heading inside an open details block.
+  test('keeps an active details close and following milestone notes byte-identical when removing its last phase', () => {
+    const protectedSuffix = [
+      '</details>',
+      '',
+      'Milestone notes remain here.',
+      '',
+      'This prose belongs to the milestone, not the phase.',
+      '',
+    ].join('\n');
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '<details>',
+        '<summary>Active phase details</summary>',
+        '',
+        '- [ ] [CK.02] 02: Two',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        protectedSuffix,
+      ],
+      [['CK.02-02-two', []]],
+    );
+    const before = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    const beforeSuffix = before.slice(before.indexOf('</details>'));
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+
+    assert.equal(result.success, true, result.error || result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    assert.equal(roadmap.includes('### [CK.02] 02: Two'), false);
+    assert.equal(roadmap.slice(roadmap.indexOf('</details>')), beforeSuffix);
+    assert.deepEqual(JSON.parse(result.output).references_left_untouched, []);
+  });
+
+  // #4304 round 18 (B1): a historical details archive can begin immediately
+  // after the target and contain only deeper headings. Heading depth alone
+  // must not let the target deletion consume the archive through EOF.
+  test('keeps an immediately following shipped details archive with deeper headings byte-identical', () => {
+    const archive = [
+      '<details>',
+      '<summary>✅ [CK.02] v2.0 — SHIPPED 2026-01-01</summary>',
+      '',
+      '#### [CK.02] 09: Archived Deep Heading',
+      '',
+      '**Goal:** preserve history',
+      '',
+      '</details>',
+      '',
+    ].join('\n');
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '- [ ] [CK.02] 02: Two',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        archive,
+      ],
+      [['CK.02-02-two', []]],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+
+    assert.equal(result.success, true, result.error || result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    assert.equal(roadmap.includes('### [CK.02] 02: Two'), false);
+    assert.equal(roadmap.includes(archive), true, 'shipped archive must remain byte-identical');
+    assert.deepEqual(JSON.parse(result.output).references_left_untouched, []);
+  });
+
+  test('still stops bracket deletion at the next same-level live heading', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** keep the sibling body',
+        '',
+      ],
+      [
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', []],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+
+    assert.equal(result.success, true, result.error || result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    assert.equal(roadmap.includes('### [CK.02] 02: Two'), false);
+    assert.equal(roadmap.includes('### [CK.02] 02: Three'), true);
+    assert.equal(roadmap.includes('**Goal:** keep the sibling body'), true);
+  });
+
   // #4304 round 11 (W1): the sub-phase safety guard must share the read
   // side's CommonMark fence handling. A heading-shaped example inside a
   // fence is documentation, not a child phase, and cannot block removal.

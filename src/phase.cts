@@ -3939,6 +3939,48 @@ function lineContainsTrackedBracketIdentity(
 }
 
 /**
+ * #4304: maximum deletion boundary for a selected bracket phase heading.
+ * The active milestone range is the outer bound. Inside it, an HTML details
+ * boundary wins sooner: preserve the closing tag of a container that already
+ * encloses the target, or the opening tag of a container that starts after an
+ * outside target. Nested details opened after an enclosed target do not count
+ * until their own close has restored the target's original depth.
+ */
+function bracketPhaseDeletionContainerBoundary(content: string, targetOffset: number): number | null {
+  const detailsTagRe = /<\/?details\b[^>]*>/gi;
+  let targetDepth = 0;
+  let match: RegExpExecArray | null;
+  while ((match = detailsTagRe.exec(content)) !== null && match.index < targetOffset) {
+    if (/^<\/details\b/i.test(match[0])) targetDepth = Math.max(0, targetDepth - 1);
+    else targetDepth += 1;
+  }
+
+  detailsTagRe.lastIndex = targetOffset;
+  let depth = targetDepth;
+  const lines = splitRoadmapLineRecords(content);
+  const lineStartFor = (offset: number): number => {
+    let start = 0;
+    for (const line of lines) {
+      if (line.start > offset) break;
+      start = line.start;
+    }
+    return start;
+  };
+
+  while ((match = detailsTagRe.exec(content)) !== null) {
+    const closing = /^<\/details\b/i.test(match[0]);
+    if (targetDepth === 0 && !closing) return lineStartFor(match.index);
+    if (closing) {
+      if (targetDepth > 0 && depth === targetDepth) return lineStartFor(match.index);
+      depth = Math.max(0, depth - 1);
+    } else {
+      depth += 1;
+    }
+  }
+  return null;
+}
+
+/**
  * Remove the active bracket phase and renumber its later identities. Qualified
  * references are rewritten roadmap-wide, including global sections and other
  * project-code milestone sections, except for lines inside archived details or
@@ -3971,36 +4013,54 @@ function updateRoadmapAfterBracketPhaseRemoval(
     // bracket id as the live phase; choosing that heading first deletes
     // history and leaves the live target behind.
     const preDeleteHistoricalLineStarts = archivedOrClosedMilestoneLineStarts(originalContent);
-    let content = deleteSection(
-      originalContent,
-      (heading) => {
-        // #4304 (W3): classify the heading through the SAME shared
-        // owned-line grammar (classifyBracketOwnedLine / BRACKET_HEADING_LINE_RE)
-        // the checklist/progress-row deletion below already uses, instead of
-        // a literal `startsWith(targetDisplay)` — that comparison only ever
-        // recognized the display spelling ("[CK.02] 02"), so the read-grammar-
-        // admitted labeled spelling ("[CK.02] Phase 02:", pinned at
-        // tests/adr-612-bracket-grammar.test.cjs:644) was never matched here
-        // and its detail section survived a "removal" that deleted every
-        // other owned line for the same identity.
-        if (heading.level < 2 || heading.level > 4) return false;
-        const headingLine = '#'.repeat(heading.level) + ' ' + heading.text;
-        const owned = classifyBracketOwnedLine(headingLine);
-        if (owned.kind !== 'heading' || !owned.id || !sameBracketPhaseId(owned.id, targetId)) {
-          return false;
-        }
-        if (preDeleteHistoricalLineStarts.has(heading.offset)) return false;
-        if (!preDeleteRanges) return true;
-        return (
-          (heading.offset >= preDeleteRanges.primary.start && heading.offset < preDeleteRanges.primary.end)
-          || Boolean(
-            preDeleteRanges.details
-            && heading.offset >= preDeleteRanges.details.start
-            && heading.offset < preDeleteRanges.details.end,
-          )
-        );
-      },
-    );
+    const isTargetHeading = (heading: ReturnType<typeof tokenizeHeadings>[number]): boolean => {
+      // #4304 (W3): classify the heading through the SAME shared
+      // owned-line grammar (classifyBracketOwnedLine / BRACKET_HEADING_LINE_RE)
+      // the checklist/progress-row deletion below already uses, instead of
+      // a literal `startsWith(targetDisplay)` — that comparison only ever
+      // recognized the display spelling ("[CK.02] 02"), so the read-grammar-
+      // admitted labeled spelling ("[CK.02] Phase 02:", pinned at
+      // tests/adr-612-bracket-grammar.test.cjs:644) was never matched here
+      // and its detail section survived a "removal" that deleted every
+      // other owned line for the same identity.
+      if (heading.level < 2 || heading.level > 4) return false;
+      const headingLine = '#'.repeat(heading.level) + ' ' + heading.text;
+      const owned = classifyBracketOwnedLine(headingLine);
+      if (owned.kind !== 'heading' || !owned.id || !sameBracketPhaseId(owned.id, targetId)) {
+        return false;
+      }
+      if (preDeleteHistoricalLineStarts.has(heading.offset)) return false;
+      if (!preDeleteRanges) return true;
+      return (
+        (heading.offset >= preDeleteRanges.primary.start && heading.offset < preDeleteRanges.primary.end)
+        || Boolean(
+          preDeleteRanges.details
+          && heading.offset >= preDeleteRanges.details.start
+          && heading.offset < preDeleteRanges.details.end,
+        )
+      );
+    };
+    const selectedTargetHeading = tokenizeHeadings(originalContent).find(isTargetHeading);
+    let deletionEndOffset: number | undefined;
+    if (selectedTargetHeading) {
+      const containingRange = preDeleteRanges
+        ? [preDeleteRanges.primary, ...(preDeleteRanges.details ? [preDeleteRanges.details] : [])]
+          .find((range) => selectedTargetHeading.offset >= range.start && selectedTargetHeading.offset < range.end)
+        : null;
+      const containerBoundary = bracketPhaseDeletionContainerBoundary(
+        originalContent,
+        selectedTargetHeading.offset,
+      );
+      const historicalBoundary = [...preDeleteHistoricalLineStarts]
+        .filter((offset) => offset > selectedTargetHeading.offset)
+        .sort((a, b) => a - b)[0];
+      deletionEndOffset = Math.min(
+        containingRange?.end ?? originalContent.length,
+        containerBoundary ?? originalContent.length,
+        historicalBoundary ?? originalContent.length,
+      );
+    }
+    let content = deleteSection(originalContent, isTargetHeading, { endOffset: deletionEndOffset });
     let roadmapLinesRewritten = content === originalContent ? 0 : 1;
     const ranges = currentMilestoneRawRanges(content, cwd, 'bracket');
     // #4304 (W1): progress/table-row deletion is
