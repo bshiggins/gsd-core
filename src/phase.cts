@@ -3526,6 +3526,66 @@ function sameBracketPhaseId(a: BracketRoadmapPhaseId, b: BracketRoadmapPhaseId):
     && a.subphase === b.subphase;
 }
 
+type LegacyRemovalTargetEvidence = {
+  directories: string[];
+  headings: string[];
+};
+
+/**
+ * A bracket removal may share the live tree with migration-window legacy
+ * spellings, but it must never mutate that legacy identity indirectly by
+ * renumbering later bracket phases onto it. Resolve both directory and heading
+ * evidence before any write. `matchPhaseDirs` owns legacy directory selection;
+ * `BRACKET_HEADING_LINE_RE` owns the reader-tolerant heading grammar and its
+ * legacy `Phase N:` alternative. A real, non-historical bracket heading for the
+ * target makes this an ordinary bracket removal even when legacy siblings are
+ * also present.
+ */
+function legacyOnlyBracketRemovalTarget(
+  subdirs: string[],
+  roadmapContent: string,
+  targetPhase: string,
+  targetId: BracketRoadmapPhaseId,
+  hasBracketDirectory: boolean,
+): LegacyRemovalTargetEvidence | null {
+  const legacyNormalized = normalizePhaseName(targetPhase);
+  const legacyDirectories = matchPhaseDirs(subdirs, legacyNormalized).matches.filter((dir) => {
+    try {
+      parsePhaseId(dir);
+      return false;
+    } catch {
+      return true;
+    }
+  });
+
+  const historicalLineStarts = archivedOrClosedMilestoneLineStarts(roadmapContent);
+  const legacyHeadings: string[] = [];
+  let hasBracketHeading = false;
+  for (const heading of tokenizeHeadings(roadmapContent)) {
+    if (heading.level < 2 || heading.level > 4) continue;
+    const headingLine = '#'.repeat(heading.level) + ' ' + heading.text;
+    const owned = classifyBracketOwnedLine(headingLine);
+    if (owned.kind === 'heading' && owned.id) {
+      if (!historicalLineStarts.has(heading.offset) && sameBracketPhaseId(owned.id, targetId)) {
+        hasBracketHeading = true;
+      }
+      continue;
+    }
+
+    // The shared bracket selector includes the legacy `Phase N:` alternative.
+    // If classification did not yield a bracket id, capture that alternative's
+    // numeric token and compare it through the same writer canonicalizer.
+    const legacyMatch = BRACKET_HEADING_LINE_RE.exec(headingLine);
+    const canonicalNumber = legacyMatch?.[2] ? phaseToken(legacyMatch[2]) : null;
+    const targetNumber = targetId.subphase ? `${targetId.phase}.${targetId.subphase}` : targetId.phase;
+    if (canonicalNumber === targetNumber) legacyHeadings.push(headingLine);
+  }
+
+  if (hasBracketDirectory || hasBracketHeading) return null;
+  if (legacyDirectories.length === 0 && legacyHeadings.length === 0) return null;
+  return { directories: legacyDirectories, headings: legacyHeadings };
+}
+
 /**
  * Classify a fence-excluded heading token through the roadmap reader's shared
  * bracket-plus-legacy phase-entry predicate, then decide whether it names a
@@ -4365,6 +4425,29 @@ function cmdPhaseRemove(
   }
   const targetDir = phaseDirMatches[0] || null;
 
+  const roadmapContentBeforeRemoval = removeContext ? fs.readFileSync(roadmapPath, 'utf-8') : null;
+  if (removeContext) {
+    const targetId = bracketPhaseId(removeContext, removedInt, removedSubphase);
+    const legacyOnly = legacyOnlyBracketRemovalTarget(
+      subdirs,
+      roadmapContentBeforeRemoval!,
+      targetPhase,
+      targetId,
+      targetDir !== null,
+    );
+    if (legacyOnly) {
+      const evidence = [
+        ...legacyOnly.directories.map((dir) => `directory ${JSON.stringify(dir)}`),
+        ...legacyOnly.headings.map((heading) => `heading ${JSON.stringify(heading)}`),
+      ].join('; ');
+      error(
+        `Cannot remove phase ${normalized} under the bracket convention: it resolves only to `
+        + `legacy-spelled artifacts (${evidence}). Run roadmap upgrade --convention bracket `
+        + 'before removing this phase.',
+      );
+    }
+  }
+
   if (targetDir && !force) {
     // #3183: canonical summary set (root+nested) from the single owner —
     // a root-only readdirSync filter left nested (#3139 layout) summaries
@@ -4384,7 +4467,6 @@ function cmdPhaseRemove(
   // be deleted below; deletion does not change which OTHER identities the
   // scan finds). Both consumers below apply this exact mapping so they
   // cannot independently diverge on a decimal sub-phase identity.
-  const roadmapContentBeforeRemoval = removeContext ? fs.readFileSync(roadmapPath, 'utf-8') : null;
   const preRemovalRanges = roadmapContentBeforeRemoval
     ? currentMilestoneRawRanges(roadmapContentBeforeRemoval, cwd, 'bracket')
     : null;

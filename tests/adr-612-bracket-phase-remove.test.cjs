@@ -122,6 +122,25 @@ function seed() {
   makePhaseDir('CK.02-04-four', ['04-01-PLAN.md']);
 }
 
+function seedLegacyOnlyRemovalTarget({ legacyDirectory, legacyHeading }) {
+  replaceSeed(
+    [
+      '# Roadmap',
+      '',
+      '## [CK.02] v2.0 — Current',
+      '',
+      ...(legacyHeading ? ['### Phase 2: Old work', '**Goal:** migrate before removing', ''] : []),
+      '### [CK.02] 03: New work',
+      '**Goal:** must not renumber on refusal',
+      '',
+    ],
+    [
+      ...(legacyDirectory ? [['CK-02-old-work', ['02-01-PLAN.md']]] : []),
+      ['CK.02-03-new-work', ['03-01-PLAN.md']],
+    ],
+  );
+}
+
 describe('#4304 / ADR-612 bracket phase remove', () => {
   beforeEach(() => {
     tmpDir = createTempProject('adr-612-remove-');
@@ -621,6 +640,117 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(roadmap.includes('## [CK.03] v3.0 — Future'), true);
     assert.equal(out.roadmap_lines_rewritten > 0, true);
     assert.deepEqual(out.references_left_untouched, []);
+  });
+
+  for (const { name, legacyDirectory, legacyHeading } of [
+    { name: 'directory and heading', legacyDirectory: true, legacyHeading: true },
+    { name: 'directory only', legacyDirectory: true, legacyHeading: false },
+    { name: 'heading only', legacyDirectory: false, legacyHeading: true },
+  ]) {
+    test(`refuses a bracket-path removal that resolves only to a legacy ${name}`, () => {
+      seedLegacyOnlyRemovalTarget({ legacyDirectory, legacyHeading });
+      const before = snapshotTree(planning());
+
+      const result = runGsdTools(['phase', 'remove', '2', '--force'], tmpDir);
+
+      assert.equal(result.success, false, result.output);
+      if (legacyDirectory) assert.match(result.error, /CK-02-old-work/);
+      if (legacyHeading) assert.match(result.error, /### Phase 2: Old work/);
+      assert.match(result.error, /roadmap upgrade --convention bracket/);
+      assert.deepEqual(snapshotTree(planning()), before);
+    });
+  }
+
+  test('removes a bracket target beside legacy siblings and renumbers only bracket identities', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '### [CK.02] 02: Bracket target',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Bracket successor',
+        '**Goal:** renumber',
+        '',
+        '### Phase 9: Legacy sibling',
+        '**Goal:** preserve byte-for-byte',
+        '',
+      ],
+      [
+        ['CK.02-02-bracket-target', ['02-01-PLAN.md']],
+        ['CK.02-03-bracket-successor', ['03-01-PLAN.md']],
+        ['CK-09-legacy-sibling', ['09-01-PLAN.md']],
+      ],
+    );
+    const result = runGsdTools(['phase', 'remove', '2', '--force'], tmpDir);
+
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+    assert.equal(out.directory_deleted, 'CK.02-02-bracket-target');
+    assert.deepEqual(out.renamed_directories, [
+      { from: 'CK.02-03-bracket-successor', to: 'CK.02-02-bracket-successor' },
+    ]);
+    assert.equal(fs.existsSync(planning('phases', 'CK.02-02-bracket-successor', '02-01-PLAN.md')), true);
+    assert.equal(fs.existsSync(planning('phases', 'CK-09-legacy-sibling', '09-01-PLAN.md')), true);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    assert.equal(roadmap.includes('### [CK.02] 02: Bracket successor'), true);
+    assert.equal(roadmap.includes('### Phase 9: Legacy sibling'), true);
+    assert.equal(roadmap.includes('**Goal:** preserve byte-for-byte'), true);
+  });
+
+  test('legacy-convention removal retains its exact heading and directory behavior', () => {
+    fs.writeFileSync(
+      planning('config.json'),
+      JSON.stringify({ project_code: 'CK', phase_id_convention: null }, null, 2) + '\n',
+    );
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## v2.0 — Current',
+        '',
+        '### Phase 1: One',
+        '**Goal:** keep',
+        '',
+        '### Phase 2: Two',
+        '**Goal:** remove',
+        '',
+        '### Phase 3: Three',
+        '**Goal:** renumber',
+        '',
+      ],
+      [
+        ['01-one', ['01-01-PLAN.md']],
+        ['02-two', ['02-01-PLAN.md']],
+        ['03-three', ['03-01-PLAN.md']],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '2', '--force'], tmpDir);
+
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+    assert.equal(out.directory_deleted, '02-two');
+    assert.deepEqual(out.renamed_directories, [{ from: '03-three', to: '02-three' }]);
+    assert.deepEqual(fs.readdirSync(planning('phases')).sort(), ['01-one', '02-three']);
+    assert.equal(fs.readFileSync(planning('ROADMAP.md'), 'utf8'), [
+      '# Roadmap',
+      '',
+      '## v2.0 — Current',
+      '',
+      '### Phase 1: One',
+      '',
+      '**Goal:** keep',
+      '',
+      '### Phase 2: Three',
+      '',
+      '**Goal:** renumber',
+      '',
+    ].join('\n'));
+    assert.equal(fs.readFileSync(planning('phases', '01-one', '01-01-PLAN.md'), 'utf8'), '# artifact\n');
+    assert.equal(fs.readFileSync(planning('phases', '02-three', '02-01-PLAN.md'), 'utf8'), '# artifact\n');
   });
 
   test('renumbers only complete qualified identities, preserving prefixed and subphase identities byte-for-byte', () => {
