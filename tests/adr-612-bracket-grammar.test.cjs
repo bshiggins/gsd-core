@@ -30,13 +30,13 @@ const core = require('../gsd-core/bin/lib/phase-id.cjs');
 
 const p2 = (n) => String(n).padStart(2, '0');
 
-describe('bracket grammar: dependency references expose only the phase token', () => {
-  test('extracts display, dash, labeled-display, and bare dependency spellings', () => {
+describe('bracket grammar: dependency references preserve qualified identity', () => {
+  test('keeps qualified display, dash, and labeled-display identities while bare stays bare', () => {
     assert.equal(typeof core.extractPhaseDependencyTokens, 'function');
     for (const [input, expected] of [
-      ['[CK.02] 01', ['01']],
-      ['CK.02-01', ['01']],
-      ['[CK.02] Phase 01', ['01']],
+      ['[CK.02] 01', ['[CK.02] 01']],
+      ['CK.02-01', ['[CK.02] 01']],
+      ['[CK.02] Phase 01', ['[CK.02] 01']],
       ['01', ['01']],
     ]) {
       assert.deepStrictEqual(core.extractPhaseDependencyTokens(input, 'bracket'), expected, input);

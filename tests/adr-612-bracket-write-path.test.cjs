@@ -119,7 +119,7 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     markBracketPhaseComplete(addDir, '01', 'foundation');
     run(['phase', 'add', 'Second'], addDir);
     const added = managerPhase(addDir, '02');
-    assert.deepEqual(added.dep_phases, ['01']);
+    assert.deepEqual(added.dep_phases, ['[CK.02] 01']);
     assert.equal(added.deps_satisfied, true);
     assert.equal(added.is_next_to_discuss, true);
 
@@ -130,8 +130,8 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     markBracketPhaseComplete(batchDir, '02', 'second');
     const batchSecond = managerPhase(batchDir, '02');
     const batchThird = managerPhase(batchDir, '03');
-    assert.deepEqual(batchSecond.dep_phases, ['01']);
-    assert.deepEqual(batchThird.dep_phases, ['02']);
+    assert.deepEqual(batchSecond.dep_phases, ['[CK.02] 01']);
+    assert.deepEqual(batchThird.dep_phases, ['[CK.02] 02']);
     assert.equal(batchThird.deps_satisfied, true);
     assert.equal(batchThird.is_next_to_discuss, true);
 
@@ -140,17 +140,17 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     markBracketPhaseComplete(insertDir, '01', 'foundation');
     run(['phase', 'insert', '01', 'Hotfix'], insertDir);
     const inserted = managerPhase(insertDir, '01.01');
-    assert.deepEqual(inserted.dep_phases, ['01']);
+    assert.deepEqual(inserted.dep_phases, ['[CK.02] 01']);
     assert.equal(inserted.deps_satisfied, true);
     assert.equal(inserted.is_next_to_discuss, true);
   });
 
-  test('init manager takes only the phase token from every bracket dependency spelling', () => {
-    for (const [label, dependency] of [
-      ['display', '[CK.02] 01'],
-      ['dash', 'CK.02-01'],
-      ['labeled display', '[CK.02] Phase 01'],
-      ['bare', '01'],
+  test('init manager keeps qualified dependency identity and leaves bare dependencies unchanged', () => {
+    for (const [label, dependency, expected] of [
+      ['display', '[CK.02] 01', '[CK.02] 01'],
+      ['dash', 'CK.02-01', '[CK.02] 01'],
+      ['labeled display', '[CK.02] Phase 01', '[CK.02] 01'],
+      ['bare', '01', '01'],
     ]) {
       const dir = project(`adr-612-bracket-manager-${label.replaceAll(' ', '-')}-`);
       writeBracketFixture(dir);
@@ -169,9 +169,103 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
       fs.mkdirSync(planning(dir, 'phases', 'CK.02-02-second'), { recursive: true });
 
       const phase = managerPhase(dir, '02');
-      assert.deepEqual(phase.dep_phases, ['01'], label);
+      assert.deepEqual(phase.dep_phases, [expected], label);
       assert.equal(phase.deps_satisfied, true, label);
       assert.equal(phase.is_next_to_discuss, true, label);
+    }
+  });
+
+  test('init manager resolves a qualified historical dependency against that milestone checklist', () => {
+    const dir = project('adr-612-bracket-manager-historical-dependency-');
+    writeBracketFixture(dir);
+    fs.writeFileSync(
+      planning(dir, 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '<details>',
+        '<summary>v1.0 - Historical (Shipped)</summary>',
+        '',
+        '## [CK.01] v1.0 - Historical',
+        '',
+        '- [x] **[CK.01] 01: Historical foundation**',
+        '',
+        '### [CK.01] 01: Historical foundation',
+        '',
+        '**Goal:** Shipped work',
+        '',
+        '</details>',
+        '',
+        '## [CK.02] v2.0 - Current',
+        '',
+        '- [ ] **[CK.02] 01: Current foundation**',
+        '- [ ] **[CK.02] 02: Follow-up**',
+        '',
+        '### [CK.02] 01: Current foundation',
+        '',
+        '**Goal:** Current work',
+        '',
+        '### [CK.02] 02: Follow-up',
+        '',
+        '**Goal:** Next work',
+        '**Depends on:** [CK.01] 01',
+        '',
+      ].join('\n'),
+    );
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-01-current-foundation'), { recursive: true });
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-02-follow-up'), { recursive: true });
+
+    const phase = managerPhase(dir, '02');
+    assert.deepEqual(phase.dep_phases, ['[CK.01] 01']);
+    assert.equal(phase.deps_satisfied, true);
+    assert.equal(phase.is_next_to_discuss, true);
+  });
+
+  test('init manager does not satisfy a current dependency from a historical same-number checkbox', () => {
+    for (const dependency of ['[CK.02] 01', '01']) {
+      const dir = project('adr-612-bracket-manager-current-dependency-');
+      writeBracketFixture(dir);
+      fs.writeFileSync(
+        planning(dir, 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '<details>',
+          '<summary>v1.0 - Historical (Shipped)</summary>',
+          '',
+          '## [CK.01] v1.0 - Historical',
+          '',
+          '- [x] **[CK.01] 01: Historical foundation**',
+          '',
+          '### [CK.01] 01: Historical foundation',
+          '',
+          '**Goal:** Shipped work',
+          '',
+          '</details>',
+          '',
+          '## [CK.02] v2.0 - Current',
+          '',
+          '- [ ] **[CK.02] 01: Current foundation**',
+          '- [ ] **[CK.02] 02: Follow-up**',
+          '',
+          '### [CK.02] 01: Current foundation',
+          '',
+          '**Goal:** Current work',
+          '',
+          '### [CK.02] 02: Follow-up',
+          '',
+          '**Goal:** Next work',
+          `**Depends on:** ${dependency}`,
+          '',
+        ].join('\n'),
+      );
+      fs.mkdirSync(planning(dir, 'phases', 'CK.02-01-current-foundation'), { recursive: true });
+      fs.mkdirSync(planning(dir, 'phases', 'CK.02-02-follow-up'), { recursive: true });
+
+      const phase = managerPhase(dir, '02');
+      assert.deepEqual(phase.dep_phases, [dependency]);
+      assert.equal(phase.deps_satisfied, false, dependency);
+      assert.equal(phase.is_next_to_discuss, false, dependency);
     }
   });
 

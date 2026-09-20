@@ -115,6 +115,7 @@ const {
   renderPhaseBranchName,
   parsePhaseId,
   renderPhaseId,
+  bracketQualifiedKey,
   phaseHeadingPrefixSrcFor,
   parsePhaseChecklistLine,
   PHASE_HEADING_BASELINE,
@@ -3079,18 +3080,69 @@ function cmdInitManager(cwd: string, raw: boolean): void {
   );
   const phaseMap = new Map(phases.map((p) => [normalizePhaseNumber(p['number'] as string), p]));
 
-  const _allCompletedPattern = new RegExp(
-    `-\\s*\\[x\\]\\s*.*${phaseHeadingPrefixNoCapture}(${PHASE_NUMBER_TOKEN_SOURCE})[:\\s]`,
-    'gi',
-  );
-  let _allMatch: RegExpExecArray | null;
-  while ((_allMatch = _allCompletedPattern.exec(rawContent)) !== null) {
-    const phaseNum = normalizePhaseNumber(_allMatch[1]);
-    const phase = phaseMap.get(phaseNum);
-    if (!phase || phase['phase_complete'] === true) {
-      completedNums.add(phaseNum);
+  const bracketIdentityKey = (value: string): string | null => {
+    try {
+      const id = parsePhaseId(value);
+      const subphase = id.subphase ? `.${id.subphase as string}` : '';
+      return bracketQualifiedKey(
+        `${id.project as string}.${id.milestone as string}-${id.phase as string}${subphase}`,
+        'bracket',
+      );
+    } catch {
+      return null;
+    }
+  };
+  const phaseByBracketIdentity = new Map<string, Record<string, unknown>>();
+  const completedBracketIdentities = new Set<string>();
+  if (phaseIdConvention === 'bracket') {
+    for (const phase of phases) {
+      if (typeof phase['display_id'] !== 'string') continue;
+      const key = bracketIdentityKey(phase['display_id']);
+      if (!key) continue;
+      phaseByBracketIdentity.set(key, phase);
+      if (phase['phase_complete'] === true) completedBracketIdentities.add(key);
     }
   }
+
+  if (phaseIdConvention === 'bracket') {
+    // A checked historical row satisfies only its own qualified identity. In
+    // particular, `[CK.01] 01` must not complete bare/current `[CK.02] 01`.
+    for (const line of rawContent.split(/\r?\n/)) {
+      const checkbox = parsePhaseChecklistLine(line, phaseIdConvention);
+      if (!checkbox?.checked || !checkbox.bracketId) continue;
+      const identity = `[${checkbox.bracketId}] ${checkbox.phaseToken}`;
+      const key = bracketIdentityKey(identity);
+      if (!key) continue;
+      const current = phaseMap.get(normalizePhaseNumber(checkbox.phaseToken));
+      const currentKey = typeof current?.['display_id'] === 'string'
+        ? bracketIdentityKey(current['display_id'])
+        : null;
+      if (!current || currentKey !== key || current['phase_complete'] === true) {
+        completedBracketIdentities.add(key);
+      }
+    }
+  } else {
+    // Preserve the historical greedy non-bracket fallback byte-for-byte.
+    const _allCompletedPattern = new RegExp(
+      `-\\s*\\[x\\]\\s*.*${phaseHeadingPrefixNoCapture}(${PHASE_NUMBER_TOKEN_SOURCE})[:\\s]`,
+      'gi',
+    );
+    let _allMatch: RegExpExecArray | null;
+    while ((_allMatch = _allCompletedPattern.exec(rawContent)) !== null) {
+      const phaseNum = normalizePhaseNumber(_allMatch[1]);
+      const phase = phaseMap.get(phaseNum);
+      if (!phase || phase['phase_complete'] === true) {
+        completedNums.add(phaseNum);
+      }
+    }
+  }
+
+  const currentDependencyNumber = (dependency: string): string | null => {
+    const identity = bracketIdentityKey(dependency);
+    if (!identity) return normalizePhaseNumber(dependency);
+    const current = phaseByBracketIdentity.get(identity);
+    return current ? normalizePhaseNumber(current['number'] as string) : null;
+  };
 
   function reaches(from: string, to: string, visited = new Set<string>()): boolean {
     const normalizedFrom = normalizePhaseNumber(from);
@@ -3099,10 +3151,13 @@ function cmdInitManager(cwd: string, raw: boolean): void {
     visited.add(normalizedFrom);
     const p = phaseMap.get(normalizedFrom);
     if (!p || !p['dep_phases'] || (p['dep_phases'] as string[]).length === 0) return false;
-    if ((p['dep_phases'] as string[]).some((dep) => normalizePhaseNumber(dep) === normalizedTo)) {
+    if ((p['dep_phases'] as string[]).some((dep) => currentDependencyNumber(dep) === normalizedTo)) {
       return true;
     }
-    return (p['dep_phases'] as string[]).some((dep) => reaches(dep, to, visited));
+    return (p['dep_phases'] as string[]).some((dep) => {
+      const dependencyNumber = currentDependencyNumber(dep);
+      return dependencyNumber === null ? false : reaches(dependencyNumber, to, visited);
+    });
   }
 
   function hasDepRelationship(numA: string, numB: string): boolean {
@@ -3123,7 +3178,9 @@ function cmdInitManager(cwd: string, raw: boolean): void {
   // deps_satisfied prematurely, the dangerous direction. Negation prose
   // ("dropped the dependency on Phase 654") is NOT detected: the issue's own
   // minimum keeps such tokens. Bracket repositories route through the same
-  // phase-id owner so `[CK.02] 01` contributes phase 01, never milestone 02;
+  // phase-id owner so `[CK.02] 01` retains its complete qualified identity;
+  // bare `01` still resolves against the active milestone. This prevents a
+  // checked historical `[CK.01] 01` from satisfying incomplete `[CK.02] 01`.
   // Non-bracket extraction remains this manager surface's exact #4764 code
   // path below, including its case-insensitive token regex. Planning-inspect's
   // old token regex was case-sensitive, so forcing both through one widened
@@ -3151,19 +3208,35 @@ function cmdInitManager(cwd: string, raw: boolean): void {
     } else {
       const prose = phase['depends_on'] as string;
       const ownNumber = normalizePhaseNumber(phase['number'] as string);
+      const ownIdentity = typeof phase['display_id'] === 'string'
+        ? bracketIdentityKey(phase['display_id'])
+        : null;
       const depNums: string[] = [];
       const seen = new Set<string>();
       const dependencyTokens = phaseIdConvention === 'bracket'
         ? extractPhaseDependencyTokens(prose, phaseIdConvention)
         : legacyManagerDependencyTokens(prose);
       for (const token of dependencyTokens) {
+        const identity = bracketIdentityKey(token);
+        if (identity) {
+          if (identity === ownIdentity) continue;
+          if (seen.has(identity)) continue;
+          seen.add(identity);
+          depNums.push(token);
+          continue;
+        }
         const normalized = normalizePhaseNumber(token);
         if (normalized === ownNumber) continue; // #4764: never the row's own phase
         if (seen.has(normalized)) continue;
         seen.add(normalized);
         depNums.push(token);
       }
-      phase['deps_satisfied'] = depNums.every((n) => completedNums.has(normalizePhaseNumber(n)));
+      phase['deps_satisfied'] = depNums.every((dependency) => {
+        const identity = bracketIdentityKey(dependency);
+        return identity
+          ? completedBracketIdentities.has(identity)
+          : completedNums.has(normalizePhaseNumber(dependency));
+      });
       phase['dep_phases'] = depNums;
     }
   }

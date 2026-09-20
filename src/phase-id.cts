@@ -617,13 +617,16 @@ function parsePhaseId(input: string): PhaseId {
  * both regexes case-insensitive. Only bracket mode shares the widened grammar.
  * Bracket repositories additionally accept the four identity spellings their
  * readers and writers expose: `[CODE.MM] NN`, `CODE.MM-NN`,
- * `[CODE.MM] Phase NN`, and a value consisting only of bare `NN`. Bracket
- * identity recognition is composed from phaseHeadingPrefixSrcFor and
+ * `[CODE.MM] Phase NN`, and a value consisting only of bare `NN`. Qualified
+ * spellings retain project+milestone+phase identity in canonical display form;
+ * bare tokens remain bare for active-milestone resolution by the consumer.
+ * Bracket identity recognition is composed from phaseHeadingPrefixSrcFor and
  * parsePhaseId; this function owns no second bracket-id regex.
  */
 function extractPhaseDependencyTokens(prose: string, convention?: string | null): string[] {
   const input = prose;
   const found: { index: number; token: string }[] = [];
+  const qualifiedRanges: { start: number; end: number }[] = [];
   const legacyRefRe = new RegExp(`${PHASE_DEP_REF_SOURCE}`, 'gi');
   const tokenRe = new RegExp(PHASE_NUMBER_TOKEN_SOURCE, convention === 'bracket' ? 'gi' : 'g');
   let refMatch: RegExpExecArray | null;
@@ -650,8 +653,9 @@ function extractPhaseDependencyTokens(prose: string, convention?: string | null)
       const id = parsePhaseId(`[${foldBracketId(displayMatch[1])}] ${displayMatch[2]}`);
       found.push({
         index: displayMatch.index,
-        token: id.subphase ? `${id.phase}.${id.subphase}` : id.phase,
+        token: renderPhaseId(id),
       });
+      qualifiedRanges.push({ start: displayMatch.index, end: displayMatch.index + displayMatch[0].length });
     } catch {
       // Read-tolerant heading grammar may recognize a non-canonical spelling;
       // only parsePhaseId-approved identities become dependency authority.
@@ -670,7 +674,7 @@ function extractPhaseDependencyTokens(prose: string, convention?: string | null)
       if (id.plan || candidate !== canonicalDash) continue;
       found.push({
         index: chunk.index ?? 0,
-        token: id.subphase ? `${id.phase}.${id.subphase}` : id.phase,
+        token: renderPhaseId(id),
       });
     } catch {
       // Most prose chunks are not identities. parsePhaseId is the classifier.
@@ -682,9 +686,13 @@ function extractPhaseDependencyTokens(prose: string, convention?: string | null)
     found.push({ index: input.indexOf(trimmed), token: trimmed });
   }
 
-  found.sort((a, b) => a.index - b.index);
+  const identityAware = found.filter(({ index, token }) => {
+    if (token.startsWith('[')) return true;
+    return !qualifiedRanges.some(({ start, end }) => index >= start && index < end);
+  });
+  identityAware.sort((a, b) => a.index - b.index);
   const seen = new Set<string>();
-  return found.flatMap(({ token }) => {
+  return identityAware.flatMap(({ token }) => {
     const key = token.toUpperCase();
     if (seen.has(key)) return [];
     seen.add(key);
