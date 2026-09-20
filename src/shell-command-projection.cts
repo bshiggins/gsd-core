@@ -18,6 +18,7 @@ import fs from 'node:fs';
 // at load time and become un-mockable.
 import childProcess from 'node:child_process';
 import { escapeRegex } from './pattern.cjs';
+import { scanFencedBlocks } from './markdown-sectionizer.cjs';
 
 /**
  * Convert a filesystem path to POSIX form (forward slashes) by translating the
@@ -1138,6 +1139,7 @@ function _normalizeMd(content: string, preserveFencedStructure = false): string 
   const result: string[] = [];
   const fenceRegex = /^```/;
   const insideFence = new Array<boolean>(lines.length);
+  const insideSharedFence = new Array<boolean>(lines.length).fill(false);
   let fenceOpen = false;
   for (let i = 0; i < lines.length; i++) {
     if (fenceRegex.test(lines[i].trimEnd())) {
@@ -1152,6 +1154,12 @@ function _normalizeMd(content: string, preserveFencedStructure = false): string 
       insideFence[i] = fenceOpen;
     }
   }
+  if (preserveFencedStructure) {
+    for (const block of scanFencedBlocks(lines)) {
+      const end = block.closeLineIdx === -1 ? lines.length : block.closeLineIdx;
+      for (let i = block.openLineIdx + 1; i < end; i++) insideSharedFence[i] = true;
+    }
+  }
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const prev = i > 0 ? lines[i - 1] : '';
@@ -1161,7 +1169,7 @@ function _normalizeMd(content: string, preserveFencedStructure = false): string 
     // Bracket ROADMAP writers opt into preserving heading- or list-shaped
     // literal examples. The default deliberately retains upstream/next's
     // legacy normalization bytes for every non-bracket caller.
-    const normalizeStructuralLine = !preserveFencedStructure || !insideFence[i];
+    const normalizeStructuralLine = !preserveFencedStructure || !insideSharedFence[i];
     if (normalizeStructuralLine && /^#{1,6}\s/.test(trimmed) && i > 0 && prevTrimmed !== '' && prevTrimmed !== '---') result.push('');
     if (isFenceLine && i > 0 && prevTrimmed !== '' && !insideFence[i] && (i === 0 || !insideFence[i - 1] || isFenceLine)) {
       if (i === 0 || !insideFence[i - 1]) result.push('');

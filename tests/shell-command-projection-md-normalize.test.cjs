@@ -260,4 +260,19 @@ describe('#4304: fenced heading normalization compatibility', () => {
 
     assert.equal(normalizeContent(MD, input).content, upstreamBytes);
   });
+
+  test('bracket preservation uses the shared CommonMark scanner for tilde fences', () => {
+    const input = [
+      '~~~md',
+      '### [CK.02] 99: Example',
+      '- [ ] [CK.02] 99: Literal checklist',
+      '~~~',
+      '',
+    ].join('\n');
+
+    assert.equal(
+      normalizeContent(MD, input, { preserveFencedMarkdownStructure: true }).content,
+      input,
+    );
+  });
 });
