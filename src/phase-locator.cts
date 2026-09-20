@@ -49,7 +49,7 @@ import roadmapParserModule = require('./roadmap-parser.cjs');
 const { getMilestoneInfo, getMilestonePhaseFilter } = roadmapParserModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdDisplayModule = require('./phase-id-display.cjs');
-const { milestoneToken } = phaseIdDisplayModule;
+const { milestoneToken, phaseToken } = phaseIdDisplayModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoaderModule = require('./config-loader.cjs');
 const { loadConfig } = configLoaderModule;
@@ -160,10 +160,17 @@ interface PhaseDirectoryLookup {
  * to the ambiguity-safe unqualified matcher rather than inventing an identity.
  */
 function resolvePhaseDirectoryLookup(cwd: string, phase: unknown): PhaseDirectoryLookup {
-  const normalized = normalizePhaseName(phase);
+  const legacyNormalized = normalizePhaseName(phase);
   if (resolvePhaseIdConvention(cwd) !== 'bracket') {
-    return { normalized, convention: undefined, bracketContext: undefined };
+    return { normalized: legacyNormalized, convention: undefined, bracketContext: undefined };
   }
+
+  // The bracket writers canonicalize both numeric segments through phaseToken
+  // (`1.1` -> `01.01`). Finish the convention-only query normalization at
+  // this shared locator boundary; normalizePhaseName intentionally keeps the
+  // legacy decimal spelling (`01.1`) and remains untouched for every other
+  // convention and for already-qualified bracket forms.
+  const normalized = phaseToken(legacyNormalized) ?? legacyNormalized;
 
   let bracketContext: BracketPhaseLookupContext | undefined;
   try {

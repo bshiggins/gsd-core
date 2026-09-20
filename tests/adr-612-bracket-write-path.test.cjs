@@ -282,6 +282,37 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.equal(smartEntry.signals.verify_failed, true);
   });
 
+  test('unpadded bracket subphase queries resolve the canonical emitted directory through every shared locator consumer', () => {
+    const dir = project('adr-612-bracket-subphase-query-');
+    writeBracketFixture(dir);
+    const phaseDir = planning(dir, 'phases', 'CK.02-01.01-hotfix');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01.01-01-PLAN.md'), '---\nwave: 1\n---\n');
+
+    const found = run(['find-phase', '1.1'], dir);
+    assert.equal(found.directory, '.planning/phases/CK.02-01.01-hotfix');
+
+    const index = run(['phase-plan-index', '1.1'], dir);
+    assert.equal(index.error, undefined);
+    assert.deepEqual(index.plans.map((plan) => plan.id), ['01.01-01']);
+
+    const listed = run(['phase', 'list-plans', '1.1'], dir);
+    assert.equal(listed.phase_dir, '.planning/phases/CK.02-01.01-hotfix');
+    assert.deepEqual(listed.plans, ['.planning/phases/CK.02-01.01-hotfix/01.01-01-PLAN.md']);
+  });
+
+  test('legacy subphase query normalization remains unchanged', () => {
+    const dir = project('adr-612-legacy-subphase-query-');
+    writeConfig(dir, 'sequential');
+    const phaseDir = planning(dir, 'phases', 'CK-01.1-hotfix');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '01.1-01-PLAN.md'), '---\nwave: 1\n---\n');
+
+    const found = run(['find-phase', '1.1'], dir);
+
+    assert.equal(found.directory, '.planning/phases/CK-01.1-hotfix');
+  });
+
   // #4304 round 17 (W1): next-decimal's base lookup was bracket-aware, but
   // its child inventory still used the legacy directory/heading patterns.
   // That split answer proposed the already-occupied 02.01 slot as "02.1".
