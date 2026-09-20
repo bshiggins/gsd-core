@@ -45,9 +45,22 @@ describe('bracket grammar: dependency references expose only the phase token', (
 
   test('keeps the Phase-prefixed legacy grammar unchanged outside bracket mode', () => {
     assert.equal(typeof core.extractPhaseDependencyTokens, 'function');
-    assert.deepStrictEqual(core.extractPhaseDependencyTokens('Phase 1', null), ['1']);
-    assert.deepStrictEqual(core.extractPhaseDependencyTokens('Phases 1, 2, and 3', 'sequential'), ['1', '2', '3']);
-    assert.deepStrictEqual(core.extractPhaseDependencyTokens('[CK.02] 01', null), []);
+    const cases = [
+      ['Phase 1a', ['1']],
+      ['Phase 1A', ['1A']],
+      ['Phase 1, Phase 2', ['1', '2']],
+      ['Phases 1-3', ['1', '3']],
+      ['[CK.02] 01', []],
+    ];
+    for (const convention of [null, 'sequential', 'milestone-prefixed']) {
+      for (const [input, expected] of cases) {
+        assert.deepStrictEqual(
+          core.extractPhaseDependencyTokens(input, convention),
+          expected,
+          `${String(convention)}: ${input}`,
+        );
+      }
+    }
   });
 });
 

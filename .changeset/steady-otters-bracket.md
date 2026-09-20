@@ -8,3 +8,4 @@ pr: 4773
 
 Bracket phase directories emitted by these writers are also resolved by `find-phase` and every consumer of `findPhaseInternal`; non-bracket lookup bytes remain unchanged.
 When a closed details archive sits inside the active milestone range, phase removal now skips its historical heading before selecting the live section to delete.
+Bracket dependency forms use the new shared grammar without changing either legacy reader's pre-existing token bytes under null, sequential, or milestone-prefixed conventions.

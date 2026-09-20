@@ -104,6 +104,7 @@ const {
   normalizePhaseName,
   stripProjectCodePrefix,
   PHASE_NUMBER_TOKEN_SOURCE,
+  PHASE_DEP_REF_SOURCE,
   extractPhaseDependencyTokens,
   isForeignPrefixedPhaseQuery,
   isSentinelPhaseId,
@@ -3125,7 +3126,23 @@ function cmdInitManager(cwd: string, raw: boolean): void {
   // ("dropped the dependency on Phase 654") is NOT detected: the issue's own
   // minimum keeps such tokens. Bracket repositories route through the same
   // phase-id owner so `[CK.02] 01` contributes phase 01, never milestone 02;
-  // non-bracket extraction remains the exact Phase-prefixed #4764 grammar.
+  // Non-bracket extraction remains this manager surface's exact #4764 code
+  // path below, including its case-insensitive token regex. Planning-inspect's
+  // old token regex was case-sensitive, so forcing both through one widened
+  // helper changed its `Phase 1a` bytes from `1` to `1a`.
+
+  const legacyManagerDependencyTokens = (prose: string): string[] => {
+    const depPhaseRefRe = new RegExp(`${PHASE_DEP_REF_SOURCE}`, 'gi');
+    const depTokenRe = new RegExp(`${PHASE_NUMBER_TOKEN_SOURCE}`, 'gi');
+    const tokens: string[] = [];
+    let refMatch: RegExpExecArray | null;
+    while ((refMatch = depPhaseRefRe.exec(prose)) !== null) {
+      let tokenMatch: RegExpExecArray | null;
+      depTokenRe.lastIndex = 0;
+      while ((tokenMatch = depTokenRe.exec(refMatch[1])) !== null) tokens.push(tokenMatch[0]);
+    }
+    return tokens;
+  };
 
   for (const phase of phases) {
     if (
@@ -3138,7 +3155,10 @@ function cmdInitManager(cwd: string, raw: boolean): void {
       const ownNumber = normalizePhaseNumber(phase['number'] as string);
       const depNums: string[] = [];
       const seen = new Set<string>();
-      for (const token of extractPhaseDependencyTokens(prose, phaseIdConvention)) {
+      const dependencyTokens = phaseIdConvention === 'bracket'
+        ? extractPhaseDependencyTokens(prose, phaseIdConvention)
+        : legacyManagerDependencyTokens(prose);
+      for (const token of dependencyTokens) {
         const normalized = normalizePhaseNumber(token);
         if (normalized === ownNumber) continue; // #4764: never the row's own phase
         if (seen.has(normalized)) continue;

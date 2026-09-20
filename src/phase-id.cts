@@ -572,8 +572,11 @@ function parsePhaseId(input: string): PhaseId {
 /**
  * Phase tokens referenced by one already-addressed Depends-on value.
  *
- * The non-bracket branch is the #4764 Phase-prefixed grammar byte-for-byte:
- * it intentionally ignores bare digit runs in dates, shas and ledger ids.
+ * The non-bracket branch is planning-inspect's #4764 extractor byte-for-byte:
+ * its reference regex is case-insensitive but its token regex is not, so
+ * `Phase 1a` remains `1` while `Phase 1A` remains `1A`. The manager keeps its
+ * own pre-#4304 non-bracket extractor because that surface historically made
+ * both regexes case-insensitive. Only bracket mode shares the widened grammar.
  * Bracket repositories additionally accept the four identity spellings their
  * readers and writers expose: `[CODE.MM] NN`, `CODE.MM-NN`,
  * `[CODE.MM] Phase NN`, and a value consisting only of bare `NN`. Bracket
@@ -584,7 +587,7 @@ function extractPhaseDependencyTokens(prose: string, convention?: string | null)
   const input = prose;
   const found: { index: number; token: string }[] = [];
   const legacyRefRe = new RegExp(`${PHASE_DEP_REF_SOURCE}`, 'gi');
-  const tokenRe = new RegExp(PHASE_NUMBER_TOKEN_SOURCE, 'gi');
+  const tokenRe = new RegExp(PHASE_NUMBER_TOKEN_SOURCE, convention === 'bracket' ? 'gi' : 'g');
   let refMatch: RegExpExecArray | null;
   while ((refMatch = legacyRefRe.exec(input)) !== null) {
     tokenRe.lastIndex = 0;
