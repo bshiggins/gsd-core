@@ -3083,9 +3083,9 @@ function cmdInitManager(cwd: string, raw: boolean): void {
   const bracketIdentityKey = (value: string): string | null => {
     try {
       const id = parsePhaseId(value);
-      const subphase = id.subphase ? `.${id.subphase as string}` : '';
+      const subphase = id.subphase ? `.${id.subphase}` : '';
       return bracketQualifiedKey(
-        `${id.project as string}.${id.milestone as string}-${id.phase as string}${subphase}`,
+        `${id.project}.${id.milestone}-${id.phase}${subphase}`,
         'bracket',
       );
     } catch {
