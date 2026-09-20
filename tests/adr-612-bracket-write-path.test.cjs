@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { createFixture } = require('./fixtures/index.cjs');
 const { extractCurrentMilestone } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
 const { tokenizeHeadings } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
@@ -17,6 +18,12 @@ afterEach(() => {
 
 function project(prefix = 'adr-612-write-') {
   const dir = createTempProject(prefix);
+  projects.add(dir);
+  return dir;
+}
+
+function gitProject(prefix) {
+  const dir = createFixture({ prefix, git: true });
   projects.add(dir);
   return dir;
 }
@@ -1333,14 +1340,16 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
   // `phase add-batch` already route through (round 5, B4) — an
   // empty-slug or all-digit description crashed with an uncaught
   // "toDir: slug sanitizes to empty" throw instead of the wrapper's clean
-  // "Cannot create a phase directory for ..." refusal.
+  // "Cannot create a phase directory for ..." refusal. Both controls use
+  // committed git fixtures so their result cannot depend on HOME's global git
+  // discovery/configuration state before they reach that refusal.
   test('phase insert refuses an empty-slug description through the SAME wrapper phase add uses, before any mutation', () => {
-    const dir = project('adr-612-bracket-insert-emptyslug-');
+    const dir = gitProject('adr-612-bracket-insert-emptyslug-');
     writeBracketFixture(dir);
     const before = snapshotTree(planning(dir));
 
     const insertResult = runGsdTools(['phase', 'insert', '1', '!!!'], dir);
-    const addDir = project('adr-612-bracket-insert-emptyslug-add-control-');
+    const addDir = gitProject('adr-612-bracket-insert-emptyslug-add-control-');
     writeBracketFixture(addDir);
     const addResult = runGsdTools(['phase', 'add', '!!!'], addDir);
 
