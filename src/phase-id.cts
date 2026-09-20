@@ -1400,6 +1400,11 @@ function phaseTokenMatches(dirName: string, normalized: string, convention?: str
   return false;
 }
 
+type BracketPhaseLookupContext = {
+  project: string;
+  milestone: string;
+};
+
 /**
  * #2528: the LEADING DIGIT RUN of a directory name — the fragment the
  * bare-integer fallback selects on, and the one `phaseNumberForMatch` then
@@ -1471,31 +1476,49 @@ const unpad = (digits: string): string => digits.replace(/^0+(?=\d)/, '');
  *
  *   TAKE `matches[0]` — `cmdPhasesList`, `cmdInitManager`, `cmdRoadmapAnalyze`,
  *   `cmdVerifySchemaDrift`, `detectVerifyFailed`. Each read a directory to
- *   DECORATE a row they are already emitting; each used `.find()` before this
- *   PR, so first-match is their prior behavior preserved verbatim, and each is
- *   order-stable because the directory list is sorted and this function filters
- *   without reordering.
+ *   DECORATE a row they are already emitting. In bracket mode those current-
+ *   checkout callers pass the active project+milestone context: an exact
+ *   qualified match wins, and bracket directories from other milestones are
+ *   excluded before any first-match policy can run. Legacy selection order is
+ *   unchanged.
  *
- * The honest caveat on that second tier: the bare-number fallback makes
- * multi-match newly REACHABLE for inputs that previously found nothing, so those
- * five can now silently pick one of several candidates where they used to report
- * not-found. That is a widening of an existing first-match rule, not a new rule
- * — but it is a widening, and promoting any of them to refusal is a UX decision
- * about their own output, not a change to selection, so it does not belong here.
+ * Without an active bracket context the historical first-match/ambiguity policy
+ * remains the caller's responsibility. With a context, only migration-window
+ * legacy names can participate in fallback when the exact bracket identity is
+ * absent; a prior milestone's qualified directory can never mask the active one.
  *
  * `usedBareFallback` tells callers to derive the displayed phase number from
  * the directory's leading digit run instead of `extractPhaseToken` (whose
  * token for these dirs is the mis-absorbed multi-segment form).
  */
-function matchPhaseDirs(dirs: string[], normalized: string, convention?: string | null): { matches: string[]; usedBareFallback: boolean } {
-  const primary = dirs.filter(d => phaseTokenMatches(d, normalized, convention));
+function matchPhaseDirs(
+  dirs: string[],
+  normalized: string,
+  convention?: string | null,
+  bracketContext?: BracketPhaseLookupContext | null,
+): { matches: string[]; usedBareFallback: boolean } {
+  let candidates = dirs;
+
+  // #4304: a bare phase number from STATE/ROADMAP names the active bracket
+  // identity, not every physical directory left behind by prior milestones.
+  // Prefer the exact qualified directory. If it is absent, retain only
+  // migration-window legacy names; a differently-qualified bracket directory
+  // must never win merely because it sorts first.
+  if (convention === 'bracket' && bracketContext && !bracketQualifiedKey(normalized, convention)) {
+    const qualified = `${bracketContext.project}.${bracketContext.milestone}-${normalized}`;
+    const exact = dirs.filter(d => phaseTokenMatches(d, qualified, convention));
+    if (exact.length > 0) return { matches: exact, usedBareFallback: false };
+    candidates = dirs.filter(d => bracketQualifiedKey(d, convention) === null);
+  }
+
+  const primary = candidates.filter(d => phaseTokenMatches(d, normalized, convention));
   if (primary.length > 0) return { matches: primary, usedBareFallback: false };
 
   const bare = String(normalized);
   if (!BARE_INTEGER_RE.test(bare)) return { matches: primary, usedBareFallback: false };
   const want = unpad(bare);
 
-  const fallback = dirs.filter(d => {
+  const fallback = candidates.filter(d => {
     const m = stripProjectCodePrefix(d).match(LEADING_DIGIT_RUN_RE);
     return m !== null && unpad(m[1]) === want;
   });

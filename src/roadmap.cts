@@ -16,10 +16,10 @@ import ioMod = require('./io.cjs');
 const { output, error, formatDiagnosticToken, declineNoOp } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { normalizePhaseName, phaseMarkdownRegexSource, matchPhaseDirs, stripProjectCodePrefix, OPTIONAL_PHASE_TAG_SOURCE, roadmapPhaseLookupSources, phaseHeadingPrefixSrcFor, PHASE_HEADING_BASELINE, isSentinelPhaseId, scopeToPhase, bracketQualifiedKey, foldBracketId } = phaseIdMod;
+const { phaseMarkdownRegexSource, matchPhaseDirs, stripProjectCodePrefix, OPTIONAL_PHASE_TAG_SOURCE, roadmapPhaseLookupSources, phaseHeadingPrefixSrcFor, PHASE_HEADING_BASELINE, isSentinelPhaseId, scopeToPhase, bracketQualifiedKey, foldBracketId } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
-const { findPhaseInternal, listMilestonePhaseDirs, listAllPhaseDirs } = phaseLocatorMod;
+const { findPhaseInternal, listMilestonePhaseDirs, listAllPhaseDirs, resolvePhaseDirectoryLookup } = phaseLocatorMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningScopeMod = require('./planning-scope.cjs');
 const { SCOPE } = planningScopeMod;
@@ -452,6 +452,7 @@ const occurrenceKey = (num: string, bracketId?: string): string => {
  * same enrichment, not a second derivation.
  */
 function collectAnalyzePhases(
+  cwd: string,
   content: string,
   phasesDir: string,
   phaseDirNames: string[],
@@ -521,7 +522,8 @@ function collectAnalyzePhases(
     const depends_on = dependsMatch ? dependsMatch[1].trim() : null;
 
     // Check completion on disk
-    const normalized = normalizePhaseName(phaseNum);
+    const lookup = resolvePhaseDirectoryLookup(cwd, phaseNum);
+    const normalized = lookup.normalized;
     let diskStatus = 'no_directory';
     let planCount = 0;
     let summaryCount = 0;
@@ -558,7 +560,12 @@ function collectAnalyzePhases(
     // phase resolves to nothing.
     // Upstream centralized this choice in `matchPhaseDirs`; thread the same
     // convention into that owner rather than reviving the primitive `.find()`.
-    const dirMatch = matchPhaseDirs(phaseDirNames, normalized, directoryConvention).matches[0];
+    const dirMatch = matchPhaseDirs(
+      phaseDirNames,
+      normalized,
+      directoryConvention,
+      lookup.bracketContext,
+    ).matches[0];
 
     if (dirMatch) {
       const counts = countPhasePlansAndSummaries(path.join(phasesDir, dirMatch), convention);
@@ -633,10 +640,12 @@ function collectAnalyzePhases(
     // Preserve that behavior while heading occurrences gain bracket identity.
     detailKeys.add(occurrenceKey(tr.id));
     if (seen.has(stripPadA(tr.id))) continue;
+    const tableLookup = resolvePhaseDirectoryLookup(cwd, tr.id);
     const dirMatchA = matchPhaseDirs(
       phaseDirNames,
-      normalizePhaseName(tr.id),
+      tableLookup.normalized,
       directoryConvention,
+      tableLookup.bracketContext,
     ).matches[0];
     let tPlanCount = 0;
     let tSummaryCount = 0;
@@ -713,7 +722,7 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
   // Scan the scoped milestone window for phase-detail headings and enrich each
   // with its on-disk status. Extracted into `collectAnalyzePhases` (#3165) so
   // the SAME enrichment re-runs on the fallback below — not a second copy.
-  let collected = collectAnalyzePhases(content, phasesDir, _phaseDirNames, convention);
+  let collected = collectAnalyzePhases(cwd, content, phasesDir, _phaseDirNames, convention);
   let phases = collected.phases;
   let detailKeys = collected.detailKeys;
   // `effectiveContent` is what the downstream checklist scan (missing_details)
@@ -738,7 +747,7 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
   // populated, flagged result.
   if (phases.length === 0 && scope !== SCOPE.COMPLETE && _phaseDirNames.length > 0) {
     const fallbackContent = stripShippedMilestones(rawContent);
-    const fallbackCollection = collectAnalyzePhases(fallbackContent, phasesDir, _phaseDirNames, convention);
+    const fallbackCollection = collectAnalyzePhases(cwd, fallbackContent, phasesDir, _phaseDirNames, convention);
     if (fallbackCollection.phases.length > 0) {
       collected = fallbackCollection;
       phases = collected.phases;

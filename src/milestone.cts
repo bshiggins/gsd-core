@@ -36,7 +36,7 @@ import stateContract = require('./state-contract.cjs');
 const { publishStateContract } = stateContract;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { normalizePhaseName, matchPhaseDirs, PHASE_NUMBER_TOKEN_SOURCE, isSentinelPhaseId, isSentinelPhaseDir } = phaseIdMod;
+const { matchPhaseDirs, PHASE_NUMBER_TOKEN_SOURCE, isSentinelPhaseId, isSentinelPhaseDir } = phaseIdMod;
 import { escapeRegex } from './pattern.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
@@ -57,7 +57,7 @@ import planScanMod = require('./plan-scan.cjs');
 const { scanPhasePlans } = planScanMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-locator.cjs is an export= CommonJS module
 import phaseLocatorMod = require('./phase-locator.cjs');
-const { listMilestonePhaseDirs } = phaseLocatorMod;
+const { listMilestonePhaseDirs, resolvePhaseDirectoryLookup } = phaseLocatorMod;
 const { planningPaths, resolvePhaseIdConvention } = planningWorkspace;
 const { extractFrontmatter } = frontmatterMod;
 // ADR-3408 §8.3 / #3469: `writeStateMd` gets sync and NO preservation — the
@@ -760,7 +760,8 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
         // the #1445 /^999/ progress filters). (#1580)
         // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this local check already covered both 0 and 999; now delegates to the single canonical owner.
         if (isSentinelPhaseId(phaseNum)) continue;
-        const normalized = normalizePhaseName(phaseNum);
+        const lookup = resolvePhaseDirectoryLookup(cwd, phaseNum);
+        const normalized = lookup.normalized;
         // A phase has disk_status: 'no_directory' when no phase directory
         // with a matching token exists on disk. Use the same matchPhaseDirs
         // owner that roadmap.analyze uses to avoid false positives on decimal
@@ -771,6 +772,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
           phaseDirEntries,
           normalized,
           phaseConvention === 'bracket' ? 'bracket' : undefined,
+          lookup.bracketContext,
         ).matches.length > 0;
         if (!hasDirectory) {
           noDirectoryPhases.push(phaseNum);

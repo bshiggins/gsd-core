@@ -48,10 +48,10 @@ import ioMod = require('./io.cjs');
 const { output, error } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { normalizePhaseName, matchPhaseDirs } = phaseIdMod;
+const { matchPhaseDirs } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
-const { findPhaseInternal } = phaseLocatorMod;
+const { findPhaseInternal, resolvePhaseDirectoryLookup } = phaseLocatorMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
 const { stripShippedMilestones } = roadmapParserMod;
@@ -2080,13 +2080,14 @@ function cmdValidateAgents(cwd: string, raw: boolean): void {
  * directory-name match. Returns null if neither resolves. (#1571, #2528)
  */
 function resolvePhaseDirByToken(cwd: string, phasesDir: string, phaseArg: string): string | null {
-  const normalizedPhase = normalizePhaseName(phaseArg);
+  const lookup = resolvePhaseDirectoryLookup(cwd, phaseArg);
+  const normalizedPhase = lookup.normalized;
   const dirEntries = fs.readdirSync(phasesDir, { withFileTypes: true });
   const dirNames = dirEntries.filter((e) => e.isDirectory()).map((e) => e.name);
   // #4304: both drift commands resolve a directory in the current checkout.
   // Bracket is the only opt-in grammar; all other conventions remain legacy.
   const convention = resolvePhaseIdConvention(cwd) === 'bracket' ? 'bracket' : undefined;
-  const matched = matchPhaseDirs(dirNames, normalizedPhase, convention).matches[0];
+  const matched = matchPhaseDirs(dirNames, normalizedPhase, convention, lookup.bracketContext).matches[0];
   if (matched) return path.join(phasesDir, matched);
   const contained = tryWithinRoot(phaseArg, phasesDir);
   if (contained !== null && fs.existsSync(contained)) return contained;

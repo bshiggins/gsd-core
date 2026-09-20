@@ -54,10 +54,13 @@ import stateDocument = require('./state-document.cjs');
 const { stateFieldValue } = stateDocument;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseId = require('./phase-id.cjs');
-const { comparePhaseNum, extractPhaseToken, matchPhaseDirs, normalizePhaseName, parsePhaseFromProse, stripProjectCodePrefix } = phaseId;
+const { comparePhaseNum, extractPhaseToken, matchPhaseDirs, parsePhaseFromProse, stripProjectCodePrefix } = phaseId;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import stateMod = require('./state.cjs');
 const { readStateHeadFreshness } = stateMod;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseLocatorMod = require('./phase-locator.cjs');
+const { resolvePhaseDirectoryLookup } = phaseLocatorMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import unusableInput = require('./unusable-input.cjs');
 const { warnUnusableInput, UNUSABLE_REASON } = unusableInput;
@@ -335,7 +338,7 @@ function detectVerifyFailed(cwd: string, currentPhaseRaw: string | null): boolea
   const phaseToken = phaseTokenFromState(currentPhaseRaw);
   let targetDir: string | undefined;
   if (phaseToken) {
-    const normalized = normalizePhaseName(phaseToken);
+    const { normalized, bracketContext } = resolvePhaseDirectoryLookup(cwd, phaseToken);
     // #2528: the fourth directory-resolution site, and the one where a miss is
     // silent — a phase whose directory cannot be found reports "not failed",
     // which reads identically to a healthy phase. It must therefore apply the
@@ -344,7 +347,7 @@ function detectVerifyFailed(cwd: string, currentPhaseRaw: string | null): boolea
     // surfaces its own failed verification. `entries` is already sorted, and
     // `matchPhaseDirs` filters without reordering, so taking the first match
     // preserves the previous `.find()` selection exactly.
-    const { matches } = matchPhaseDirs(entries, normalized, convention);
+    const { matches } = matchPhaseDirs(entries, normalized, convention, bracketContext);
     targetDir = matches[0];
     if (!targetDir) return false;
   } else {

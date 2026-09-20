@@ -9,9 +9,11 @@
  * location; only the module boundary moved. The core.cjs re-export spine
  * was retired in epic #1267; callers import phase-locator helpers directly.
  *
- * Dependencies (leaf modules only — no loadConfig):
+ * Dependencies:
  *   - node:fs / node:path (stdlib)
  *   - ./phase-id.cjs       (normalizePhaseName, matchPhaseDirs, phaseNumberForMatch)
+ *   - ./phase-id-display.cjs (milestone numeric canonicalization)
+ *   - ./config-loader.cjs  (active bracket project code)
  *   - ./core-utils.cjs     (readSubdirectories, getPhaseFileStats, extractCanonicalPlanId, toPosixPath)
  *   - ./planning-workspace.cjs (planningDir, resolvePhaseIdConvention)
  */
@@ -44,7 +46,13 @@ import planDependencyGraphModule = require('./plan-dependency-graph.cjs');
 const { computeHaltPropagation, buildSummaryFileIndex, isSummaryFileHalted, isSummaryFileBlocked } = planDependencyGraphModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserModule = require('./roadmap-parser.cjs');
-const { getMilestonePhaseFilter } = roadmapParserModule;
+const { getMilestoneInfo, getMilestonePhaseFilter } = roadmapParserModule;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseIdDisplayModule = require('./phase-id-display.cjs');
+const { milestoneToken } = phaseIdDisplayModule;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import configLoaderModule = require('./config-loader.cjs');
+const { loadConfig } = configLoaderModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningScopeMod = require('./planning-scope.cjs');
 const { SCOPE } = planningScopeMod;
@@ -132,6 +140,43 @@ interface ArchivedPhaseDir {
 interface ArchiveVersionDir {
   version: string;
   archivePath: string;
+}
+
+type BracketPhaseLookupContext = {
+  project: string;
+  milestone: string;
+};
+
+interface PhaseDirectoryLookup {
+  normalized: string;
+  convention: 'bracket' | undefined;
+  bracketContext: BracketPhaseLookupContext | undefined;
+}
+
+/**
+ * Resolve the convention and active bracket identity once for every current-
+ * checkout phase-directory lookup. Legacy callers receive the exact historical
+ * normalization and no context. A partially configured bracket repo degrades
+ * to the ambiguity-safe unqualified matcher rather than inventing an identity.
+ */
+function resolvePhaseDirectoryLookup(cwd: string, phase: unknown): PhaseDirectoryLookup {
+  const normalized = normalizePhaseName(phase);
+  if (resolvePhaseIdConvention(cwd) !== 'bracket') {
+    return { normalized, convention: undefined, bracketContext: undefined };
+  }
+
+  let bracketContext: BracketPhaseLookupContext | undefined;
+  try {
+    const config = loadConfig(cwd) as Record<string, unknown>;
+    const project = typeof config['project_code'] === 'string' ? config['project_code'].trim() : '';
+    const version = getMilestoneInfo(cwd).value?.version ?? '';
+    const milestone = milestoneToken(version);
+    if (project && milestone !== null) bracketContext = { project, milestone };
+  } catch {
+    // Read-side lookup remains non-throwing when config/milestone state is
+    // incomplete; matchPhaseDirs will surface ambiguity rather than guess.
+  }
+  return { normalized, convention: 'bracket', bracketContext };
 }
 
 // ─── Phase search helpers ─────────────────────────────────────────────────────
@@ -223,6 +268,7 @@ function searchPhaseInDir(
   relBase: string,
   normalized: string,
   convention?: string | null,
+  bracketContext?: BracketPhaseLookupContext | null,
 ): PhaseSearchResult | null {
   try {
     const dirs = readSubdirectories(baseDir, true);
@@ -231,7 +277,7 @@ function searchPhaseInDir(
     // phase-plan-index scans — see phase-id.cts::matchPhaseDirs.
     // #4801: the convention is threaded (optional) so bracket-convention
     // consumers get exact token matching here too.
-    const { matches, usedBareFallback } = matchPhaseDirs(dirs, normalized, convention);
+    const { matches, usedBareFallback } = matchPhaseDirs(dirs, normalized, convention, bracketContext);
     if (matches.length === 0) return null;
 
     // #2237: fail loud when multiple directories match the same bare phase
@@ -389,15 +435,11 @@ function findPhaseInternal(cwd: string, phase: unknown, convention?: string | nu
   if (!phase) return null;
 
   const phasesDir = path.join(planningDir(cwd), 'phases');
-  const normalized = normalizePhaseName(phase);
-  // #4304: bracket directories need the convention-aware matcher and token
-  // reader. Preserve every legacy lookup byte-for-byte by passing no
-  // convention unless the resolved project convention is exactly bracket.
-  const convention = resolvePhaseIdConvention(cwd) === 'bracket' ? 'bracket' : undefined;
+  const { normalized, convention, bracketContext } = resolvePhaseDirectoryLookup(cwd, phase);
 
   const relPhasesDir = toPosixPath(path.relative(cwd, phasesDir));
   // #4801: convention threaded through to the matcher (see searchPhaseInDir).
-  const current = searchPhaseInDir(phasesDir, relPhasesDir, normalized, convention);
+  const current = searchPhaseInDir(phasesDir, relPhasesDir, normalized, convention, bracketContext);
   if (current) return current;
 
   // #2855: scope the archived-milestone fallback to the SAME workstream as the
@@ -628,6 +670,7 @@ function getAllArchivedPhaseDirs(cwd: string): ArchivedPhaseDir[] {
 
 export = {
   searchPhaseInDir,
+  resolvePhaseDirectoryLookup,
   findPhaseInternal,
   getArchivedPhaseDirs,
   getAllArchivedPhaseDirs,

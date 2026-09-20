@@ -201,6 +201,9 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     ].join('\n'));
     fs.writeFileSync(path.join(phaseDir, '02-01-SUMMARY.md'), '# Summary\n\nSTATUS: failed\n');
     fs.writeFileSync(path.join(phaseDir, '02-CONTEXT.md'), '# Context\n');
+    const priorMilestoneDecoy = planning(dir, 'phases', 'CK.01-02-prior-decoy');
+    fs.mkdirSync(priorMilestoneDecoy, { recursive: true });
+    fs.writeFileSync(path.join(priorMilestoneDecoy, '02-VERIFICATION.md'), 'STATUS: passed\n');
     fs.writeFileSync(
       planning(dir, 'STATE.md'),
       fs.readFileSync(planning(dir, 'STATE.md'), 'utf8')
@@ -252,11 +255,31 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     const managed = manager.phases.find((phase) => phase.number === '02');
     assert.ok(managed);
     assert.notEqual(managed.disk_status, 'no_directory');
+    assert.equal(managed.plan_count, 1);
 
     const analyzed = run(['roadmap', 'analyze'], dir);
     const analyzedPhase = analyzed.phases.find((phase) => phase.number === '02');
     assert.ok(analyzedPhase);
     assert.notEqual(analyzedPhase.disk_status, 'no_directory');
+    assert.equal(analyzedPhase.plan_count, 1);
+  });
+
+  test('smart-entry verify-failed remains true with only the active bracket directory', () => {
+    const dir = project('adr-612-bracket-smart-entry-active-only-');
+    writeBracketFixture(dir);
+    run(['phase', 'add', 'User Dashboard'], dir);
+    const phaseDir = planning(dir, 'phases', 'CK.02-02-user-dashboard');
+    fs.writeFileSync(path.join(phaseDir, '02-VERIFICATION.md'), 'STATUS: failed\n');
+    fs.writeFileSync(
+      planning(dir, 'STATE.md'),
+      fs.readFileSync(planning(dir, 'STATE.md'), 'utf8')
+        .replace('**Current Phase:** 01', '**Current Phase:** 02')
+        .replace('Phase: 01 (Foundation)', 'Phase: 02 (User Dashboard)'),
+    );
+
+    const smartEntry = run(['smart-entry', '--json'], dir);
+
+    assert.equal(smartEntry.signals.verify_failed, true);
   });
 
   // #4304 round 17 (W1): next-decimal's base lookup was bracket-aware, but
