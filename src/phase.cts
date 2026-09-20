@@ -2928,6 +2928,23 @@ function computeBracketRenumberMapping(
 }
 
 /**
+ * CommonMark fence exclusion shared by bracket removal's inventory and
+ * pre-mutation ownership guard. A fenced heading/checklist is documentation,
+ * never evidence about the live phase tree. Unclosed fences own through EOF.
+ */
+function fencedRoadmapLineNumbers(content: string): Set<number> {
+  const fenced = new Set<number>();
+  const rawLines = content.split('\n');
+  for (const block of scanFencedBlocks(rawLines)) {
+    const lastIndex = block.closeLineIdx === -1 ? rawLines.length - 1 : block.closeLineIdx;
+    for (let index = block.openLineIdx; index <= lastIndex; index++) {
+      fenced.add(index + 1);
+    }
+  }
+  return fenced;
+}
+
+/**
  * #4304 (W2): does the bracket phase about to be removed (an
  * INTEGER phase, never a subphase itself — `phase remove NN.SS` is a
  * different, unaffected path) still have its own sub-phases?
@@ -2959,14 +2976,7 @@ function bracketPhaseOwnSubphases(
     record(Number(id.phase), id.subphase === undefined ? undefined : Number(id.subphase));
   }
   const roadmapLines = splitRoadmapLineRecords(roadmapContent);
-  const fencedLineNumbers = new Set<number>();
-  const rawLines = roadmapContent.split('\n');
-  for (const block of scanFencedBlocks(rawLines)) {
-    const lastIndex = block.closeLineIdx === -1 ? rawLines.length - 1 : block.closeLineIdx;
-    for (let index = block.openLineIdx; index <= lastIndex; index++) {
-      fencedLineNumbers.add(index + 1);
-    }
-  }
+  const fencedLineNumbers = fencedRoadmapLineNumbers(roadmapContent);
   for (const line of roadmapLines) {
     if (!lineStartsInActiveMilestone(line.start, ranges)) continue;
     if (fencedLineNumbers.has(line.lineNumber)) continue;
@@ -3045,7 +3055,8 @@ function archivedOrClosedMilestoneLineStarts(content: string): Set<number> {
  * with an empty report while the target's heading and checklist survive
  * beside the sibling renumbered onto its old identity.
  *
- * Scans the WHOLE document (not `ranges` — the located window is exactly
+ * Scans the WHOLE document outside CommonMark fences (not `ranges` — the
+ * located window is exactly
  * what is in question) for the target's own heading/checklist lines via the
  * SAME classifier (`classifyBracketOwnedLine`) the rewrite loop uses. If at
  * least one is found and NONE of them fall inside the located `ranges`
@@ -3088,7 +3099,9 @@ function bracketOwnedLineOutsideActiveWindow(
   // with no checklist bullet of its own) — this never widens what counts as
   // OUTSIDE, only narrows which OUTSIDE lines count as evidence.
   const historicalLineStarts = archivedOrClosedMilestoneLineStarts(content);
+  const fencedLineNumbers = fencedRoadmapLineNumbers(content);
   for (const line of splitRoadmapLineRecords(content)) {
+    if (fencedLineNumbers.has(line.lineNumber)) continue;
     const owned = classifyBracketOwnedLine(line.text);
     if (!owned.id || (owned.kind !== 'heading' && owned.kind !== 'checklist')) continue;
     if (!sameBracketPhaseId(owned.id, targetId)) continue;

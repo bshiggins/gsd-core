@@ -2955,6 +2955,44 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, []);
   });
 
+  test('ignores a fenced target checklist example before the active milestone window', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '```md',
+        '- [ ] [CK.02] 02: Documentation example',
+        '```',
+        '',
+        '## [CK.02] v2.0 — Current 🚧',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', []],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+
+    assert.equal(result.success, true, result.error || result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    assert.equal(roadmap.includes('- [ ] [CK.02] 02: Documentation example'), true);
+    assert.equal(roadmap.includes('### [CK.02] 02: Two'), false);
+    assert.equal(roadmap.includes('### [CK.02] 02: Three'), true);
+    assert.deepEqual(fs.readdirSync(planning('phases')).sort(), ['CK.02-01-one', 'CK.02-02-three']);
+  });
+
   test('renumbers an active milestone phase list collapsed inside details', () => {
     replaceSeed(
       [
