@@ -174,7 +174,7 @@ function resolvePhaseDirectoryLookup(cwd: string, phase: unknown): PhaseDirector
 
   let bracketContext: BracketPhaseLookupContext | undefined;
   try {
-    const config = loadConfig(cwd) as Record<string, unknown>;
+    const config = loadConfig(cwd);
     const project = typeof config['project_code'] === 'string' ? config['project_code'].trim() : '';
     const version = getMilestoneInfo(cwd).value?.version ?? '';
     const milestone = milestoneToken(version);
