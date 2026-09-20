@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "count": 296,
+  "count": 298,
   "classes": {
     "ARCH": 1,
     "CI": 2,
@@ -19,7 +19,7 @@
     "PROHIB": 10,
     "RELEASE-NOTES": 31,
     "RULESET": 60,
-    "SEAM": 24,
+    "SEAM": 26,
     "SESSION": 9,
     "WAVE": 5,
     "WORKSTREAM": 5,
@@ -1272,6 +1272,11 @@
       "value": "GSD's published-package coordinates (packageName, binName, repoSlug, changelogRawUrl, manualInstallCommand) — single seam so a repoint/rename is a one-line change"
     },
     {
+      "id": "SEAM.phase-checklist-reader.owns",
+      "klass": "SEAM",
+      "value": "parsePhaseChecklistLine is the shared semantic parser for manager checkbox state, bracket next-decimal ROADMAP inventory, and removal ownership, including a colon with no following whitespace (#4304)"
+    },
+    {
       "id": "SEAM.phase-dependency-extraction-compatibility.enforced-by",
       "klass": "SEAM",
       "value": "test:tests/adr-612-bracket-grammar.test.cjs"
@@ -1300,6 +1305,11 @@
       "id": "SEAM.phase-locator-milestone-enum.owns",
       "klass": "SEAM",
       "value": "listMilestonePhaseDirs(phasesDir, opts) is the single canonical owner of milestone-scoped phase-directory enumeration (ADR-3180 Decision 1, Phase 3, #3185)"
+    },
+    {
+      "id": "SEAM.phase-next-decimal-inventory.owns",
+      "klass": "SEAM",
+      "value": "phase insert and phase next-decimal inventory the union of reader-accepted bracket and legacy children on disk and in ROADMAP, including sentinel children; bracket parents emit canonical two-digit sub-tokens, except the legacy-only 999 backlog parent preserves upstream legacy spelling (#4304)"
     },
     {
       "id": "SEAM.phase-remove-historical-selection.enforced-by",
