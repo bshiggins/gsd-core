@@ -2998,8 +2998,11 @@ function computeBracketRenumberMapping(
   for (const { id } of bracketIdsInContext(phasesDir, context)) {
     record(Number(id.phase), id.subphase === undefined ? undefined : Number(id.subphase));
   }
+  const historicalLineStarts = archivedOrClosedMilestoneLineStarts(roadmapContent);
+  const fencedLineNumbers = fencedRoadmapLineNumbers(roadmapContent);
   for (const line of splitRoadmapLineRecords(roadmapContent)) {
     if (!lineStartsInActiveMilestone(line.start, ranges)) continue;
+    if (historicalLineStarts.has(line.start) || fencedLineNumbers.has(line.lineNumber)) continue;
     const { id } = classifyBracketOwnedLine(line.text);
     if (!id || id.project !== context.project || id.milestone !== context.milestone) continue;
     record(Number(id.phase), id.subphase === undefined ? undefined : Number(id.subphase));
@@ -3078,9 +3081,10 @@ function bracketPhaseOwnSubphases(
   }
   const roadmapLines = splitRoadmapLineRecords(roadmapContent);
   const fencedLineNumbers = fencedRoadmapLineNumbers(roadmapContent);
+  const historicalLineStarts = archivedOrClosedMilestoneLineStarts(roadmapContent);
   for (const line of roadmapLines) {
     if (!lineStartsInActiveMilestone(line.start, ranges)) continue;
-    if (fencedLineNumbers.has(line.lineNumber)) continue;
+    if (fencedLineNumbers.has(line.lineNumber) || historicalLineStarts.has(line.start)) continue;
     const { id } = classifyBracketOwnedLine(line.text);
     if (!id || id.project !== context.project || id.milestone !== context.milestone) continue;
     record(Number(id.phase), id.subphase === undefined ? undefined : Number(id.subphase));
@@ -3582,13 +3586,17 @@ const BRACKET_PROGRESS_HEADING_TITLE_RE = new RegExp(`^${BRACKET_PROGRESS_HEADIN
  * in scope for the target row's own deletion, exactly as it already was.
  */
 function bracketProgressSectionRange(content: string): { start: number; end: number } | null {
-  const match = content.match(new RegExp(`^##[ \\t]+${BRACKET_PROGRESS_HEADING_TITLE_SRC}`, 'im'));
-  if (!match || match.index === undefined) return null;
-  const start = match.index;
-  const fromHeading = content.slice(start);
-  const nextHeadingOffset = fromHeading.search(/\n#{1,2}[ \t]/);
-  const length = nextHeadingOffset >= 0 ? nextHeadingOffset : fromHeading.length;
-  return { start, end: start + length };
+  const historicalLineStarts = archivedOrClosedMilestoneLineStarts(content);
+  const headings = tokenizeHeadings(content);
+  const headingIndex = headings.findIndex(
+    (heading) => heading.level === 2
+      && BRACKET_PROGRESS_HEADING_TITLE_RE.test(heading.text.trim())
+      && !historicalLineStarts.has(heading.offset),
+  );
+  if (headingIndex === -1) return null;
+  const start = headings[headingIndex].offset;
+  const nextHeading = headings.slice(headingIndex + 1).find((heading) => heading.level <= 2);
+  return { start, end: nextHeading?.offset ?? content.length };
 }
 
 /**
@@ -4014,6 +4022,7 @@ function updateRoadmapAfterBracketPhaseRemoval(
       ? bracketProgressSectionOwnedByOtherMilestone(content, progressSectionRange.start, ranges, ownProgressSectionRanges)
       : false;
     const historicalLineStarts = archivedOrClosedMilestoneLineStarts(content);
+    const fencedLineNumbers = fencedRoadmapLineNumbers(content);
 
     // #4304 (B5): the referencesLeftUntouched report is computed
     // from each KEPT line's ORIGINAL (pre-rewrite) text, never the
@@ -4030,6 +4039,12 @@ function updateRoadmapAfterBracketPhaseRemoval(
     for (const line of splitRoadmapLineRecords(content)) {
       const active = lineStartsInActiveMilestone(line.start, ranges);
       const historical = historicalLineStarts.has(line.start);
+      const fenced = fencedLineNumbers.has(line.lineNumber);
+      if (fenced) {
+        rewritten.push(line.text + line.eol);
+        keptOriginalLines.push({ text: line.text, active: false });
+        continue;
+      }
       const owned = classifyBracketOwnedLine(line.text);
       const inMilestoneOwnTable = owned.kind === 'progress'
         && (lineStartsInMilestoneOwnTable(content, line.start, ranges, headingsForOwnTable)

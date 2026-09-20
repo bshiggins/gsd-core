@@ -1389,6 +1389,70 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(snapshotTree(planning()), before);
   });
 
+  // #4304 round 17 (W2): the active raw milestone range can contain a shipped
+  // details archive with the same folded bracket code. The removal rewrite
+  // already excludes those reader-classified historical lines, but the
+  // parent-child guard did not, so an archived 02.01 blocked removal of the
+  // unrelated live 02 even with --force.
+  test('does not treat a same-code archived sub-phase as a child of the live phase', () => {
+    fs.writeFileSync(planning('STATE.md'), '---\nmilestone: v2.1\n---\n');
+    const archive = [
+      '<details>',
+      '<summary>✅ [CK.02] v2.0 — SHIPPED 2026-01-01</summary>',
+      '',
+      '### [CK.02] 02.01: Archived Child',
+      '',
+      '**Goal:** preserve',
+      '',
+      '</details>',
+    ].join('\n');
+    const protectedFence = [
+      '```md',
+      '## Progress',
+      '| Phase | Status |',
+      '| --- | --- |',
+      '| [CK.02] 03 | Example only |',
+      '**Depends on:** [CK.02] 03',
+      '```',
+    ].join('\n');
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.1 — Current 🚧',
+        '',
+        archive,
+        '',
+        protectedFence,
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', []],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+
+    assert.equal(result.success, true, result.error || result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    assert.equal(roadmap.includes(archive), true, 'shipped child must remain byte-identical');
+    assert.equal(roadmap.includes(protectedFence), true, 'fenced Progress example must remain byte-identical');
+    assert.equal(roadmap.includes('### [CK.02] 02: Two'), false);
+    assert.equal(roadmap.includes('### [CK.02] 02: Three'), true);
+    assert.deepEqual(fs.readdirSync(planning('phases')).sort(), ['CK.02-01-one', 'CK.02-02-three']);
+  });
+
   // #4304 round 11 (W1): the sub-phase safety guard must share the read
   // side's CommonMark fence handling. A heading-shaped example inside a
   // fence is documentation, not a child phase, and cannot block removal.
