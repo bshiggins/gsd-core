@@ -4,7 +4,7 @@ const { test, describe, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, createTempProject, cleanup, toPosixPath } = require('./helpers.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
 const { extractCurrentMilestone } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
 const { tokenizeHeadings } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
@@ -374,7 +374,8 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
 
     const execute = run(['init', 'execute-phase', '02'], dir);
     assert.equal(execute.phase_found, true);
-    assert.equal(execute.phase_dir, fs.realpathSync(phaseDir));
+    // init emits phase_dir POSIX-normalized (#2376); compare in that shape on Windows too.
+    assert.equal(execute.phase_dir, toPosixPath(fs.realpathSync(phaseDir)));
     assert.equal(execute.plan_count, 1);
 
     const smartEntry = run(['smart-entry', '--json'], dir);
@@ -1849,9 +1850,14 @@ test('#4304 byte identity: non-bracket phase-plan-index and init execute-phase o
     assert.equal(index.success, true, index.error);
     const execute = runGsdTools(['init', 'execute-phase', '02'], dir);
     assert.equal(execute.success, true, execute.error);
+    // The outputs carry the project root in three spellings on Windows: native
+    // (`project_root`, JSON-escaped in the raw text), POSIX (`phase_dir`, #2376)
+    // and the bare native form; scrub all of them before comparing.
+    const scrub = (text) => [JSON.stringify(dir).slice(1, -1), toPosixPath(dir), dir]
+      .reduce((acc, form) => acc.replaceAll(form, '<PROJECT>'), text);
     outputs.push({
-      index: index.output.replaceAll(dir, '<PROJECT>'),
-      execute: execute.output.replaceAll(dir, '<PROJECT>'),
+      index: scrub(index.output),
+      execute: scrub(execute.output),
     });
   }
 
