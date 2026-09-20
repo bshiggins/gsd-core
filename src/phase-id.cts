@@ -77,8 +77,9 @@ const PHASE_NUMBER_TOKEN_SOURCE = '\\d+[A-Z]?(?:\\.\\d+)*';
 // dependencies. The `-` separator deliberately extracts range ENDPOINTS only
 // ("Phase 1-3" → 1, 3) — the pre-#4764 behavior; interior enumeration stays
 // out (a range's middle is not written as a reference).
-const PHASE_DEP_REF_SOURCE =
-  `\\bphases?\\s+(${PHASE_NUMBER_TOKEN_SOURCE}(?:(?:\\s*,\\s*(?:and\\s+)?|\\s+and\\s+|\\s*&\\s*|\\s+(?:to|through)\\s+|\\s*-\\s*)${PHASE_NUMBER_TOKEN_SOURCE})*)`;
+const PHASE_DEP_TOKEN_LIST_SOURCE =
+  `${PHASE_NUMBER_TOKEN_SOURCE}(?:(?:\\s*,\\s*(?:and\\s+)?|\\s+and\\s+|\\s*&\\s*|\\s+(?:to|through)\\s+|\\s*-\\s*)${PHASE_NUMBER_TOKEN_SOURCE})*`;
+const PHASE_DEP_REF_SOURCE = `\\bphases?\\s+(${PHASE_DEP_TOKEN_LIST_SOURCE})`;
 
 // #2528 review: the CASE-FLEXIBLE renderings of the two sources above, for call
 // sites that scan directory names (where a project code or a variant suffix may
@@ -621,8 +622,9 @@ function parsePhaseId(input: string): PhaseId {
  * Bracket repositories additionally accept the four identity spellings their
  * readers and writers expose: `[CODE.MM] NN`, `CODE.MM-NN`,
  * `[CODE.MM] Phase NN`, and a value consisting only of bare `NN`. Qualified
- * spellings retain project+milestone+phase identity in canonical display form;
- * bare tokens remain bare for active-milestone resolution by the consumer.
+ * spellings retain project+milestone+phase identity in canonical display form,
+ * including every continuation token in one qualified list; bare tokens remain
+ * bare for active-milestone resolution by the consumer.
  * Bracket identity recognition is composed from phaseHeadingPrefixSrcFor and
  * parsePhaseId; this function owns no second bracket-id regex.
  */
@@ -634,10 +636,11 @@ function extractPhaseDependencyTokens(prose: string, convention?: string | null)
   const tokenRe = new RegExp(PHASE_NUMBER_TOKEN_SOURCE, convention === 'bracket' ? 'gi' : 'g');
   let refMatch: RegExpExecArray | null;
   while ((refMatch = legacyRefRe.exec(input)) !== null) {
+    const referenceStart = refMatch.index + refMatch[0].length - refMatch[1].length;
     tokenRe.lastIndex = 0;
     let tokenMatch: RegExpExecArray | null;
     while ((tokenMatch = tokenRe.exec(refMatch[1])) !== null) {
-      found.push({ index: refMatch.index + tokenMatch.index, token: tokenMatch[0] });
+      found.push({ index: referenceStart + tokenMatch.index, token: tokenMatch[0] });
     }
   }
 
@@ -646,23 +649,29 @@ function extractPhaseDependencyTokens(prose: string, convention?: string | null)
   }
 
   const bracketDisplayRe = new RegExp(
-    `${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, 'bracket', true)}(${PHASE_NUMBER_TOKEN_SOURCE})`,
+    `${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, 'bracket', true)}(${PHASE_DEP_TOKEN_LIST_SOURCE})`,
     'gi',
   );
   let displayMatch: RegExpExecArray | null;
   while ((displayMatch = bracketDisplayRe.exec(input)) !== null) {
     if (!displayMatch[1]) continue;
-    try {
-      const id = parsePhaseId(`[${foldBracketId(displayMatch[1])}] ${displayMatch[2]}`);
-      found.push({
-        index: displayMatch.index,
-        token: renderPhaseId(id),
-      });
-      qualifiedRanges.push({ start: displayMatch.index, end: displayMatch.index + displayMatch[0].length });
-    } catch {
-      // Read-tolerant heading grammar may recognize a non-canonical spelling;
-      // only parsePhaseId-approved identities become dependency authority.
+    const tokenList = displayMatch[2];
+    const tokenListStart = displayMatch.index + displayMatch[0].length - tokenList.length;
+    tokenRe.lastIndex = 0;
+    let tokenMatch: RegExpExecArray | null;
+    while ((tokenMatch = tokenRe.exec(tokenList)) !== null) {
+      try {
+        const id = parsePhaseId(`[${foldBracketId(displayMatch[1])}] ${tokenMatch[0]}`);
+        found.push({
+          index: tokenListStart + tokenMatch.index,
+          token: renderPhaseId(id),
+        });
+      } catch {
+        // Read-tolerant heading grammar may recognize a non-canonical spelling;
+        // only parsePhaseId-approved identities become dependency authority.
+      }
     }
+    qualifiedRanges.push({ start: displayMatch.index, end: displayMatch.index + displayMatch[0].length });
   }
 
   const chunks = input.matchAll(/\S+/g);

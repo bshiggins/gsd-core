@@ -269,6 +269,34 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     }
   });
 
+  test('init manager waits for every phase in a qualified dependency list', () => {
+    const dir = project('adr-612-bracket-manager-qualified-list-');
+    writeBracketFixture(dir);
+    markBracketPhaseComplete(dir, '01', 'foundation');
+    fs.appendFileSync(
+      planning(dir, 'ROADMAP.md'),
+      [
+        '',
+        '### [CK.02] 02: Incomplete prerequisite',
+        '',
+        '**Goal:** Remains incomplete',
+        '',
+        '### [CK.02] 03: Blocked follow-up',
+        '',
+        '**Goal:** Must wait',
+        '**Depends on:** [CK.02] Phase 01 and 02',
+        '',
+      ].join('\n'),
+    );
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-02-incomplete-prerequisite'), { recursive: true });
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-03-blocked-follow-up'), { recursive: true });
+
+    const phase = managerPhase(dir, '03');
+    assert.deepEqual(phase.dep_phases, ['[CK.02] 01', '[CK.02] 02']);
+    assert.equal(phase.deps_satisfied, false);
+    assert.equal(phase.is_next_to_discuss, false);
+  });
+
   test('phase add emits a canonical bracket heading and directory', () => {
     const dir = project();
     writeBracketFixture(dir);
