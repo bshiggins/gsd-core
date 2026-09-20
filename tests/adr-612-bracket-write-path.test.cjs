@@ -310,7 +310,7 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     const dir = project('adr-612-bracket-legacy-read-');
     writeBracketFixture(dir);
     run(['phase', 'add', 'New Work'], dir);
-    fs.rmSync(planning(dir, 'phases', 'CK.02-01-foundation'), { recursive: true });
+    cleanup(planning(dir, 'phases', 'CK.02-01-foundation'));
     fs.writeFileSync(
       planning(dir, 'phases', 'CK.02-02-new-work', '02-01-PLAN.md'),
       '---\nwave: 1\n---\n',
