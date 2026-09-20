@@ -2259,6 +2259,43 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     }
   });
 
+  test('removes and renumbers manager-readable bold checklist rows with no space after the colon', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '- [ ] **[CK.02] 01:Keep**',
+        '- [ ] **[CK.02] 02:Remove**',
+        '- [ ] **[CK.02] 03:Next**',
+        '',
+        '### [CK.02] 01: Keep',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Remove',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Next',
+        '**Goal:** renumber',
+        '',
+      ],
+      [
+        ['CK.02-01-keep', []],
+        ['CK.02-02-remove', []],
+        ['CK.02-03-next', []],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    assert.equal(roadmap.includes('- [ ] **[CK.02] 02:Remove**'), false);
+    assert.equal(roadmap.includes('- [ ] **[CK.02] 02:Next**'), true);
+    assert.equal(roadmap.includes('- [ ] **[CK.02] 03:Next**'), false);
+  });
+
   // #4304 round 7 (W1): bracketMilestoneOwnTableEnd anchored ONLY at the
   // milestone heading itself and stopped at the very NEXT heading of level
   // <= 2, regardless of what it was — so a "## Notes" aside sitting between

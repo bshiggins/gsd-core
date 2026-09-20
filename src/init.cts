@@ -116,6 +116,7 @@ const {
   parsePhaseId,
   renderPhaseId,
   phaseHeadingPrefixSrcFor,
+  parsePhaseChecklistLine,
   PHASE_HEADING_BASELINE,
 } = phaseId;
 const { pruneOrphanedWorktrees } = worktreeSafety;
@@ -2874,14 +2875,9 @@ function cmdInitManager(cwd: string, raw: boolean): void {
   // getMilestonePhaseFilter window check (which also never excluded
   // sentinels, unlike the owner).
   const _checkboxStates = new Map<string, boolean>();
-  const _cbPattern = new RegExp(
-    `-\\s*\\[(x| )\\]\\s*.*${phaseHeadingPrefix}(${PHASE_NUMBER_TOKEN_SOURCE})[:\\s]`,
-    'gi',
-  );
-  let _cbMatch: RegExpExecArray | null;
-  while ((_cbMatch = _cbPattern.exec(content)) !== null) {
-    const phaseGroup = capturesBracketId ? 3 : 2;
-    _checkboxStates.set(_cbMatch[phaseGroup], _cbMatch[1].toLowerCase() === 'x');
+  for (const line of content.split(/\r?\n/)) {
+    const checkbox = parsePhaseChecklistLine(line, phaseIdConvention);
+    if (checkbox) _checkboxStates.set(checkbox.phaseToken, checkbox.checked);
   }
 
   // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).

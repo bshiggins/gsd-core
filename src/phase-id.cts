@@ -389,6 +389,44 @@ function phaseHeadingPrefixSrcFor(
   return `(?:${bracketAlt}|${base})`;
 }
 
+type PhaseChecklistLine = {
+  checked: boolean;
+  bracketId?: string;
+  phaseToken: string;
+};
+
+/**
+ * Parse one roadmap phase-checkbox row through the same grammar used by the
+ * manager and destructive writers. The historical manager spelling permits
+ * arbitrary presentation text (including bold markers) between the checkbox
+ * and phase intro, and treats either whitespace or a colon immediately after
+ * the phase token as the boundary. Returning semantic fields keeps consumers
+ * from depending on capture-group offsets.
+ */
+function parsePhaseChecklistLine(
+  line: string,
+  convention?: string | null,
+): PhaseChecklistLine | null {
+  const capturesBracketId = convention === 'bracket';
+  const intro = phaseHeadingPrefixSrcFor(
+    PHASE_HEADING_BASELINE.LABEL_ONLY,
+    convention,
+    capturesBracketId,
+  );
+  const pattern = new RegExp(
+    `-\\s*\\[([xX ])\\]\\s*.*?${intro}(${PHASE_NUMBER_TOKEN_SOURCE})`
+      + `${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s])`,
+    'i',
+  );
+  const match = pattern.exec(line);
+  if (!match) return null;
+  return {
+    checked: match[1].toLowerCase() === 'x',
+    bracketId: capturesBracketId ? match[2] : undefined,
+    phaseToken: capturesBracketId ? match[3] : match[2],
+  };
+}
+
 function stripProjectCodePrefix(value: unknown, caseInsensitive = true): string {
   const input = String(value);
   const re = caseInsensitive ? PROJECT_CODE_PREFIX_STRIP_RE_I : PROJECT_CODE_PREFIX_STRIP_RE;
@@ -1812,6 +1850,7 @@ export = {
   BASE_PHASE_LABEL_PREFIX_SRC,
   PHASE_HEADING_BASELINE,
   phaseHeadingPrefixSrcFor,
+  parsePhaseChecklistLine,
   bracketQualifiedIntroSrcFor,
   foldBracketId,
   bracketQualifiedKey,

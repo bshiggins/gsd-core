@@ -54,6 +54,7 @@ const {
   renderMilestoneId,
   toDir,
   phaseHeadingPrefixSrcFor,
+  parsePhaseChecklistLine,
   PHASE_HEADING_BASELINE,
   OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
   OPTIONAL_PHASE_TAG_SOURCE,
@@ -2072,16 +2073,11 @@ function scanExistingBracketDecimalPhaseNumbers(
   // heading. Match that same phase-intro grammar here so ROADMAP-only children
   // still reserve their number. Fenced examples are documentation, not live
   // inventory.
-  const checklistPattern = new RegExp(
-    `^[ \\t]*-[ \\t]*\\[[ xX]\\][ \\t]*.*${intro}`
-      + `(${PHASE_NUMBER_TOKEN_SOURCE})${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s])`,
-    'i',
-  );
   const fencedLines = fencedRoadmapLineNumbers(roadmapContent);
   for (const [index, line] of roadmapContent.split('\n').entries()) {
     if (fencedLines.has(index + 1)) continue;
-    const match = checklistPattern.exec(line.replace(/\r$/, ''));
-    if (match) addRoadmapToken(match[1], match[2]);
+    const checklist = parsePhaseChecklistLine(line.replace(/\r$/, ''), 'bracket');
+    if (checklist) addRoadmapToken(checklist.bracketId, checklist.phaseToken);
   }
   return decimalSet;
 }
@@ -3498,21 +3494,16 @@ const BRACKET_OWNED_TAG_SRC = '(?:[ \\t]*\\([^)\\r\\n]{0,200}\\))?';
 // own source (phaseHeadingPrefixSrcFor's bracket alternative) with the `i`
 // flag — `BRACKET_PROJECT_CODE_SRC` is deliberately spelled `[A-Z]...` on the
 // understanding that recognition folds case at compile time, never in the
-// source. Round 6 derived the SOURCE correctly here but compiled these three
-// `new RegExp(...)` calls with no flags at all, so `[ck.02] 02:`,
+// source. Round 6 derived the SOURCE correctly here but compiled the owned-line
+// regular expressions with no flags at all, so `[ck.02] 02:`,
 // `[CK.02] phase 02:` and `[CK.02] PHASE 02:` (case variants the read
 // grammar and this PR's own `phase insert`/`phase add` already accept) never
-// classified as owned lines here — the owning heading/checklist/progress row
-// for those spellings was never recognized as belonging to the phase being
-// removed.
+// classified as owned lines here. Headings and progress cells still compile
+// this source locally; checklist rows route through parsePhaseChecklistLine,
+// the same semantic reader used by init manager.
 const BRACKET_HEADING_LINE_RE = new RegExp(
   `^ {0,3}#{2,4}[ \\t]*${BRACKET_OWNED_PHASE_INTRO_SRC}`
   + `${BRACKET_OWNED_PHASE_TOKEN_CAPTURE_SRC}${BRACKET_OWNED_TAG_SRC}[ \\t]*:`,
-  'i',
-);
-const BRACKET_CHECKLIST_LINE_RE = new RegExp(
-  `^[ \\t]*[-*][ \\t]+\\[[ xX]\\][ \\t]+\\*{0,2}${BRACKET_OWNED_PHASE_INTRO_SRC}`
-  + `${BRACKET_OWNED_PHASE_TOKEN_CAPTURE_SRC}${BRACKET_OWNED_TAG_SRC}[ \\t]*:?\\*{0,2}(?:[ \\t]|$)`,
   'i',
 );
 const BRACKET_CELL_ID_RE = new RegExp(
@@ -3539,8 +3530,11 @@ function splitRoadmapLineRecords(content: string): RoadmapLineRecord[] {
   return records;
 }
 
-function phaseIdFromOwnedLineMatch(match: RegExpExecArray | null): BracketRoadmapPhaseId | null {
-  if (!match?.[1] || !match[2]) return null;
+function phaseIdFromOwnedParts(
+  bracketId: string | undefined,
+  phaseNumber: string | undefined,
+): BracketRoadmapPhaseId | null {
+  if (!bracketId || !phaseNumber) return null;
   try {
     // #4304 (B1): parsePhaseId's own display-form regex requires an
     // uppercase project code and checks canonicality by requiring the
@@ -3567,18 +3561,23 @@ function phaseIdFromOwnedLineMatch(match: RegExpExecArray | null): BracketRoadma
     // legacy M-NN letter suffix) falls through unchanged, which still fails
     // parsePhaseId's own grammar precisely as before — this only widens
     // acceptance to spellings phaseToken itself accepts.
-    const canonicalNumber = phaseToken(match[2]) ?? match[2];
-    return parsePhaseId(`[${foldBracketId(match[1])}] ${canonicalNumber}`);
+    const canonicalNumber = phaseToken(phaseNumber) ?? phaseNumber;
+    return parsePhaseId(`[${foldBracketId(bracketId)}] ${canonicalNumber}`);
   } catch {
     return null;
   }
+}
+
+function phaseIdFromOwnedLineMatch(match: RegExpExecArray | null): BracketRoadmapPhaseId | null {
+  return phaseIdFromOwnedParts(match?.[1], match?.[2]);
 }
 
 function classifyBracketOwnedLine(line: string): BracketOwnedLine {
   const headingId = phaseIdFromOwnedLineMatch(BRACKET_HEADING_LINE_RE.exec(line));
   if (headingId) return { kind: 'heading', id: headingId };
 
-  const checklistId = phaseIdFromOwnedLineMatch(BRACKET_CHECKLIST_LINE_RE.exec(line));
+  const checklist = parsePhaseChecklistLine(line, 'bracket');
+  const checklistId = phaseIdFromOwnedParts(checklist?.bracketId, checklist?.phaseToken);
   if (checklistId) return { kind: 'checklist', id: checklistId };
 
   if (/^[ \t]*\|/.test(line)) {
