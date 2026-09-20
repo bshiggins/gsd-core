@@ -156,13 +156,19 @@ interface PhaseDirectoryLookup {
 
 /**
  * Resolve the convention and active bracket identity once for every current-
- * checkout phase-directory lookup. Legacy callers receive the exact historical
+ * checkout phase-directory lookup. A caller-provided convention takes priority
+ * over config resolution. Legacy callers receive the exact historical
  * normalization and no context. A partially configured bracket repo degrades
  * to the ambiguity-safe unqualified matcher rather than inventing an identity.
  */
-function resolvePhaseDirectoryLookup(cwd: string, phase: unknown): PhaseDirectoryLookup {
+function resolvePhaseDirectoryLookup(
+  cwd: string,
+  phase: unknown,
+  conventionOverride?: string | null,
+): PhaseDirectoryLookup {
   const legacyNormalized = normalizePhaseName(phase);
-  if (resolvePhaseIdConvention(cwd) !== 'bracket') {
+  const resolvedConvention = conventionOverride ?? resolvePhaseIdConvention(cwd);
+  if (resolvedConvention !== 'bracket') {
     return {
       normalized: legacyNormalized,
       legacyNormalized: undefined,
@@ -483,7 +489,12 @@ function findPhaseInternal(cwd: string, phase: unknown, convention?: string | nu
   if (!phase) return null;
 
   const phasesDir = path.join(planningDir(cwd), 'phases');
-  const { normalized, legacyNormalized, convention, bracketContext } = resolvePhaseDirectoryLookup(cwd, phase);
+  const {
+    normalized,
+    legacyNormalized,
+    convention: lookupConvention,
+    bracketContext,
+  } = resolvePhaseDirectoryLookup(cwd, phase, convention);
 
   const relPhasesDir = toPosixPath(path.relative(cwd, phasesDir));
   // #4801: convention threaded through to the matcher (see searchPhaseInDir).
@@ -491,7 +502,7 @@ function findPhaseInternal(cwd: string, phase: unknown, convention?: string | nu
     phasesDir,
     relPhasesDir,
     normalized,
-    convention,
+    lookupConvention,
     bracketContext,
     legacyNormalized,
   );
@@ -512,7 +523,7 @@ function findPhaseInternal(cwd: string, phase: unknown, convention?: string | nu
       archivePath,
       relBase,
       normalized,
-      convention,
+      lookupConvention,
       null,
       legacyNormalized,
     );
