@@ -61,7 +61,7 @@ const {
   OPTIONAL_PHASE_TAG_SOURCE,
   PHASE_NUMBER_TOKEN_SOURCE,
   BRACKET_DIR_PREFIX_SRC,
-  bracketQualifiedIntroSrcFor,
+  tokenizePhaseDependencyReferences,
   foldBracketId,
 } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -3728,48 +3728,26 @@ function replaceQualifiedBracketReference(
   newId: BracketRoadmapPhaseId,
 ): string {
   const boundary = 'A-Za-z0-9.-';
-  const oldNumber = bracketPhaseNumberSrc(oldId);
   const newNumber = bracketPhaseNumberSrc(newId);
-  // #4304 (W3) / (B1): the shared read grammar
-  // (phaseHeadingPrefixSrcFor's bracketAlt, now factored out as
-  // bracketAltIntroSrcFor / bracketQualifiedIntroSrcFor in phase-id.cts)
-  // admits an OPTIONAL "Phase " label between the bracket and the phase
-  // number, zero-or-more spacing, and any case — pinned at
-  // tests/adr-612-bracket-grammar.test.cjs:644 — so "[CK.02] Phase 03",
-  // "[CK.02] PHASE 03", "[ck.02] 03" and the no-space "[CK.02]03" are all
-  // real phase references, not merely the label-less, uppercase,
-  // one-space-or-more spelling this regex hand-composed before. Building
-  // the intro from the single-owner helper (instead of `[ \t]+` and a
-  // case-sensitive bracket) and compiling with `i` is what makes this
-  // rewriter accept exactly what the classifier above, `roadmap get-phase`,
-  // and `roadmap analyze` already do.
-  //
-  // #4304 (B1): the NUMBER itself used to be anchored on the
-  // canonical literal (`escapeRegex(oldNumber)`), so "[CK.02] 3" never
-  // matched a mapping entry whose canonical oldNumber is "03" — the exact
-  // half-applied-remove defect. Capture the number through the SAME
-  // tolerant grammar the read side and classifyBracketOwnedLine use
-  // (PHASE_NUMBER_TOKEN_SOURCE) and canonicalize it (phaseToken) before
-  // comparing to oldNumber, so "3", "003", and "02.1"-style captures are all
-  // recognized as the SAME identity a canonical "03"/"02.01" is. GSD never
-  // WRITES a non-canonical spelling, so a matched rewrite always emits the
-  // canonical newNumber — a renumbered mention is not "preserved" in the
-  // old, non-canonical spelling it happened to be written in. The intro's
-  // own spelling (label, case, spacing) is still captured and re-emitted
-  // verbatim (group 1).
-  const qualifiedRe = new RegExp(
-    `(?<![${boundary}])(${bracketQualifiedIntroSrcFor(oldId.project, oldId.milestone)})(${PHASE_NUMBER_TOKEN_SOURCE})(?![${boundary}])`,
-    'gi',
-  );
+  const oldDisplay = renderPhaseId(oldId);
+  const qualified = tokenizePhaseDependencyReferences(line, 'bracket')
+    .filter((token) => {
+      if (token.kind !== 'qualified' || token.token !== oldDisplay) return false;
+      const before = token.referenceStart === undefined ? '' : line[token.referenceStart - 1] ?? '';
+      const after = line[token.end] ?? '';
+      return !new RegExp(`[${boundary}]`).test(before) && !new RegExp(`[${boundary}]`).test(after);
+    })
+    .sort((a, b) => b.start - a.start);
+  let rewritten = line;
+  for (const token of qualified) {
+    rewritten = rewritten.slice(0, token.start) + newNumber + rewritten.slice(token.end);
+  }
   const oldDash = dashBracketPhaseId(oldId);
   const newDash = dashBracketPhaseId(newId);
-  return line
-    .replace(qualifiedRe, (matchText: string, intro: string, numberTok: string) =>
-      (phaseToken(numberTok) === oldNumber ? `${intro}${newNumber}` : matchText))
-    .replace(
-      new RegExp(`(?<![${boundary}])${escapeRegex(oldDash)}(?![${boundary}])`, 'g'),
-      () => newDash,
-    );
+  return rewritten.replace(
+    new RegExp(`(?<![${boundary}])${escapeRegex(oldDash)}(?![${boundary}])`, 'g'),
+    () => newDash,
+  );
 }
 
 function replaceBareBracketArtifactReference(
@@ -4123,37 +4101,11 @@ function bracketOwnProgressSectionRanges(
 const BRACKET_REPORT_TOLERANT_BOUNDARY_SRC = '(?!\\d|\\.\\d)';
 
 function bracketQualifiedMentionedInLine(line: string, id: BracketRoadmapPhaseId): boolean {
-  const tolerant = BRACKET_REPORT_TOLERANT_BOUNDARY_SRC;
-  // #4304 (B5 follow-up) / (B1): admit the SAME optional
-  // "Phase " label, zero-or-more spacing and any case
-  // replaceQualifiedBracketReference now rewrites — built from the SAME
-  // single-owner bracketQualifiedIntroSrcFor (phase-id.cts), never a
-  // second, independently-typed label grammar. Round 6 fixed the label
-  // itself but still hand-typed `[ \t]+` with no `i` flag, so a labeled
-  // mention using the read grammar's OTHER accepted spellings — lowercase
-  // code ("[ck.02] 02"), uppercase label ("[CK.02] PHASE 02"), or no space
-  // at all ("[CK.02]02") — was still invisible to this detector. Without
-  // this, a labeled/case/no-space mention of the REMOVED identity itself
-  // ("**Depends on:** [ck.02] phase 02", which no rewriter ever touches
-  // because 02 no longer exists) was never recognized as dangling.
-  //
-  // #4304 (B1): the NUMBER was still anchored on the canonical
-  // literal, so "**Depends on:** [CK.02] 2" (a non-canonical mention of the
-  // just-removed identity) was invisible here too — capture it through the
-  // same tolerant PHASE_NUMBER_TOKEN_SOURCE grammar the rewriter above now
-  // uses, and canonicalize (phaseToken) before comparing to this id's own
-  // canonical number.
-  const targetNumber = bracketPhaseNumberSrc(id);
-  const qualifiedRe = new RegExp(
-    `${bracketQualifiedIntroSrcFor(id.project, id.milestone)}(${PHASE_NUMBER_TOKEN_SOURCE})${tolerant}`,
-    'gi',
-  );
-  let match: RegExpExecArray | null;
-  while ((match = qualifiedRe.exec(line)) !== null) {
-    if (phaseToken(match[1]) === targetNumber) return true;
-  }
+  const targetDisplay = renderPhaseId(id);
+  if (tokenizePhaseDependencyReferences(line, 'bracket')
+    .some((token) => token.kind === 'qualified' && token.token === targetDisplay)) return true;
   const dash = dashBracketPhaseId(id);
-  return new RegExp(`(?<![A-Za-z0-9.-])${escapeRegex(dash)}${tolerant}`).test(line);
+  return new RegExp(`(?<![A-Za-z0-9.-])${escapeRegex(dash)}${BRACKET_REPORT_TOLERANT_BOUNDARY_SRC}`).test(line);
 }
 
 function bracketLegacyPhaseMentionedInLine(line: string, id: BracketRoadmapPhaseId): boolean {

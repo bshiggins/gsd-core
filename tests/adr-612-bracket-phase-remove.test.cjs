@@ -141,6 +141,14 @@ function seedLegacyOnlyRemovalTarget({ legacyDirectory, legacyHeading }) {
   );
 }
 
+function managerPhase(phaseNumber) {
+  const result = runGsdTools(['init', 'manager'], tmpDir);
+  assert.equal(result.success, true, result.error || result.output);
+  const phase = JSON.parse(result.output).phases.find((row) => row.number === phaseNumber);
+  assert.ok(phase, `manager must report phase ${phaseNumber}`);
+  return phase;
+}
+
 describe('#4304 / ADR-612 bracket phase remove', () => {
   beforeEach(() => {
     tmpDir = createTempProject('adr-612-remove-');
@@ -182,6 +190,95 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(roadmap.includes('| [CK.02] 03 | 0/1 | Planned |'), true);
     assert.equal(roadmap.includes('| [CK.02] 04 | 0/1 | Planned |'), false);
     assert.equal((roadmap.match(/^\| \[CK\.02\] 02 \|/gm) ?? []).length, 1);
+  });
+
+  test('renumbers every continuation token in a qualified dependency list', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '- [x] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '- [ ] [CK.02] 04: Four',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** complete prerequisite',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** incomplete prerequisite',
+        '',
+        '### [CK.02] 04: Four',
+        '**Goal:** blocked dependent',
+        '**Depends on:** [CK.02] Phase 01 and 03',
+        '',
+      ],
+      [
+        ['CK.02-01-one', ['01-01-PLAN.md', '01-01-SUMMARY.md', '01-VERIFICATION.md']],
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', []],
+        ['CK.02-04-four', []],
+      ],
+    );
+    fs.writeFileSync(
+      planning('phases', 'CK.02-01-one', '01-VERIFICATION.md'),
+      '---\nstatus: passed\n---\n',
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    assert.equal(roadmap.includes('**Depends on:** [CK.02] Phase 01 and 02'), true);
+    assert.equal(roadmap.includes('**Depends on:** [CK.02] Phase 01 and 03'), false);
+
+    const dependent = managerPhase('03');
+    assert.deepEqual(dependent.dep_phases, ['[CK.02] 01', '[CK.02] 02']);
+    assert.equal(dependent.deps_satisfied, false);
+    assert.equal(dependent.is_next_to_discuss, false);
+  });
+
+  test('reports a removed identity in a qualified-list continuation token', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** dependent',
+        '**Depends on:** [CK.02] Phase 01 and 02',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', []],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    const dependsLine = splitLines(roadmap).indexOf('**Depends on:** [CK.02] Phase 01 and 02') + 1;
+
+    assert.ok(dependsLine > 0, 'dangling continuation token must survive');
+    assert.deepEqual(out.references_left_untouched, [dependsLine]);
   });
 
   test('refuses before mutation when bracket removal would rename into a symlinked directory path', () => {

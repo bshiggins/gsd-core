@@ -630,6 +630,7 @@ function parsePhaseId(input: string): PhaseId {
  */
 type PhaseDependencyToken = {
   kind: 'legacy' | 'qualified' | 'qualified-fallback' | 'identity' | 'bare';
+  referenceStart?: number;
   start: number;
   end: number;
   token: string;
@@ -688,12 +689,19 @@ function tokenizePhaseDependencyReferences(
         const id = parsePhaseId(`[${foldBracketId(displayMatch[1])}] ${numeric}`);
         found.push({
           kind: 'qualified',
+          referenceStart: displayMatch.index,
           start,
           end,
           token: renderPhaseId(id),
         });
       } catch {
-        found.push({ kind: 'qualified-fallback', start, end, token: tokenMatch[0] });
+        found.push({
+          kind: 'qualified-fallback',
+          referenceStart: displayMatch.index,
+          start,
+          end,
+          token: tokenMatch[0],
+        });
       }
     }
   }
