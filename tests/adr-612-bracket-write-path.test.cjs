@@ -88,6 +88,12 @@ function writeBracketFixture(dir) {
   fs.mkdirSync(planning(dir, 'phases', 'CK.02-01-foundation'), { recursive: true });
 }
 
+function writeEmptyBracketFixture(dir) {
+  writeConfig(dir, 'bracket');
+  fs.writeFileSync(planning(dir, 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+  fs.writeFileSync(planning(dir, 'ROADMAP.md'), '# Roadmap\n\n## [CK.02] v2.0 — Foundation\n');
+}
+
 function markBracketPhaseComplete(dir, token, slug) {
   const phaseDir = planning(dir, 'phases', `CK.02-${token}-${slug}`);
   fs.mkdirSync(phaseDir, { recursive: true });
@@ -669,6 +675,46 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     const archivedListed = run(['phase', 'list-plans', '03'], dir);
     assert.equal(archivedListed.phase_dir, '.planning/milestones/v1.0-phases/03-archived-legacy');
     assert.equal(archivedListed.plans.length, 1);
+  });
+
+  test('phase add allocates above a reader-resolvable legacy directory', () => {
+    const dir = project('adr-612-bracket-add-legacy-reservation-');
+    writeEmptyBracketFixture(dir);
+    fs.mkdirSync(planning(dir, 'phases', 'CK-01-existing'), { recursive: true });
+
+    const before = run(['find-phase', '01'], dir);
+    assert.equal(before.directory, '.planning/phases/CK-01-existing');
+
+    const out = run(['phase', 'add', 'New'], dir);
+
+    assert.equal(out.phase_number, 2);
+    assert.equal(out.directory, '.planning/phases/CK.02-02-new');
+    assert.equal(fs.existsSync(planning(dir, 'phases', 'CK.02-02-new')), true);
+  });
+
+  test('phase add-batch allocates above a reader-resolvable legacy directory', () => {
+    const dir = project('adr-612-bracket-batch-legacy-reservation-');
+    writeEmptyBracketFixture(dir);
+    fs.mkdirSync(planning(dir, 'phases', 'CK-01-existing'), { recursive: true });
+
+    const out = run(['phase', 'add-batch', '--descriptions', '["Alpha","Beta"]'], dir);
+
+    assert.deepEqual(out.phases.map((phase) => phase.phase_number), [2, 3]);
+    assert.deepEqual(
+      out.phases.map((phase) => phase.directory),
+      ['.planning/phases/CK.02-02-alpha', '.planning/phases/CK.02-03-beta'],
+    );
+  });
+
+  test('a prior milestone qualified directory does not reserve the active milestone number', () => {
+    const dir = project('adr-612-bracket-add-prior-milestone-control-');
+    writeEmptyBracketFixture(dir);
+    fs.mkdirSync(planning(dir, 'phases', 'CK.01-09-prior'), { recursive: true });
+
+    const out = run(['phase', 'add', 'First Current'], dir);
+
+    assert.equal(out.phase_number, 1);
+    assert.equal(out.directory, '.planning/phases/CK.02-01-first-current');
   });
 
   // #4304 round 12 (W1): readSubdirectories intentionally ignores symlinks,

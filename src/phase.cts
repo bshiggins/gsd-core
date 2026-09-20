@@ -47,6 +47,7 @@ const {
   comparePhaseNum,
   matchPhaseDirs,
   phaseNumberForMatch,
+  phaseKeyFromDir,
   isSentinelPhaseId,
   scopeToPhase,
   parsePhaseId,
@@ -1469,17 +1470,44 @@ function bracketIdsInContext(
   return found;
 }
 
+/**
+ * Return the top-level phase number when the active bracket reader resolves
+ * this one directory. The reader prefers an exact project+milestone bracket
+ * identity, falls back to migration-window legacy spellings, and excludes a
+ * qualified directory owned by another milestone. Allocation must reserve
+ * that same universe or a newly emitted bracket directory can shadow work the
+ * reader resolved immediately before the write.
+ */
+function readerResolvableBracketDirectoryPhaseNumber(
+  dir: string,
+  context: BracketWriteContext,
+): number | null {
+  const phaseKey = phaseKeyFromDir(dir, 'bracket');
+  if (!/^\d+$/.test(phaseKey)) return null;
+  const phase = Number(phaseKey);
+  if (!Number.isSafeInteger(phase) || isSentinelPhaseId(phase)) return null;
+  const { matches } = matchPhaseDirs([dir], phaseKey, 'bracket', context);
+  return matches.includes(dir) ? phase : null;
+}
+
+function addBracketRoadmapPhaseNumbers(content: string, used: Set<number>): void {
+  for (const token of scanMilestonePhaseIds(content, 'bracket')) {
+    const leading = String(token).split('.')[0];
+    if (/^\d+$/.test(leading)) used.add(Number(leading));
+  }
+}
+
 function collectBracketPhaseNumbers(
   roadmapContent: string,
   phasesDir: string,
   context: BracketWriteContext,
 ): Set<number> {
   const used = new Set<number>();
-  for (const token of scanMilestonePhaseIds(roadmapContent, 'bracket')) {
-    const leading = String(token).split('.')[0];
-    if (/^\d+$/.test(leading)) used.add(Number(leading));
+  addBracketRoadmapPhaseNumbers(roadmapContent, used);
+  for (const dir of readSubdirectories(phasesDir, true)) {
+    const phase = readerResolvableBracketDirectoryPhaseNumber(dir, context);
+    if (phase !== null) used.add(phase);
   }
-  for (const { id } of bracketIdsInContext(phasesDir, context)) used.add(Number(id.phase));
   used.delete(0);
   used.delete(999);
   return used;
@@ -1491,9 +1519,11 @@ function collectBracketPhaseNumbers(
  * there is invisible to the cwd-scoped sources (headers, bullets, on-disk
  * dirs). Legacy identities scan each sibling's phase-directory names and whole
  * ROADMAP because their phase number has no milestone qualifier. Bracket ids
- * are globally qualified, so their directory scan is restricted to the same
- * project+milestone identity; each writer creates that directory in the same
- * planning lock as its ROADMAP entry.
+ * reserve the same reader-resolvable union used locally: exact identities for
+ * the active project+milestone, migration-window legacy directory spellings,
+ * and accepted ROADMAP spellings when the sibling is on that same bracket
+ * identity. Each writer creates its directory in the same planning lock as its
+ * ROADMAP entry.
  *
  * #4225 — the horizon must track the ALLOCATION scope. When the allocation is
  * workstream-scoped (`--ws`/`GSD_WORKSTREAM`, resolved into the env before
@@ -1550,16 +1580,8 @@ function collectSiblingWorktreePhaseNums(
     try {
       for (const entry of fs.readdirSync(path.join(siblingPlanningDir(wt), 'phases'))) {
         if (bracketContext) {
-          try {
-            const id = parsePhaseId(entry) as { project: string; milestone: string; phase: string };
-            if (
-              id.project === bracketContext.project
-              && id.milestone === bracketContext.milestone
-              && !isSentinelPhaseId(Number(id.phase))
-            ) {
-              used.add(Number(id.phase));
-            }
-          } catch { /* migration-window legacy directory */ }
+          const phase = readerResolvableBracketDirectoryPhaseNumber(entry, bracketContext);
+          if (phase !== null) used.add(phase);
           continue;
         }
         const match = entry.match(dirNumPattern);
@@ -1571,8 +1593,17 @@ function collectSiblingWorktreePhaseNums(
       /* worktree has no .planning (or no copy of this scope) — normal, contributes nothing */
     }
     try {
-      if (bracketContext) continue;
       const content = fs.readFileSync(path.join(siblingPlanningDir(wt), 'ROADMAP.md'), 'utf-8');
+      if (bracketContext) {
+        const siblingContext = bracketWriteContext(wt, loadConfig(wt));
+        if (
+          siblingContext.project === bracketContext.project
+          && siblingContext.milestone === bracketContext.milestone
+        ) {
+          addBracketRoadmapPhaseNumbers(extractCurrentMilestone(content, wt), used);
+        }
+        continue;
+      }
       let m: RegExpExecArray | null;
       headerPattern.lastIndex = 0;
       while ((m = headerPattern.exec(content)) !== null) {
