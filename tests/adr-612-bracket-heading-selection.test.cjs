@@ -122,6 +122,8 @@ const BASE_SITES = [
   // before locating its target phase's heading.
   { file: 'phase.cts', site: 'cmdPhaseInsert headingIntro',
     baseline: B.LABEL_ONLY, src: 'Phase\\s+' },
+  { file: 'phase.cts', site: 'getRoadmapModeForPhase headingIntro',
+    baseline: B.LABEL_ONLY, src: 'Phase\\s+' },
   { file: 'phase.cts', site: 'bracket phase-remove owned-line classifier',
     baseline: B.LABEL_ONLY, src: 'Phase\\s+' },
   // #3309/#3310 moved the health reads out of verify.cts and into the parsed
