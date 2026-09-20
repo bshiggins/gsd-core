@@ -1565,7 +1565,7 @@
     {
       "id": "SEAM.phase-remove-window-guard-fences.owns",
       "klass": "SEAM",
-      "value": "fencedRoadmapLineNumbers is the shared CommonMark fence exclusion for bracketPhaseOwnSubphases and bracketOwnedLineOutsideActiveWindow; fenced headings and checklists are documentation, never phase inventory or outside-window ownership evidence, and an unclosed fence owns through EOF (#4304)",
+      "value": "fencedRoadmapLineNumbers is the shared CommonMark fence exclusion for computeBracketRenumberMapping, bracketPhaseOwnSubphases, bracketOwnedLineOutsideActiveWindow, and updateRoadmapAfterBracketPhaseRemoval; fenced headings, checklists, tables, and references are documentation, never live phase inventory, mutation targets, or outside-window ownership evidence, and an unclosed fence owns through EOF (#4304)",
       "line": 33
     },
     {
