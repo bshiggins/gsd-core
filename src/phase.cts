@@ -3123,23 +3123,29 @@ function bracketPhaseOwnSubphases(
 function archivedOrClosedMilestoneLineStarts(content: string): Set<number> {
   const historical = new Set<number>();
   const headingsByOffset = new Map(tokenizeHeadings(content).map((heading) => [heading.offset, heading]));
+  const fencedLineNumbers = fencedRoadmapLineNumbers(content);
   let detailsBlock: { text: string; lineStarts: number[] } | null = null;
   let closedHeadingLevel = 0;
   for (const line of splitRoadmapLineRecords(content)) {
     const text = line.text;
-    if (!detailsBlock && /^\s*<details\b/i.test(text)) {
+    const fenced = fencedLineNumbers.has(line.lineNumber);
+    if (!detailsBlock && !fenced && /^\s*<details\b/i.test(text)) {
       detailsBlock = { text: '', lineStarts: [] };
     }
     if (detailsBlock) {
       detailsBlock.text += line.text + line.eol;
       detailsBlock.lineStarts.push(line.start);
       if (closedHeadingLevel > 0) historical.add(line.start);
-      if (/<\/details\s*>/i.test(text)) {
+      if (!fenced && /<\/details\s*>/i.test(text)) {
         if (isClosedMilestoneDetails(detailsBlock.text)) {
           for (const lineStart of detailsBlock.lineStarts) historical.add(lineStart);
         }
         detailsBlock = null;
       }
+      continue;
+    }
+    if (fenced) {
+      if (closedHeadingLevel > 0) historical.add(line.start);
       continue;
     }
     const heading = headingsByOffset.get(line.start);
@@ -3960,26 +3966,36 @@ function lineContainsTrackedBracketIdentity(
  */
 function bracketPhaseDeletionContainerBoundary(content: string, targetOffset: number): number | null {
   const detailsTagRe = /<\/?details\b[^>]*>/gi;
+  const lines = splitRoadmapLineRecords(content);
+  const fencedLineNumbers = fencedRoadmapLineNumbers(content);
+  const lineForOffset = (offset: number): RoadmapLineRecord | null => {
+    let found: RoadmapLineRecord | null = null;
+    for (const line of lines) {
+      if (line.start > offset) break;
+      found = line;
+    }
+    return found;
+  };
+  const isFencedOffset = (offset: number): boolean => {
+    const line = lineForOffset(offset);
+    return line !== null && fencedLineNumbers.has(line.lineNumber);
+  };
   let targetDepth = 0;
   let match: RegExpExecArray | null;
   while ((match = detailsTagRe.exec(content)) !== null && match.index < targetOffset) {
+    if (isFencedOffset(match.index)) continue;
     if (/^<\/details\b/i.test(match[0])) targetDepth = Math.max(0, targetDepth - 1);
     else targetDepth += 1;
   }
 
   detailsTagRe.lastIndex = targetOffset;
   let depth = targetDepth;
-  const lines = splitRoadmapLineRecords(content);
   const lineStartFor = (offset: number): number => {
-    let start = 0;
-    for (const line of lines) {
-      if (line.start > offset) break;
-      start = line.start;
-    }
-    return start;
+    return lineForOffset(offset)?.start ?? 0;
   };
 
   while ((match = detailsTagRe.exec(content)) !== null) {
+    if (isFencedOffset(match.index)) continue;
     const closing = /^<\/details\b/i.test(match[0]);
     if (targetDepth === 0 && !closing) return lineStartFor(match.index);
     if (closing) {

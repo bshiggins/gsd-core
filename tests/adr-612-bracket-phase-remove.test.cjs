@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+const { scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
 let tmpDir;
 
@@ -1533,6 +1534,115 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(roadmap.includes('### [CK.02] 02: Two'), false);
     assert.equal(roadmap.includes(archive), true, 'shipped archive must remain byte-identical');
     assert.deepEqual(JSON.parse(result.output).references_left_untouched, []);
+  });
+
+  // #4304 round 19 (B1): a details tag inside a fenced HTML example is
+  // documentation, not a container boundary. Treating it as live markup cut
+  // deletion off inside the target section, leaving the closing fence behind;
+  // that unterminated fence then hid the live sibling from renumbering.
+  test('ignores fenced details examples when bounding bracket section deletion', () => {
+    const fencedExample = [
+      '```html',
+      '<details>',
+      '<summary>Example only</summary>',
+      '<p>Literal documentation</p>',
+      '</details>',
+      '```',
+    ].join('\n');
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove the whole section',
+        '',
+        fencedExample,
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '',
+      ],
+      [
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', []],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    assert.equal(roadmap.includes(fencedExample), false, 'target-owned example must be deleted');
+    assert.equal(roadmap.includes('```'), false, 'no orphaned fence delimiter may survive');
+    assert.equal(
+      scanFencedBlocks(roadmap.split('\n')).some((block) => block.closeLineIdx === -1),
+      false,
+      'resulting Markdown must not contain an unterminated fence',
+    );
+    assert.equal(roadmap.includes('### [CK.02] 02: Two'), false);
+    assert.equal(roadmap.includes('### [CK.02] 02: Three'), true);
+    assert.equal(roadmap.includes('### [CK.02] 03: Three'), false);
+    assert.deepEqual(fs.readdirSync(planning('phases')).sort(), ['CK.02-02-three']);
+    assert.deepEqual(out.references_left_untouched, []);
+  });
+
+  // #4304 round 19 inventory: the shared historical classifier also tracked
+  // details tags on raw lines. A fenced fake close inside a shipped archive
+  // must not end protection before the archive's real closing tag.
+  test('ignores fenced details tags while protecting shipped history', () => {
+    fs.writeFileSync(planning('STATE.md'), '---\nmilestone: v2.1\n---\n');
+    const archive = [
+      '<details>',
+      '<summary>✅ [CK.02] v2.0 — SHIPPED 2026-01-01</summary>',
+      '',
+      '```html',
+      '</details>',
+      '```',
+      '',
+      '### [CK.02] 03: Archived Three',
+      '',
+      '**Depends on:** [CK.02] 03',
+      '',
+      '</details>',
+    ].join('\n');
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.1 — Current 🚧',
+        '',
+        archive,
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '',
+      ],
+      [
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', []],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    assert.equal(roadmap.includes(archive), true, 'shipped archive must remain byte-identical');
+    assert.equal(roadmap.includes('### [CK.02] 02: Two'), false);
+    assert.equal(roadmap.includes('### [CK.02] 02: Three'), true);
+    assert.equal(roadmap.includes('### [CK.02] 03: Three'), false);
+    assert.deepEqual(fs.readdirSync(planning('phases')).sort(), ['CK.02-02-three']);
+    assert.deepEqual(out.references_left_untouched, []);
   });
 
   test('still stops bracket deletion at the next same-level live heading', () => {
