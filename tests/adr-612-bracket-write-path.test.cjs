@@ -259,6 +259,76 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.notEqual(analyzedPhase.disk_status, 'no_directory');
   });
 
+  // #4304 round 17 (W1): next-decimal's base lookup was bracket-aware, but
+  // its child inventory still used the legacy directory/heading patterns.
+  // That split answer proposed the already-occupied 02.01 slot as "02.1".
+  test('phase next-decimal inventories canonical bracket subphases from directories and headings', () => {
+    const dir = project('adr-612-bracket-next-decimal-occupied-');
+    writeConfig(dir, 'bracket');
+    fs.writeFileSync(planning(dir, 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    fs.writeFileSync(
+      planning(dir, 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '### [CK.02] 02: Parent',
+        '**Goal:** parent',
+        '',
+        '### [CK.02] 02.01: Child',
+        '**Goal:** occupied',
+        '',
+      ].join('\n'),
+    );
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-02-parent'), { recursive: true });
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-02.01-child'), { recursive: true });
+
+    const out = run(['phase', 'next-decimal', '02'], dir);
+
+    assert.equal(out.found, true);
+    assert.equal(out.base_phase, '02');
+    assert.equal(out.next, '02.02');
+    assert.deepEqual(out.existing, ['02.01']);
+  });
+
+  test('phase next-decimal returns canonical 02.01 for a bracket parent with no children', () => {
+    const dir = project('adr-612-bracket-next-decimal-empty-');
+    writeConfig(dir, 'bracket');
+    fs.writeFileSync(planning(dir, 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    fs.writeFileSync(
+      planning(dir, 'ROADMAP.md'),
+      '# Roadmap\n\n## [CK.02] v2.0 — Current\n\n### [CK.02] 02: Parent\n**Goal:** parent\n',
+    );
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-02-parent'), { recursive: true });
+
+    const out = run(['phase', 'next-decimal', '02'], dir);
+
+    assert.equal(out.found, true);
+    assert.equal(out.next, '02.01');
+    assert.deepEqual(out.existing, []);
+  });
+
+  test('phase next-decimal preserves legacy decimal spelling and inventory', () => {
+    const dir = project('adr-612-legacy-next-decimal-control-');
+    writeConfig(dir, 'sequential');
+    fs.mkdirSync(planning(dir, 'phases', 'CK-02-parent'), { recursive: true });
+    fs.mkdirSync(planning(dir, 'phases', 'CK-02.1-directory-child'), { recursive: true });
+    fs.writeFileSync(
+      planning(dir, 'ROADMAP.md'),
+      '# Roadmap\n\n### Phase 02: Parent\n\n### Phase 02.2: Heading child\n',
+    );
+
+    const out = run(['phase', 'next-decimal', '02'], dir);
+
+    assert.deepEqual(out, {
+      found: true,
+      base_phase: '02',
+      next: '02.3',
+      existing: ['02.1', '02.2'],
+    });
+  });
+
   test('milestone completion recognizes bracket phase directories as started', () => {
     const dir = project('adr-612-bracket-milestone-complete-');
     writeConfig(dir, 'bracket');

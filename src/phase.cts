@@ -380,13 +380,30 @@ function cmdPhasesList(cwd: string, options: PhaseListOptions, raw: boolean): vo
 function cmdPhaseNextDecimal(cwd: string, basePhase: string, raw: boolean): void {
   const phasesDir = path.join(planningDir(cwd), 'phases');
   const normalized = normalizePhaseName(basePhase);
-  // #4304: the existence half is a phase-directory lookup. Only bracket mode
-  // widens its grammar; legacy conventions retain the historical call shape.
+  // #4304: base existence and decimal-child inventory must resolve through
+  // the same convention. Round 17 found the former was bracket-aware while
+  // the latter still called the legacy-only scanner, proposing an occupied
+  // bracket sub-phase. Legacy conventions retain their historical call and
+  // output spelling byte-for-byte.
   const convention = resolvePhaseIdConvention(cwd) === 'bracket' ? 'bracket' : undefined;
+  const bracketContext = convention === 'bracket'
+    ? bracketWriteContext(cwd, loadConfig(cwd))
+    : null;
 
   try {
     let baseExists = false;
     const decimalSet = new Set<number>();
+    const scanDecimals = (roadmapContent: string): void => {
+      const found = bracketContext
+        ? scanExistingBracketDecimalPhaseNumbers(
+          phasesDir,
+          roadmapContent ? extractCurrentMilestone(roadmapContent, cwd) : '',
+          normalized,
+          bracketContext,
+        )
+        : scanExistingDecimalPhaseNumbers(phasesDir, roadmapContent, normalized);
+      for (const n of found) decimalSet.add(n);
+    };
 
     if (fs.existsSync(phasesDir)) {
       const entries = fs.readdirSync(phasesDir, { withFileTypes: true });
@@ -398,31 +415,32 @@ function cmdPhaseNextDecimal(cwd: string, basePhase: string, raw: boolean): void
     if (fs.existsSync(roadmapPath)) {
       try {
         const roadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
-        for (const n of scanExistingDecimalPhaseNumbers(phasesDir, roadmapContent, normalized)) {
-          decimalSet.add(n);
-        }
+        scanDecimals(roadmapContent);
       } catch {
         // ROADMAP.md read failure is non-fatal — fall back to the directory-only
         // scan (empty rawContent) so on-disk decimal directories are still counted.
-        for (const n of scanExistingDecimalPhaseNumbers(phasesDir, '', normalized)) {
-          decimalSet.add(n);
-        }
+        scanDecimals('');
       }
     } else {
-      for (const n of scanExistingDecimalPhaseNumbers(phasesDir, '', normalized)) {
-        decimalSet.add(n);
-      }
+      scanDecimals('');
     }
 
     const existingDecimals = Array.from(decimalSet)
       .sort((a, b) => a - b)
-      .map((n) => `${normalized}.${n}`);
+      .map((n) => bracketContext
+        ? bracketArtifactToken(bracketPhaseId(bracketContext, normalized, n))
+        : `${normalized}.${n}`);
 
     let nextDecimal: string;
     if (decimalSet.size === 0) {
-      nextDecimal = `${normalized}.1`;
+      nextDecimal = bracketContext
+        ? bracketArtifactToken(bracketPhaseId(bracketContext, normalized, 1))
+        : `${normalized}.1`;
     } else {
-      nextDecimal = `${normalized}.${Math.max(...decimalSet) + 1}`;
+      const next = Math.max(...decimalSet) + 1;
+      nextDecimal = bracketContext
+        ? bracketArtifactToken(bracketPhaseId(bracketContext, normalized, next))
+        : `${normalized}.${next}`;
     }
 
     output(
