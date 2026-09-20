@@ -3060,6 +3060,75 @@ function fencedRoadmapLineNumbers(content: string): Set<number> {
   return fenced;
 }
 
+type RoadmapDetailsTag = {
+  offset: number;
+  end: number;
+  lineStart: number;
+  closing: boolean;
+  depthBefore: number;
+  depthAfter: number;
+};
+
+type RoadmapDetailsBlock = {
+  start: number;
+  end: number;
+  startLine: number;
+  endLine: number;
+  text: string;
+};
+
+/**
+ * #4304: single fence-aware details-container tracker for bracket writers.
+ * Every real tag carries its nesting depth before and after the tag, and every
+ * matched block spans its own opening through the corresponding close. A
+ * nested close therefore cannot terminate its enclosing block. Unclosed
+ * blocks still contribute depth to the tag stream so deletion stays bounded.
+ */
+function trackRoadmapDetails(content: string): {
+  tags: RoadmapDetailsTag[];
+  blocks: RoadmapDetailsBlock[];
+} {
+  const lines = splitRoadmapLineRecords(content);
+  const fencedLineNumbers = fencedRoadmapLineNumbers(content);
+  const tags: RoadmapDetailsTag[] = [];
+  const blocks: RoadmapDetailsBlock[] = [];
+  const stack: RoadmapDetailsTag[] = [];
+  const detailsTagRe = /<\/?details\b[^>]*>/gi;
+  let lineIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = detailsTagRe.exec(content)) !== null) {
+    while (lineIndex + 1 < lines.length && lines[lineIndex + 1].start <= match.index) lineIndex += 1;
+    const line = lines[lineIndex];
+    if (!line || fencedLineNumbers.has(line.lineNumber)) continue;
+
+    const closing = /^<\/details\b/i.test(match[0]);
+    const depthBefore = stack.length;
+    let opening: RoadmapDetailsTag | undefined;
+    if (closing) opening = stack.pop();
+    const tag: RoadmapDetailsTag = {
+      offset: match.index,
+      end: match.index + match[0].length,
+      lineStart: line.start,
+      closing,
+      depthBefore,
+      depthAfter: stack.length + (closing ? 0 : 1),
+    };
+    if (!closing) stack.push(tag);
+    tags.push(tag);
+
+    if (opening) {
+      blocks.push({
+        start: opening.offset,
+        end: tag.end,
+        startLine: opening.lineStart,
+        endLine: tag.lineStart,
+        text: content.slice(opening.offset, tag.end),
+      });
+    }
+  }
+  return { tags, blocks };
+}
+
 /**
  * #4304 (W2): does the bracket phase about to be removed (an
  * INTEGER phase, never a subphase itself — `phase remove NN.SS` is a
@@ -3116,36 +3185,46 @@ function bracketPhaseOwnSubphases(
  * grammar before the marker predicate is applied, so an ordinary phase title
  * containing FAILED or ✅ never opens or resets a historical section.
  *
- * This is the single owner consumed by both the active-window safety guard and
- * bracket removal's rewrite pass. Historical lines are evidence of neither an
- * active-window mismatch nor a reference that removal may rewrite or delete.
+ * Details membership comes from the shared fence-aware depth tracker, so every
+ * line remains archived while any enclosing details block is a closed
+ * milestone archive. This classifier is consumed by both the active-window
+ * safety guard and bracket removal's rewrite pass. Historical lines are
+ * evidence of neither an active-window mismatch nor a reference that removal
+ * may rewrite or delete.
  */
 function archivedOrClosedMilestoneLineStarts(content: string): Set<number> {
   const historical = new Set<number>();
   const headingsByOffset = new Map(tokenizeHeadings(content).map((heading) => [heading.offset, heading]));
   const fencedLineNumbers = fencedRoadmapLineNumbers(content);
-  let detailsBlock: { text: string; lineStarts: number[] } | null = null;
-  let closedHeadingLevel = 0;
-  for (const line of splitRoadmapLineRecords(content)) {
-    const text = line.text;
-    const fenced = fencedLineNumbers.has(line.lineNumber);
-    if (!detailsBlock && !fenced && /^\s*<details\b/i.test(text)) {
-      detailsBlock = { text: '', lineStarts: [] };
-    }
-    if (detailsBlock) {
-      detailsBlock.text += line.text + line.eol;
-      detailsBlock.lineStarts.push(line.start);
-      if (closedHeadingLevel > 0) historical.add(line.start);
-      if (!fenced && /<\/details\s*>/i.test(text)) {
-        if (isClosedMilestoneDetails(detailsBlock.text)) {
-          for (const lineStart of detailsBlock.lineStarts) historical.add(lineStart);
-        }
-        detailsBlock = null;
+  const lines = splitRoadmapLineRecords(content);
+  const details = trackRoadmapDetails(content);
+  const historicalDetailsLineStarts = new Set<number>();
+  for (const block of details.blocks) {
+    if (!isClosedMilestoneDetails(block.text)) continue;
+    for (const line of lines) {
+      if (line.start >= block.startLine && line.start <= block.endLine) {
+        historicalDetailsLineStarts.add(line.start);
       }
+    }
+  }
+  const detailsTagsByLine = new Map<number, RoadmapDetailsTag[]>();
+  for (const tag of details.tags) {
+    const lineTags = detailsTagsByLine.get(tag.lineStart) ?? [];
+    lineTags.push(tag);
+    detailsTagsByLine.set(tag.lineStart, lineTags);
+  }
+  let detailsDepth = 0;
+  let closedHeadingLevel = 0;
+  for (const line of lines) {
+    const fenced = fencedLineNumbers.has(line.lineNumber);
+    const lineTags = detailsTagsByLine.get(line.start) ?? [];
+    const insideDetails = detailsDepth > 0 || lineTags.some((tag) => !tag.closing);
+    if (historicalDetailsLineStarts.has(line.start) || closedHeadingLevel > 0) historical.add(line.start);
+    if (lineTags.length > 0) detailsDepth = lineTags[lineTags.length - 1].depthAfter;
+    if (insideDetails) {
       continue;
     }
     if (fenced) {
-      if (closedHeadingLevel > 0) historical.add(line.start);
       continue;
     }
     const heading = headingsByOffset.get(line.start);
@@ -3959,51 +4038,22 @@ function lineContainsTrackedBracketIdentity(
 /**
  * #4304: maximum deletion boundary for a selected bracket phase heading.
  * The active milestone range is the outer bound. Inside it, an HTML details
- * boundary wins sooner: preserve the closing tag of a container that already
- * encloses the target, or the opening tag of a container that starts after an
- * outside target. Nested details opened after an enclosed target do not count
- * until their own close has restored the target's original depth.
+ * boundary wins sooner. The shared fence-aware depth tracker preserves the
+ * closing tag of the exact container that encloses the target, or the opening
+ * tag of a container that starts after an outside target. Nested details do
+ * not count until their own close has restored the target's original depth.
  */
 function bracketPhaseDeletionContainerBoundary(content: string, targetOffset: number): number | null {
-  const detailsTagRe = /<\/?details\b[^>]*>/gi;
-  const lines = splitRoadmapLineRecords(content);
-  const fencedLineNumbers = fencedRoadmapLineNumbers(content);
-  const lineForOffset = (offset: number): RoadmapLineRecord | null => {
-    let found: RoadmapLineRecord | null = null;
-    for (const line of lines) {
-      if (line.start > offset) break;
-      found = line;
-    }
-    return found;
-  };
-  const isFencedOffset = (offset: number): boolean => {
-    const line = lineForOffset(offset);
-    return line !== null && fencedLineNumbers.has(line.lineNumber);
-  };
+  const tags = trackRoadmapDetails(content).tags;
   let targetDepth = 0;
-  let match: RegExpExecArray | null;
-  while ((match = detailsTagRe.exec(content)) !== null && match.index < targetOffset) {
-    if (isFencedOffset(match.index)) continue;
-    if (/^<\/details\b/i.test(match[0])) targetDepth = Math.max(0, targetDepth - 1);
-    else targetDepth += 1;
+  for (const tag of tags) {
+    if (tag.offset >= targetOffset) break;
+    targetDepth = tag.depthAfter;
   }
-
-  detailsTagRe.lastIndex = targetOffset;
-  let depth = targetDepth;
-  const lineStartFor = (offset: number): number => {
-    return lineForOffset(offset)?.start ?? 0;
-  };
-
-  while ((match = detailsTagRe.exec(content)) !== null) {
-    if (isFencedOffset(match.index)) continue;
-    const closing = /^<\/details\b/i.test(match[0]);
-    if (targetDepth === 0 && !closing) return lineStartFor(match.index);
-    if (closing) {
-      if (targetDepth > 0 && depth === targetDepth) return lineStartFor(match.index);
-      depth = Math.max(0, depth - 1);
-    } else {
-      depth += 1;
-    }
+  for (const tag of tags) {
+    if (tag.offset < targetOffset) continue;
+    if (targetDepth === 0 && !tag.closing) return tag.lineStart;
+    if (targetDepth > 0 && tag.closing && tag.depthBefore === targetDepth) return tag.lineStart;
   }
   return null;
 }

@@ -1645,6 +1645,62 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, []);
   });
 
+  // #4304 round 20 (B1): a shipped archive can contain nested release-note
+  // details before its phase inventory. Closing the nested block must not end
+  // the outer archive's historical ownership or let removal select its phase.
+  test('tracks nested details depth while protecting a shipped archive', () => {
+    fs.writeFileSync(planning('STATE.md'), '---\nmilestone: v2.1\n---\n');
+    const archive = [
+      '<details>',
+      '<summary>✅ [CK.02] v2.0 — SHIPPED 2026-01-01</summary>',
+      '',
+      '<details>',
+      '<summary>Release notes</summary>',
+      '',
+      'Historical release-note body.',
+      '',
+      '</details>',
+      '',
+      '### [CK.02] 02: Archived Two',
+      '',
+      '**Goal:** preserve archived phase bytes',
+      '',
+      '</details>',
+    ].join('\n');
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.1 — Current 🚧',
+        '',
+        archive,
+        '',
+        '### [CK.02] 02: Live Two',
+        '**Goal:** remove live target',
+        '',
+        '### [CK.02] 03: Live Three',
+        '**Goal:** renumber once',
+        '',
+      ],
+      [
+        ['CK.02-02-live-two', []],
+        ['CK.02-03-live-three', []],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    assert.equal(roadmap.includes(archive), true, 'nested shipped archive must remain byte-identical');
+    assert.equal(roadmap.includes('### [CK.02] 02: Live Two'), false);
+    assert.equal((roadmap.match(/^### \[CK\.02\] 02: Live Three$/gm) ?? []).length, 1);
+    assert.equal(roadmap.includes('### [CK.02] 03: Live Three'), false);
+    assert.deepEqual(fs.readdirSync(planning('phases')).sort(), ['CK.02-02-live-three']);
+    assert.deepEqual(out.references_left_untouched, []);
+  });
+
   test('still stops bracket deletion at the next same-level live heading', () => {
     replaceSeed(
       [
