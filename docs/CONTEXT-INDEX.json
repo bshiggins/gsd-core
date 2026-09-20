@@ -1279,7 +1279,7 @@
     {
       "id": "SEAM.phase-checklist-reader.owns",
       "klass": "SEAM",
-      "value": "parsePhaseChecklistLine is the shared semantic parser for manager checkbox state, bracket next-decimal ROADMAP inventory, and removal ownership, including a colon with no following whitespace (#4304)"
+      "value": "parsePhaseChecklistLine is the shared semantic parser for manager checkbox state, bracket next-decimal ROADMAP inventory, and removal ownership; bracket mode uses the lazy identity-aware match (including a colon with no following whitespace), while every non-bracket convention preserves the manager's historical greedy last-Phase selection (#4304)"
     },
     {
       "id": "SEAM.phase-dependency-extraction-compatibility.enforced-by",
