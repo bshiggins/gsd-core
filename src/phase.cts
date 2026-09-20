@@ -2039,25 +2039,63 @@ function canonicalizeBracketPhaseArgument(
  * Reuse bracket removal's historical-section classifier and owned-line parser:
  * the latter derives its bracket intro from phase-id.cts's exported read
  * grammar, then `sameBracketPhaseId` qualifies project, milestone, and the
- * canonical phase number together. No bare-number fallback exists here.
+ * canonical phase number together. The insertion boundary comes from the same
+ * fence-aware heading tokens, never a raw next-heading regex. A fenced block
+ * that contains a phase-heading example is kept byte-identical and begins a
+ * protected boundary, so the live inserted heading lands before the example
+ * instead of inside its fence. No bare-number fallback exists here.
  */
 function activeBracketInsertHeading(
   content: string,
   targetId: BracketRoadmapPhaseId,
   ranges: ReturnType<typeof currentMilestoneRawRanges>,
-): { start: number; length: number; rangeEnd: number } | null {
+): { start: number; length: number; insertAt: number } | null {
   if (!ranges) return null;
   const historicalLineStarts = archivedOrClosedMilestoneLineStarts(content);
   const fencedLineNumbers = fencedRoadmapLineNumbers(content);
   const searchRanges = [ranges.primary, ...(ranges.details ? [ranges.details] : [])];
   const lines = splitRoadmapLineRecords(content);
+  const lineByStart = new Map(lines.map((line) => [line.start, line]));
+  const headings = tokenizeHeadings(content);
+  const rawLines = content.split('\n');
+  const protectedFenceStarts = scanFencedBlocks(rawLines)
+    .filter((block) => {
+      const lastIndex = block.closeLineIdx === -1 ? rawLines.length - 1 : block.closeLineIdx;
+      for (let index = block.openLineIdx + 1; index < lastIndex; index++) {
+        if (classifyBracketOwnedLine(rawLines[index].replace(/\r$/, '')).kind === 'heading') return true;
+      }
+      return false;
+    })
+    .map((block) => lines[block.openLineIdx]?.start)
+    .filter((start): start is number => start !== undefined);
   for (const range of searchRanges) {
-    for (const line of lines) {
-      if (line.start < range.start || line.start >= range.end) continue;
-      if (historicalLineStarts.has(line.start) || fencedLineNumbers.has(line.lineNumber)) continue;
+    const liveHeadings = headings.filter(
+      (heading) => heading.offset >= range.start
+        && heading.offset < range.end
+        && !historicalLineStarts.has(heading.offset),
+    );
+    for (let headingIndex = 0; headingIndex < liveHeadings.length; headingIndex++) {
+      const heading = liveHeadings[headingIndex];
+      const line = lineByStart.get(heading.offset);
+      if (!line || fencedLineNumbers.has(line.lineNumber)) continue;
       const owned = classifyBracketOwnedLine(line.text);
       if (owned.kind !== 'heading' || !owned.id || !sameBracketPhaseId(owned.id, targetId)) continue;
-      return { start: line.start, length: line.text.length + line.eol.length, rangeEnd: range.end };
+
+      let insertAt = range.end;
+      for (const nextHeading of liveHeadings.slice(headingIndex + 1)) {
+        const nextLine = lineByStart.get(nextHeading.offset);
+        if (!nextLine) continue;
+        if (classifyBracketOwnedLine(nextLine.text).kind !== 'heading') continue;
+        insertAt = nextHeading.offset;
+        break;
+      }
+      for (const fenceStart of protectedFenceStarts) {
+        if (fenceStart > heading.offset && fenceStart < insertAt) insertAt = fenceStart;
+      }
+      for (const historicalStart of historicalLineStarts) {
+        if (historicalStart > heading.offset && historicalStart < insertAt) insertAt = historicalStart;
+      }
+      return { start: line.start, length: line.text.length + line.eol.length, insertAt };
     }
   }
   return null;
@@ -2302,7 +2340,7 @@ function cmdPhaseInsert(
         : [{ start: 0, end: rawContent.length }];
 
       let searchStart = bracketHeading?.start ?? headerSearchRanges[0].start;
-      let searchEnd = bracketHeading?.rangeEnd ?? headerSearchRanges[0].end;
+      let searchEnd = bracketHeading?.insertAt ?? headerSearchRanges[0].end;
       let headerLength = bracketHeading?.length ?? 0;
       if (!bracketHeading) {
         let headerMatch: RegExpMatchArray | null = null;
@@ -2323,16 +2361,17 @@ function cmdPhaseInsert(
       }
 
       const headerIdx = searchStart;
-      const afterHeader = rawContent.slice(headerIdx + headerLength, searchEnd);
-      const nextPhaseMatch = afterHeader.match(
-        new RegExp(`\\r?\\n#{2,4}\\s+${headingIntro}\\d[\\d.]*`, 'i'),
-      );
-
       let insertIdx: number;
-      if (nextPhaseMatch) {
-        insertIdx = headerIdx + headerLength + (nextPhaseMatch.index as number);
+      if (bracketHeading) {
+        insertIdx = bracketHeading.insertAt;
       } else {
-        insertIdx = searchEnd;
+        const afterHeader = rawContent.slice(headerIdx + headerLength, searchEnd);
+        const nextPhaseMatch = afterHeader.match(
+          new RegExp(`\\r?\\n#{2,4}\\s+${headingIntro}\\d[\\d.]*`, 'i'),
+        );
+        insertIdx = nextPhaseMatch
+          ? headerIdx + headerLength + (nextPhaseMatch.index as number)
+          : searchEnd;
       }
 
       updatedContent =

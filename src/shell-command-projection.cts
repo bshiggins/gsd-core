@@ -1152,7 +1152,10 @@ function _normalizeMd(content: string): string {
     const prevTrimmed = prev.trimEnd();
     const trimmed = line.trimEnd();
     const isFenceLine = fenceRegex.test(trimmed);
-    if (/^#{1,6}\s/.test(trimmed) && i > 0 && prevTrimmed !== '' && prevTrimmed !== '---') result.push('');
+    // A heading- or list-shaped line inside a CommonMark fence is literal
+    // example content. The fence-state pass above already classifies it; do
+    // not apply document-structure spacing rules to those bytes.
+    if (!insideFence[i] && /^#{1,6}\s/.test(trimmed) && i > 0 && prevTrimmed !== '' && prevTrimmed !== '---') result.push('');
     if (isFenceLine && i > 0 && prevTrimmed !== '' && !insideFence[i] && (i === 0 || !insideFence[i - 1] || isFenceLine)) {
       if (i === 0 || !insideFence[i - 1]) result.push('');
     }
@@ -1166,9 +1169,9 @@ function _normalizeMd(content: string): string {
     // from the after-heading rule below. The after-a-bullet rule at the end
     // of this loop is a different transition (list→prose) and is unaffected.
     result.push(line);
-    if (/^#{1,6}\s/.test(trimmed) && i < lines.length - 1 && (lines[i + 1] ?? '').trimEnd() !== '') result.push('');
+    if (!insideFence[i] && /^#{1,6}\s/.test(trimmed) && i < lines.length - 1 && (lines[i + 1] ?? '').trimEnd() !== '') result.push('');
     if (/^```\s*$/.test(trimmed) && i > 0 && insideFence[i - 1] && i < lines.length - 1 && (lines[i + 1] ?? '').trimEnd() !== '') result.push('');
-    if (/^(\s*[-*+]\s|\s*\d+\.\s)/.test(line) && i < lines.length - 1) {
+    if (!insideFence[i] && /^(\s*[-*+]\s|\s*\d+\.\s)/.test(line) && i < lines.length - 1) {
       const next = lines[i + 1];
       if (next !== undefined && next.trimEnd() !== '' && !/^(\s*[-*+]\s|\s*\d+\.\s)/.test(next) && !/^\s/.test(next)) result.push('');
     }

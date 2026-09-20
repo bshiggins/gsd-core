@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 const { extractCurrentMilestone } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
+const { tokenizeHeadings } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
 const projects = new Set();
 
@@ -662,6 +663,60 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.equal(liveOne < inserted && inserted < liveTwo, true, 'insert must follow the live target heading');
     const current = extractCurrentMilestone(roadmap, dir);
     assert.equal(current.includes('### [CK.02] 01.01: Hotfix (INSERTED)'), true);
+  });
+
+  // #4304 round 17 (B1): round 16 made target selection fence-aware, but the
+  // subsequent next-heading boundary still searched raw bytes. A phase-shaped
+  // heading inside a fenced example therefore became the splice boundary and
+  // placed the new live phase inside documentation, where roadmap readers
+  // could not see it.
+  test('phase insert bounds the new bracket subphase before a fenced phase-heading example', () => {
+    const dir = project('adr-612-bracket-insert-fenced-boundary-');
+    writeConfig(dir, 'bracket');
+    fs.writeFileSync(planning(dir, 'STATE.md'), '---\nmilestone: v2.1\n---\n');
+    const fence = [
+      '```md',
+      '### [CK.02] 09: Example only',
+      '',
+      '**Goal:** documentation',
+      '```',
+    ].join('\n');
+    fs.writeFileSync(
+      planning(dir, 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.1 — Current',
+        '',
+        '### [CK.02] 01: Live One',
+        '**Goal:** keep',
+        '',
+        fence,
+        '',
+        '### [CK.02] 02: Live Two',
+        '**Goal:** keep',
+        '',
+      ].join('\n'),
+    );
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-01-live-one'), { recursive: true });
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-02-live-two'), { recursive: true });
+
+    const result = runGsdTools(['phase', 'insert', '01', 'Hotfix'], dir);
+    assert.equal(result.success, true, result.error || result.output);
+
+    const roadmap = fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8');
+    const persistedFenceStart = roadmap.indexOf('```md');
+    const persistedFenceEnd = roadmap.indexOf('```', persistedFenceStart + '```md'.length);
+    const persistedFence = roadmap.slice(persistedFenceStart, persistedFenceEnd + '```'.length);
+    assert.equal(persistedFence, fence, 'fenced example must remain byte-identical');
+    const liveOne = roadmap.indexOf('### [CK.02] 01: Live One');
+    const inserted = roadmap.indexOf('### [CK.02] 01.01: Hotfix (INSERTED)');
+    const fenceStart = roadmap.indexOf('```md');
+    assert.equal(liveOne < inserted && inserted < fenceStart, true, 'insert must land before the fence');
+
+    const current = extractCurrentMilestone(roadmap, dir);
+    const headingTexts = tokenizeHeadings(current).map((heading) => heading.text);
+    assert.equal(headingTexts.some((text) => text.startsWith('[CK.02] 01.01: Hotfix')), true);
   });
 
   test('phase insert refuses byte-identically when its only matching active-identity heading is archived', () => {
