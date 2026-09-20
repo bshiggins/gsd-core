@@ -471,8 +471,18 @@ function getRoadmapModeForPhase(cwd: string, phaseNum: string): string | null {
   const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
   const milestoneContent = extractCurrentMilestone(rawContent, cwd);
   const fullContent = stripShippedMilestones(rawContent);
+  const convention = resolvePhaseIdConvention(cwd);
+  // LABEL_ONLY preserves the legacy `Phase N:` reader while adding the
+  // opted-in bracket heading alternative for both the target and its boundary.
+  const headingIntro = phaseHeadingPrefixSrcFor(
+    PHASE_HEADING_BASELINE.LABEL_ONLY,
+    convention,
+  );
   const escapedPhase = phaseMarkdownRegexSource(phaseNum);
-  const phaseHeader = new RegExp(`#{2,4}\\s*Phase\\s+${escapedPhase}${OPTIONAL_PHASE_TAG_SOURCE}\\s*:`, 'i');
+  const phaseHeader = new RegExp(
+    `#{2,4}\\s*${headingIntro}${escapedPhase}${OPTIONAL_PHASE_TAG_SOURCE}\\s*:`,
+    'i',
+  );
 
   for (const content of [milestoneContent, fullContent]) {
     const headerMatch = content.match(phaseHeader);
@@ -480,7 +490,9 @@ function getRoadmapModeForPhase(cwd: string, phaseNum: string): string | null {
 
     const sectionStart = headerMatch.index;
     const rest = content.slice(sectionStart);
-    const nextHeader = rest.slice(headerMatch[0].length).match(/\n#{2,4}\s+Phase\s+\S/i);
+    const nextHeader = rest.slice(headerMatch[0].length).match(
+      new RegExp(`\\n#{2,4}\\s+${headingIntro}\\S`, 'i'),
+    );
     const sectionEnd = nextHeader
       ? sectionStart + headerMatch[0].length + (nextHeader.index as number)
       : content.length;

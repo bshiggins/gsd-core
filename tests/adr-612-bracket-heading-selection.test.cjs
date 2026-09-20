@@ -695,7 +695,7 @@ describe('#612 PR-2: every selector call site declares the right baseline (live 
   const EXPECTED = {
     'commands.cts': [1, 0],
     'init.cts': [0, 2],
-    'phase.cts': [0, 2],
+    'phase.cts': [0, 3],
     'roadmap.cts': [3, 3],
     'validate.cts': [1, 2],
     'state.cts': [0, 3],
