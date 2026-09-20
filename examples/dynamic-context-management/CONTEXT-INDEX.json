@@ -1475,7 +1475,7 @@
     {
       "id": "SEAM.bracket-roadmap-normalization.enforced-by",
       "klass": "SEAM",
-      "value": "test:tests/adr-612-bracket-write-path.test.cjs,test:tests/shell-command-projection-md-normalize.test.cjs",
+      "value": "test:tests/adr-612-bracket-write-path.test.cjs",
       "line": 36
     },
     {
