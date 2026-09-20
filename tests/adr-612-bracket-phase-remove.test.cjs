@@ -1581,7 +1581,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(roadmap.includes(fencedExample), false, 'target-owned example must be deleted');
     assert.equal(roadmap.includes('```'), false, 'no orphaned fence delimiter may survive');
     assert.equal(
-      scanFencedBlocks(roadmap.split('\n')).some((block) => block.closeLineIdx === -1),
+      scanFencedBlocks(splitLines(roadmap)).some((block) => block.closeLineIdx === -1),
       false,
       'resulting Markdown must not contain an unterminated fence',
     );
