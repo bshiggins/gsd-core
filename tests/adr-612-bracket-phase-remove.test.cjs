@@ -3325,9 +3325,8 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, []);
   });
 
-  // #4304 round 10 (B1, regression from round 9's own pre-mutation guard,
-  // .planning/2026-09-18-4773-opus-round9-correctness.json finding 1): the
-  // guard checked heading and checklist independently over the WHOLE
+  // #4304: the pre-mutation guard checked heading and checklist independently
+  // over the WHOLE
   // document with no notion of an archived/shipped section, so a same-code
   // point release (milestoneToken folds v2.0/v2.1 to one [CK.02]) whose
   // shipped checklist survives in the complete-milestone <details> archive
@@ -3727,8 +3726,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, []);
   });
 
-  // #4304 round 10 (W1, .planning/2026-09-18-4773-opus-round9-correctness.json
-  // finding 2): the round-9 guard was additionally gated on `targetDir`, so a
+  // #4304: the guard was additionally gated on `targetDir`, so a
   // ROADMAP-only target (a phase `phase add` created with no directory yet)
   // on a mislocated window still half-applied: later directories renamed and
   // their ROADMAP lines renumbered onto the target's identity while the
@@ -3780,8 +3778,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.match(result.error, /lies outside/i);
     assert.deepEqual(snapshotTree(planning()), before);
   });
-  // #4304 round 10 (W2, .planning/2026-09-18-4773-opus-round9-correctness.json
-  // finding 4): the second marker loop (`isBracketMilestoneBoundary(h.text,
+  // #4304: the second marker loop (`isBracketMilestoneBoundary(h.text,
   // h.level, null)`) admitted the ACTIVE milestone's own same-id, version-less
   // prose sub-heading ("### [CK.02] Notes") as a milestone marker in its own
   // right, so a shared "## Progress" table sitting after it — but still

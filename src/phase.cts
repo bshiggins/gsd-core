@@ -3386,9 +3386,7 @@ function bracketOwnedLineOutsideActiveWindow(
   let checklistInside = false;
   let firstOutsideHeading: { lineNumber: number; text: string } | null = null;
   let firstOutsideChecklist: { lineNumber: number; text: string } | null = null;
-  // #4304 (B1, regression from the guard above,
-  // .planning/2026-09-18-4773-opus-round9-correctness.json finding 1): a
-  // line archived inside <details> or sitting under a CLOSED milestone
+  // #4304: a line archived inside <details> or sitting under a CLOSED milestone
   // heading (isClosedMilestoneHeading — the SAME predicate
   // currentMilestoneRawRanges itself uses to skip a closed heading when
   // selecting the active one) is a SHIPPED milestone's own line — never
@@ -3919,8 +3917,7 @@ function bracketRecognizedMilestoneMarkers(content: string): number[] {
     // (src/roadmap-parser.cts) literally rather than importing a private
     // helper across the module boundary for one boolean test.
     if (/v\d+(?:\.\d+)*(?:[-.][A-Za-z0-9]+)*/i.test(h.text)) continue;
-    // #4304 (W2, .planning/2026-09-18-4773-opus-round9-correctness.json
-    // finding 4): a "(Phase Details)" heading is always a CONTINUATION of
+    // #4304: a "(Phase Details)" heading is always a CONTINUATION of
     // whatever milestone opened before it (`currentMilestoneRawRanges`'s own
     // `detailsMatch` grammar, src/roadmap-parser.cts:2288-2294), never a
     // second, separate milestone marker in its own right — the version loop
@@ -3989,14 +3986,12 @@ function bracketProgressSectionOwnedByOtherMilestone(
   // the document, because the positional scan alone cannot distinguish "this
   // table is the NEXT milestone's own dedicated section" from "this table is
   // shared and a later milestone heading simply comes after it in the file".
-  // Restored verbatim from the finder's scratch-verified one-line fix (the
-  // Opus correctness report, B1): with no own Progress heading at all, the active
-  // milestone has no OWN claim any Progress heading could be "instead of", so
+  // With no own Progress heading at all, the active milestone has no OWN claim
+  // any Progress heading could be "instead of", so
   // a shared table can never be misread as belonging to a different one.
   if (ownProgressSectionRanges.length === 0) return false;
 
-  // #4304 (W2, .planning/2026-09-18-4773-opus-round9-correctness.json
-  // finding 4): drop any marker lying STRICTLY inside the ACTIVE milestone's
+  // #4304: drop any marker lying STRICTLY inside the ACTIVE milestone's
   // own ranges — a heading inside the active's own window (a same-id prose
   // sub-heading like "### [CK.02] Notes", admitted by the boundary-predicate
   // scan above because it is bracket-shaped and version-less) never opens a
@@ -4557,8 +4552,7 @@ function cmdPhaseRemove(
   // attempt to fix the window's own selection (PR-6 / #4751 territory) —
   // only refuses instead of half-applying.
   //
-  // #4304 (W1, .planning/2026-09-18-4773-opus-round9-correctness.json
-  // finding 2): NOT additionally gated on `targetDir` — a ROADMAP-only
+  // #4304: NOT additionally gated on `targetDir` — a ROADMAP-only
   // target (a phase `phase add` created with no directory materialized yet)
   // on a mislocated window still half-applied under the `targetDir` gate:
   // later directories renamed and their ROADMAP lines renumbered onto the

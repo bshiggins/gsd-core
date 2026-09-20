@@ -102,7 +102,7 @@ describe('phase checklist grammar preserves the legacy greedy match outside brac
     }
   });
 
-  test('bracket mode keeps the lazy identity-aware match from round 23', () => {
+  test('bracket mode keeps the lazy identity-aware checklist match', () => {
     assert.deepStrictEqual(
       core.parsePhaseChecklistLine('- [x] [CK.02] 01: Prepare Phase 02: handoff', 'bracket'),
       { checked: true, bracketId: 'CK.02', phaseToken: '01' },

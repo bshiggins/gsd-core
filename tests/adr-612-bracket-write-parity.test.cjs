@@ -7,10 +7,8 @@
 // src/phase-id-display.cts). Before this fix, `bracketWriteContext`/
 // `bracketPhaseId` (src/phase.cts) and `phaseDisplayFor` (src/state.cts) each
 // re-derived "legacy vN.0 milestone / phase numeric -> bracket token" locally,
-// with semantics that silently diverged from the adapter on malformed input
-// (see the review at
-// planning/gsd-core/.planning/2026-09-16-4773-REVIEW-trek-e.md). This file
-// proves the write path and the adapter agree for every milestone/phase
+// with semantics that silently diverged from the adapter on malformed input.
+// This file proves the write path and the adapter agree for every milestone/phase
 // spelling in the matrix below, and that an adapter-rejected input is
 // rejected loudly by the write path rather than silently mis-canonicalized.
 
