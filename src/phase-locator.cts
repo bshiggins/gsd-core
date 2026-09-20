@@ -20,7 +20,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdModule = require('./phase-id.cjs');
-const { normalizePhaseName, matchPhaseDirs, phaseNumberForMatch, parsePhaseId, isSentinelPhaseId, comparePhaseNum } = phaseIdModule;
+const {
+  BRACKET_DIR_PREFIX_SRC,
+  comparePhaseNum,
+  foldBracketId,
+  isSentinelPhaseId,
+  matchPhaseDirs,
+  normalizePhaseName,
+  parsePhaseId,
+  phaseNumberForMatch,
+} = phaseIdModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import coreUtilsModule = require('./core-utils.cjs');
 const { readSubdirectories, getPhaseFileStats, extractCanonicalPlanId, toPosixPath, findUnsummarizedPlans } = coreUtilsModule;
@@ -40,6 +49,11 @@ const { getMilestonePhaseFilter } = roadmapParserModule;
 import planningScopeMod = require('./planning-scope.cjs');
 const { SCOPE } = planningScopeMod;
 type Scope = planningScopeMod.Scope;
+
+// #4304: result shaping must distinguish a canonical bracket directory from a
+// legacy directory that matchPhaseDirs deliberately still admits during a
+// bracket migration. Derive that distinction from the exported owner grammar.
+const BRACKET_DIRECTORY_PREFIX_RE = new RegExp(`^${BRACKET_DIR_PREFIX_SRC}`);
 
 // ─── Phase search types ───────────────────────────────────────────────────────
 
@@ -247,15 +261,20 @@ function searchPhaseInDir(
 
     const match = matches[0];
 
-    const phaseToken = phaseNumberForMatch(match, usedBareFallback, convention);
+    const isBracketDirectory = convention === 'bracket'
+      && BRACKET_DIRECTORY_PREFIX_RE.test(foldBracketId(match));
+    const resultConvention = isBracketDirectory ? 'bracket' : undefined;
+    const phaseToken = phaseNumberForMatch(match, usedBareFallback, resultConvention);
     const phaseNumber = phaseToken || normalized;
     let afterToken: string;
-    if (convention === 'bracket') {
+    if (isBracketDirectory) {
       const id = parsePhaseId(match);
       const idToken = `${id.phase}${id.subphase ? `.${id.subphase}` : ''}`;
       const bracketPrefix = `${id.project}.${id.milestone}-${idToken}`;
       afterToken = match.slice(bracketPrefix.length).replace(/^-/, '');
     } else {
+      // Exact pre-#4304 legacy shaping, including project-prefixed and bare
+      // fallback matches. Bracket mode changes selection, not these bytes.
       afterToken = match.slice(phaseToken ? phaseToken.length : 0).replace(/^-/, '');
     }
     const phaseName = afterToken || null;

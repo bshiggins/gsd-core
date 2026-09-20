@@ -58,6 +58,7 @@ const {
   OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
   OPTIONAL_PHASE_TAG_SOURCE,
   PHASE_NUMBER_TOKEN_SOURCE,
+  BRACKET_DIR_PREFIX_SRC,
   bracketQualifiedIntroSrcFor,
   foldBracketId,
 } = phaseIdMod;
@@ -156,6 +157,11 @@ const {
   withStateLock,
   updatePerformanceMetricsSection,
 } = stateMod;
+
+// #4304: matchPhaseDirs admits legacy directories under bracket mode for
+// migration compatibility. Only a directory carrying the owner grammar's
+// bracket prefix may enter bracket-only result parsing.
+const BRACKET_DIRECTORY_PREFIX_RE = new RegExp(`^${BRACKET_DIR_PREFIX_SRC}`);
 
 // Any .md file with PLAN anywhere in the basename — diagnostic net
 const PLAN_OUTLINE_RE = /-PLAN-OUTLINE\.md$/i;
@@ -631,16 +637,18 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
       }
       const match = matches[0];
 
-      const dirMatch = convention === 'bracket'
+      const isBracketDirectory = convention === 'bracket'
+        && BRACKET_DIRECTORY_PREFIX_RE.test(foldBracketId(match));
+      const dirMatch = isBracketDirectory
         ? null
         : match.match(
           new RegExp(`^${OPTIONAL_PROJECT_CODE_PREFIX_SOURCE}(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i')
         ) || match.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i'));
-      const phaseNumber = convention === 'bracket'
+      const phaseNumber = isBracketDirectory
         ? phaseNumberForMatch(match, usedBareFallback, convention)
         : dirMatch ? dirMatch[1] : normalized;
       let phaseName = dirMatch && dirMatch[2] ? dirMatch[2] : null;
-      if (convention === 'bracket') {
+      if (isBracketDirectory) {
         const id = parsePhaseId(match);
         const idToken = `${id.phase}${id.subphase ? `.${id.subphase}` : ''}`;
         phaseName = match.slice(`${id.project}.${id.milestone}-${idToken}`.length).replace(/^-/, '') || null;

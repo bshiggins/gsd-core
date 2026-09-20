@@ -306,6 +306,54 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.equal(phase.plan_count, 1);
   });
 
+  test('bracket mode preserves legacy result shaping for active and archived legacy directories', () => {
+    const dir = project('adr-612-bracket-legacy-read-');
+    writeBracketFixture(dir);
+    run(['phase', 'add', 'New Work'], dir);
+    fs.rmSync(planning(dir, 'phases', 'CK.02-01-foundation'), { recursive: true });
+    fs.writeFileSync(
+      planning(dir, 'phases', 'CK.02-02-new-work', '02-01-PLAN.md'),
+      '---\nwave: 1\n---\n',
+    );
+
+    const activeLegacy = planning(dir, 'phases', '01-legacy');
+    fs.mkdirSync(activeLegacy, { recursive: true });
+    fs.writeFileSync(path.join(activeLegacy, '01-01-PLAN.md'), '---\nwave: 1\n---\n');
+
+    const archivedLegacy = planning(dir, 'milestones', 'v1.0-phases', '03-archived-legacy');
+    fs.mkdirSync(archivedLegacy, { recursive: true });
+    fs.writeFileSync(path.join(archivedLegacy, '03-01-PLAN.md'), '---\nwave: 1\n---\n');
+
+    for (const [query, expectedDir, expectedNumber, expectedName] of [
+      ['01', '.planning/phases/01-legacy', '01', 'legacy'],
+      ['02', '.planning/phases/CK.02-02-new-work', '02', 'new-work'],
+    ]) {
+      const found = run(['find-phase', query], dir);
+      assert.equal(found.found, true, query);
+      assert.equal(found.directory, expectedDir, query);
+      assert.equal(found.phase_number, expectedNumber, query);
+      assert.equal(found.phase_name, expectedName, query);
+
+      const listed = run(['phase', 'list-plans', query], dir);
+      assert.equal(listed.phase_dir, expectedDir, query);
+      assert.equal(listed.plans.length, 1, query);
+
+      const indexed = run(['phase-plan-index', query], dir);
+      assert.equal(indexed.error, undefined, query);
+      assert.equal(indexed.plans.length, 1, query);
+    }
+
+    const archivedFound = run(['find-phase', '03'], dir);
+    assert.equal(archivedFound.found, true);
+    assert.equal(archivedFound.directory, '.planning/milestones/v1.0-phases/03-archived-legacy');
+    assert.equal(archivedFound.phase_number, '03');
+    assert.equal(archivedFound.phase_name, 'archived-legacy');
+
+    const archivedListed = run(['phase', 'list-plans', '03'], dir);
+    assert.equal(archivedListed.phase_dir, '.planning/milestones/v1.0-phases/03-archived-legacy');
+    assert.equal(archivedListed.plans.length, 1);
+  });
+
   // #4304 round 12 (W1): readSubdirectories intentionally ignores symlinks,
   // so a planted link at the next allocated bracket directory used to be
   // invisible to allocation and then followed by the .gitkeep write.
