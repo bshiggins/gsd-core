@@ -104,7 +104,7 @@ const {
   normalizePhaseName,
   stripProjectCodePrefix,
   PHASE_NUMBER_TOKEN_SOURCE,
-  PHASE_DEP_REF_SOURCE,
+  extractPhaseDependencyTokens,
   isForeignPrefixedPhaseQuery,
   isSentinelPhaseId,
   extractPhaseToken,
@@ -3110,7 +3110,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
     return reaches(numA, numB) || reaches(numB, numA);
   }
 
-  // #4764: a phase reference in depends_on prose is a PHASE-SHAPED token in
+  // #4764/#4304: a phase reference in depends_on prose is a PHASE-SHAPED token in
   // context — directly following "Phase"/"Phases" — never a bare digit run.
   // The previous whole-field scrape matched the token grammar against every
   // digit run, so calendar dates ("2026-09-14" → 2026, 09, 14), git shas
@@ -3123,9 +3123,9 @@ function cmdInitManager(cwd: string, raw: boolean): void {
   // "Phase 1-3") — silently dropping a REAL dependency would clear
   // deps_satisfied prematurely, the dangerous direction. Negation prose
   // ("dropped the dependency on Phase 654") is NOT detected: the issue's own
-  // minimum keeps such tokens.
-  const depPhaseRefRe = new RegExp(`${PHASE_DEP_REF_SOURCE}`, 'gi');
-  const depTokenRe = new RegExp(`${PHASE_NUMBER_TOKEN_SOURCE}`, 'gi');
+  // minimum keeps such tokens. Bracket repositories route through the same
+  // phase-id owner so `[CK.02] 01` contributes phase 01, never milestone 02;
+  // non-bracket extraction remains the exact Phase-prefixed #4764 grammar.
 
   for (const phase of phases) {
     if (
@@ -3138,18 +3138,12 @@ function cmdInitManager(cwd: string, raw: boolean): void {
       const ownNumber = normalizePhaseNumber(phase['number'] as string);
       const depNums: string[] = [];
       const seen = new Set<string>();
-      let refMatch: RegExpExecArray | null;
-      depPhaseRefRe.lastIndex = 0;
-      while ((refMatch = depPhaseRefRe.exec(prose)) !== null) {
-        let tok: RegExpExecArray | null;
-        depTokenRe.lastIndex = 0;
-        while ((tok = depTokenRe.exec(refMatch[1])) !== null) {
-          const normalized = normalizePhaseNumber(tok[0]);
-          if (normalized === ownNumber) continue; // #4764: never the row's own phase
-          if (seen.has(normalized)) continue;
-          seen.add(normalized);
-          depNums.push(tok[0]);
-        }
+      for (const token of extractPhaseDependencyTokens(prose, phaseIdConvention)) {
+        const normalized = normalizePhaseNumber(token);
+        if (normalized === ownNumber) continue; // #4764: never the row's own phase
+        if (seen.has(normalized)) continue;
+        seen.add(normalized);
+        depNums.push(token);
       }
       phase['deps_satisfied'] = depNums.every((n) => completedNums.has(normalizePhaseNumber(n)));
       phase['dep_phases'] = depNums;

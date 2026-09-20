@@ -64,7 +64,7 @@ const OPTIONAL_PHASE_TAG_SOURCE = '(?:\\s*\\([^)\\n]{0,200}\\))?';
 // introduced outside this module without a `// phase-id-owner:` justification.
 const PHASE_NUMBER_TOKEN_SOURCE = '\\d+[A-Z]?(?:\\.\\d+)*';
 
-// #4764: a phase REFERENCE in depends-on PROSE — the token in context, directly
+// #4764: a legacy phase REFERENCE in depends-on PROSE — the token in context, directly
 // following "Phase"/"Phases", with bare-token list continuation ("Phases 1 and 2",
 // "Phase 1, 2, and 3", "Phase 1-3"). Built HERE, beside the token grammar it is
 // anchored on, because two readers consume Depends-on prose (init.manager's
@@ -567,6 +567,88 @@ function parsePhaseId(input: string): PhaseId {
   // normalizePhaseName and every other legacy reader keep accepting those
   // tokens unchanged.
   throw new Error(`parsePhaseId: not a bracket phase id: ${JSON.stringify(input)}`);
+}
+
+/**
+ * Phase tokens referenced by one already-addressed Depends-on value.
+ *
+ * The non-bracket branch is the #4764 Phase-prefixed grammar byte-for-byte:
+ * it intentionally ignores bare digit runs in dates, shas and ledger ids.
+ * Bracket repositories additionally accept the four identity spellings their
+ * readers and writers expose: `[CODE.MM] NN`, `CODE.MM-NN`,
+ * `[CODE.MM] Phase NN`, and a value consisting only of bare `NN`. Bracket
+ * identity recognition is composed from phaseHeadingPrefixSrcFor and
+ * parsePhaseId; this function owns no second bracket-id regex.
+ */
+function extractPhaseDependencyTokens(prose: string, convention?: string | null): string[] {
+  const input = prose;
+  const found: { index: number; token: string }[] = [];
+  const legacyRefRe = new RegExp(`${PHASE_DEP_REF_SOURCE}`, 'gi');
+  const tokenRe = new RegExp(PHASE_NUMBER_TOKEN_SOURCE, 'gi');
+  let refMatch: RegExpExecArray | null;
+  while ((refMatch = legacyRefRe.exec(input)) !== null) {
+    tokenRe.lastIndex = 0;
+    let tokenMatch: RegExpExecArray | null;
+    while ((tokenMatch = tokenRe.exec(refMatch[1])) !== null) {
+      found.push({ index: refMatch.index + tokenMatch.index, token: tokenMatch[0] });
+    }
+  }
+
+  if (convention !== 'bracket') {
+    return found.map(({ token }) => token);
+  }
+
+  const bracketDisplayRe = new RegExp(
+    `${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, 'bracket', true)}(${PHASE_NUMBER_TOKEN_SOURCE})`,
+    'gi',
+  );
+  let displayMatch: RegExpExecArray | null;
+  while ((displayMatch = bracketDisplayRe.exec(input)) !== null) {
+    if (!displayMatch[1]) continue;
+    try {
+      const id = parsePhaseId(`[${foldBracketId(displayMatch[1])}] ${displayMatch[2]}`);
+      found.push({
+        index: displayMatch.index,
+        token: id.subphase ? `${id.phase}.${id.subphase}` : id.phase,
+      });
+    } catch {
+      // Read-tolerant heading grammar may recognize a non-canonical spelling;
+      // only parsePhaseId-approved identities become dependency authority.
+    }
+  }
+
+  const chunks = input.matchAll(/\S+/g);
+  for (const chunk of chunks) {
+    const candidate = chunk[0]
+      .replace(/^[`*_([{]+/, '')
+      .replace(/[`*_\])}.:,;]+$/, '');
+    try {
+      const id = parsePhaseId(candidate);
+      const sub = id.subphase ? `.${id.subphase}` : '';
+      const canonicalDash = `${id.project}.${id.milestone}-${id.phase}${sub}`;
+      if (id.plan || candidate !== canonicalDash) continue;
+      found.push({
+        index: chunk.index ?? 0,
+        token: id.subphase ? `${id.phase}.${id.subphase}` : id.phase,
+      });
+    } catch {
+      // Most prose chunks are not identities. parsePhaseId is the classifier.
+    }
+  }
+
+  const trimmed = input.trim();
+  if (new RegExp(`^${PHASE_NUMBER_TOKEN_SOURCE}$`, 'i').test(trimmed)) {
+    found.push({ index: input.indexOf(trimmed), token: trimmed });
+  }
+
+  found.sort((a, b) => a.index - b.index);
+  const seen = new Set<string>();
+  return found.flatMap(({ token }) => {
+    const key = token.toUpperCase();
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [token];
+  });
 }
 
 function renderMilestoneId(id: { project: string; milestone: string }): string {
@@ -1687,6 +1769,7 @@ export = {
   OPTIONAL_PHASE_TAG_SOURCE,
   PHASE_NUMBER_TOKEN_SOURCE,
   PHASE_DEP_REF_SOURCE,
+  extractPhaseDependencyTokens,
   CASE_FLEXIBLE_PROJECT_CODE_PREFIX_SOURCE,
   CASE_FLEXIBLE_PHASE_NUMBER_TOKEN_SOURCE,
   PHASE_CONTINUATION_SEGMENT_SOURCE,

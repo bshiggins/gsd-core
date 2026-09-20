@@ -30,6 +30,27 @@ const core = require('../gsd-core/bin/lib/phase-id.cjs');
 
 const p2 = (n) => String(n).padStart(2, '0');
 
+describe('bracket grammar: dependency references expose only the phase token', () => {
+  test('extracts display, dash, labeled-display, and bare dependency spellings', () => {
+    assert.equal(typeof core.extractPhaseDependencyTokens, 'function');
+    for (const [input, expected] of [
+      ['[CK.02] 01', ['01']],
+      ['CK.02-01', ['01']],
+      ['[CK.02] Phase 01', ['01']],
+      ['01', ['01']],
+    ]) {
+      assert.deepStrictEqual(core.extractPhaseDependencyTokens(input, 'bracket'), expected, input);
+    }
+  });
+
+  test('keeps the Phase-prefixed legacy grammar unchanged outside bracket mode', () => {
+    assert.equal(typeof core.extractPhaseDependencyTokens, 'function');
+    assert.deepStrictEqual(core.extractPhaseDependencyTokens('Phase 1', null), ['1']);
+    assert.deepStrictEqual(core.extractPhaseDependencyTokens('Phases 1, 2, and 3', 'sequential'), ['1', '2', '3']);
+    assert.deepStrictEqual(core.extractPhaseDependencyTokens('[CK.02] 01', null), []);
+  });
+});
+
 // ─── ADR §3 round-trip example table (doc-parity) ───────────────────────────
 const TABLE = [
   { display: '[GSD.02] 05.03-01', dir: 'GSD.02-05.03-feature' },

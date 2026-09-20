@@ -79,6 +79,24 @@ function writeBracketFixture(dir) {
   fs.mkdirSync(planning(dir, 'phases', 'CK.02-01-foundation'), { recursive: true });
 }
 
+function markBracketPhaseComplete(dir, token, slug) {
+  const phaseDir = planning(dir, 'phases', `CK.02-${token}-${slug}`);
+  fs.mkdirSync(phaseDir, { recursive: true });
+  fs.writeFileSync(path.join(phaseDir, `${token}-01-PLAN.md`), '# Plan\n');
+  fs.writeFileSync(path.join(phaseDir, `${token}-01-SUMMARY.md`), '# Summary\n');
+  fs.writeFileSync(
+    path.join(phaseDir, `${token}-VERIFICATION.md`),
+    ['---', 'status: passed', '---', '', '# Verification', ''].join('\n'),
+  );
+}
+
+function managerPhase(dir, phaseNumber) {
+  const manager = run(['init', 'manager'], dir);
+  const phase = manager.phases.find((row) => row.number === phaseNumber);
+  assert.ok(phase, `manager must report phase ${phaseNumber}`);
+  return phase;
+}
+
 function run(args, cwd) {
   const result = runGsdTools(args, cwd);
   assert.equal(result.success, true, `${args.join(' ')} failed: ${result.error || result.output}`);
@@ -86,6 +104,68 @@ function run(args, cwd) {
 }
 
 describe('#4304 / ADR-612 PR-4 bracket writers', () => {
+  test('add, add-batch, and insert dependencies remain discussable through init manager', () => {
+    const addDir = project('adr-612-bracket-manager-add-');
+    writeBracketFixture(addDir);
+    markBracketPhaseComplete(addDir, '01', 'foundation');
+    run(['phase', 'add', 'Second'], addDir);
+    const added = managerPhase(addDir, '02');
+    assert.deepEqual(added.dep_phases, ['01']);
+    assert.equal(added.deps_satisfied, true);
+    assert.equal(added.is_next_to_discuss, true);
+
+    const batchDir = project('adr-612-bracket-manager-batch-');
+    writeBracketFixture(batchDir);
+    markBracketPhaseComplete(batchDir, '01', 'foundation');
+    run(['phase', 'add-batch', '--descriptions', '["Second","Third"]'], batchDir);
+    markBracketPhaseComplete(batchDir, '02', 'second');
+    const batchSecond = managerPhase(batchDir, '02');
+    const batchThird = managerPhase(batchDir, '03');
+    assert.deepEqual(batchSecond.dep_phases, ['01']);
+    assert.deepEqual(batchThird.dep_phases, ['02']);
+    assert.equal(batchThird.deps_satisfied, true);
+    assert.equal(batchThird.is_next_to_discuss, true);
+
+    const insertDir = project('adr-612-bracket-manager-insert-');
+    writeBracketFixture(insertDir);
+    markBracketPhaseComplete(insertDir, '01', 'foundation');
+    run(['phase', 'insert', '01', 'Hotfix'], insertDir);
+    const inserted = managerPhase(insertDir, '01.01');
+    assert.deepEqual(inserted.dep_phases, ['01']);
+    assert.equal(inserted.deps_satisfied, true);
+    assert.equal(inserted.is_next_to_discuss, true);
+  });
+
+  test('init manager takes only the phase token from every bracket dependency spelling', () => {
+    for (const [label, dependency] of [
+      ['display', '[CK.02] 01'],
+      ['dash', 'CK.02-01'],
+      ['labeled display', '[CK.02] Phase 01'],
+      ['bare', '01'],
+    ]) {
+      const dir = project(`adr-612-bracket-manager-${label.replaceAll(' ', '-')}-`);
+      writeBracketFixture(dir);
+      markBracketPhaseComplete(dir, '01', 'foundation');
+      fs.appendFileSync(
+        planning(dir, 'ROADMAP.md'),
+        [
+          '',
+          '### [CK.02] 02: Second',
+          '',
+          '**Goal:** Next',
+          `**Depends on:** ${dependency}`,
+          '',
+        ].join('\n'),
+      );
+      fs.mkdirSync(planning(dir, 'phases', 'CK.02-02-second'), { recursive: true });
+
+      const phase = managerPhase(dir, '02');
+      assert.deepEqual(phase.dep_phases, ['01'], label);
+      assert.equal(phase.deps_satisfied, true, label);
+      assert.equal(phase.is_next_to_discuss, true, label);
+    }
+  });
+
   test('phase add emits a canonical bracket heading and directory', () => {
     const dir = project();
     writeBracketFixture(dir);
