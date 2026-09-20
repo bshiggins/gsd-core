@@ -290,7 +290,7 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
         '### [CK.02] 03: Blocked follow-up',
         '',
         '**Goal:** Must wait',
-        '**Depends on:** [CK.02] Phase 01 and 02',
+        '**Depends on:** [CK.02] Phase 1 and 2',
         '',
       ].join('\n'),
     );

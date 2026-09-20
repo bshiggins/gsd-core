@@ -628,10 +628,26 @@ function parsePhaseId(input: string): PhaseId {
  * Bracket identity recognition is composed from phaseHeadingPrefixSrcFor and
  * parsePhaseId; this function owns no second bracket-id regex.
  */
-function extractPhaseDependencyTokens(prose: string, convention?: string | null): string[] {
+type PhaseDependencyToken = {
+  kind: 'legacy' | 'qualified' | 'qualified-fallback' | 'identity' | 'bare';
+  start: number;
+  end: number;
+  token: string;
+};
+
+/**
+ * Tokenize dependency references with source spans. Bracket-qualified lists
+ * canonicalize every numeric segment before strict identity parsing. If the
+ * qualified identity still cannot be parsed, the reader keeps the original
+ * token as a legacy dependency instead of silently dropping it.
+ */
+function tokenizePhaseDependencyReferences(
+  prose: string,
+  convention?: string | null,
+): PhaseDependencyToken[] {
   const input = prose;
-  const found: { index: number; token: string }[] = [];
-  const qualifiedRanges: { start: number; end: number }[] = [];
+  const found: PhaseDependencyToken[] = [];
+  const qualifiedTokenSpans: { start: number; end: number }[] = [];
   const legacyRefRe = new RegExp(`${PHASE_DEP_REF_SOURCE}`, 'gi');
   const tokenRe = new RegExp(PHASE_NUMBER_TOKEN_SOURCE, convention === 'bracket' ? 'gi' : 'g');
   let refMatch: RegExpExecArray | null;
@@ -640,12 +656,13 @@ function extractPhaseDependencyTokens(prose: string, convention?: string | null)
     tokenRe.lastIndex = 0;
     let tokenMatch: RegExpExecArray | null;
     while ((tokenMatch = tokenRe.exec(refMatch[1])) !== null) {
-      found.push({ index: referenceStart + tokenMatch.index, token: tokenMatch[0] });
+      const start = referenceStart + tokenMatch.index;
+      found.push({ kind: 'legacy', start, end: start + tokenMatch[0].length, token: tokenMatch[0] });
     }
   }
 
   if (convention !== 'bracket') {
-    return found.map(({ token }) => token);
+    return found;
   }
 
   const bracketDisplayRe = new RegExp(
@@ -660,18 +677,25 @@ function extractPhaseDependencyTokens(prose: string, convention?: string | null)
     tokenRe.lastIndex = 0;
     let tokenMatch: RegExpExecArray | null;
     while ((tokenMatch = tokenRe.exec(tokenList)) !== null) {
+      const start = tokenListStart + tokenMatch.index;
+      const end = start + tokenMatch[0].length;
+      qualifiedTokenSpans.push({ start, end });
+      const numeric = tokenMatch[0].split('.').every((part) => /^\d+$/.test(part))
+        ? tokenMatch[0].split('.').map(pad2).join('.')
+        : null;
       try {
-        const id = parsePhaseId(`[${foldBracketId(displayMatch[1])}] ${tokenMatch[0]}`);
+        if (numeric === null) throw new Error('not a numeric bracket phase token');
+        const id = parsePhaseId(`[${foldBracketId(displayMatch[1])}] ${numeric}`);
         found.push({
-          index: tokenListStart + tokenMatch.index,
+          kind: 'qualified',
+          start,
+          end,
           token: renderPhaseId(id),
         });
       } catch {
-        // Read-tolerant heading grammar may recognize a non-canonical spelling;
-        // only parsePhaseId-approved identities become dependency authority.
+        found.push({ kind: 'qualified-fallback', start, end, token: tokenMatch[0] });
       }
     }
-    qualifiedRanges.push({ start: displayMatch.index, end: displayMatch.index + displayMatch[0].length });
   }
 
   const chunks = input.matchAll(/\S+/g);
@@ -685,7 +709,9 @@ function extractPhaseDependencyTokens(prose: string, convention?: string | null)
       const canonicalDash = `${id.project}.${id.milestone}-${id.phase}${sub}`;
       if (id.plan || candidate !== canonicalDash) continue;
       found.push({
-        index: chunk.index ?? 0,
+        kind: 'identity',
+        start: chunk.index ?? 0,
+        end: (chunk.index ?? 0) + candidate.length,
         token: renderPhaseId(id),
       });
     } catch {
@@ -695,16 +721,22 @@ function extractPhaseDependencyTokens(prose: string, convention?: string | null)
 
   const trimmed = input.trim();
   if (new RegExp(`^${PHASE_NUMBER_TOKEN_SOURCE}$`, 'i').test(trimmed)) {
-    found.push({ index: input.indexOf(trimmed), token: trimmed });
+    const start = input.indexOf(trimmed);
+    found.push({ kind: 'bare', start, end: start + trimmed.length, token: trimmed });
   }
 
-  const identityAware = found.filter(({ index, token }) => {
-    if (token.startsWith('[')) return true;
-    return !qualifiedRanges.some(({ start, end }) => index >= start && index < end);
+  const identityAware = found.filter(({ kind, start, end }) => {
+    if (kind !== 'legacy') return true;
+    return !qualifiedTokenSpans.some((span) => start === span.start && end === span.end);
   });
-  identityAware.sort((a, b) => a.index - b.index);
+  identityAware.sort((a, b) => a.start - b.start);
+  return identityAware;
+}
+
+function extractPhaseDependencyTokens(prose: string, convention?: string | null): string[] {
+  const found = tokenizePhaseDependencyReferences(prose, convention);
   const seen = new Set<string>();
-  return identityAware.flatMap(({ token }) => {
+  return found.flatMap(({ token }) => {
     const key = token.toUpperCase();
     if (seen.has(key)) return [];
     seen.add(key);
@@ -1853,6 +1885,7 @@ export = {
   OPTIONAL_PHASE_TAG_SOURCE,
   PHASE_NUMBER_TOKEN_SOURCE,
   PHASE_DEP_REF_SOURCE,
+  tokenizePhaseDependencyReferences,
   extractPhaseDependencyTokens,
   CASE_FLEXIBLE_PROJECT_CODE_PREFIX_SOURCE,
   CASE_FLEXIBLE_PHASE_NUMBER_TOKEN_SOURCE,

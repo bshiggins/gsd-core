@@ -48,9 +48,18 @@ describe('bracket grammar: dependency references preserve qualified identity', (
       ['[CK.02] Phase 01 and 02', ['[CK.02] 01', '[CK.02] 02']],
       ['[CK.02] 01, 02', ['[CK.02] 01', '[CK.02] 02']],
       ['[CK.01] 01 and [CK.02] 02', ['[CK.01] 01', '[CK.02] 02']],
+      ['[CK.02] Phase 1', ['[CK.02] 01']],
+      ['[CK.02] 1', ['[CK.02] 01']],
+      ['[CK.02] Phase 1 and 2', ['[CK.02] 01', '[CK.02] 02']],
+      ['[CK.02] 01, 2, 003', ['[CK.02] 01', '[CK.02] 02', '[CK.02] 03']],
+      ['[CK.02] Phase 1A', ['1A']],
     ]) {
       assert.deepStrictEqual(core.extractPhaseDependencyTokens(input, 'bracket'), expected, input);
     }
+  });
+
+  test('keeps an unqualified legacy Phase reference unchanged in bracket mode', () => {
+    assert.deepStrictEqual(core.extractPhaseDependencyTokens('Phase 1', 'bracket'), ['1']);
   });
 
   test('keeps the Phase-prefixed legacy grammar unchanged outside bracket mode', () => {
