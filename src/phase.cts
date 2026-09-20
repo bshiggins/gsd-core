@@ -3827,6 +3827,12 @@ function updateRoadmapAfterBracketPhaseRemoval(
     // folds e.g. v2.0 and v2.1 to one [CK.02]) let the shipped section's
     // own detail heading be deleted while the active one survives.
     const preDeleteRanges = currentMilestoneRawRanges(originalContent, cwd, 'bracket');
+    // #4304: historical protection applies while SELECTING the section, not
+    // only during the later per-line rewrite. A closed details archive can
+    // sit inside the raw active-milestone range and carry the same folded
+    // bracket id as the live phase; choosing that heading first deletes
+    // history and leaves the live target behind.
+    const preDeleteHistoricalLineStarts = archivedOrClosedMilestoneLineStarts(originalContent);
     let content = deleteSection(
       originalContent,
       (heading) => {
@@ -3845,6 +3851,7 @@ function updateRoadmapAfterBracketPhaseRemoval(
         if (owned.kind !== 'heading' || !owned.id || !sameBracketPhaseId(owned.id, targetId)) {
           return false;
         }
+        if (preDeleteHistoricalLineStarts.has(heading.offset)) return false;
         if (!preDeleteRanges) return true;
         return (
           (heading.offset >= preDeleteRanges.primary.start && heading.offset < preDeleteRanges.primary.end)
@@ -3920,7 +3927,11 @@ function updateRoadmapAfterBracketPhaseRemoval(
       }
       if (next !== line.text) roadmapLinesRewritten += 1;
       rewritten.push(next + line.eol);
-      keptOriginalLines.push({ text: line.text, active });
+      // A historical line can be physically inside the raw active milestone
+      // range (closed details nested below the live milestone heading). It is
+      // intentionally exempt from this mutation, so it is not an active
+      // dangling reference for the removal report either.
+      keptOriginalLines.push({ text: line.text, active: active && !historical });
     }
     content = rewritten.join('');
 

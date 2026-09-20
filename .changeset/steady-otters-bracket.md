@@ -7,3 +7,4 @@ pr: 4773
 <!-- docs-exempt: the governing ADR already documents bracket emit and PR-6 owns the generated user-facing convention guidance -->
 
 Bracket phase directories emitted by these writers are also resolved by `find-phase` and every consumer of `findPhaseInternal`; non-bracket lookup bytes remain unchanged.
+When a closed details archive sits inside the active milestone range, phase removal now skips its historical heading before selecting the live section to delete.

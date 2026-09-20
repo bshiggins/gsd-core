@@ -2728,6 +2728,70 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, []);
   });
 
+  test('selects the live target after an archived same-id heading inside the active milestone window', () => {
+    fs.writeFileSync(
+      planning('STATE.md'),
+      '---\nmilestone: v2.1\n---\n\n# State\n\n**Status:** Planning\n**Last Activity:** 2026-09-01\n',
+    );
+    const archive = [
+      '<details>',
+      '<summary>✅ [CK.02] v2.0 — SHIPPED 2026-01-01</summary>',
+      '',
+      '- [x] [CK.02] 02: Archived Two',
+      '',
+      '### [CK.02] 02: Archived Two',
+      '',
+      '**Goal:** preserve this historical section byte-for-byte',
+      '',
+      '</details>',
+    ].join('\n');
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.1 — Current 🚧',
+        '',
+        archive,
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', []],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+
+    const archiveStart = roadmap.indexOf('<details>');
+    const archiveEnd = roadmap.indexOf('</details>', archiveStart);
+    const archivedAfter = archiveEnd === -1
+      ? roadmap.slice(archiveStart)
+      : roadmap.slice(archiveStart, archiveEnd + '</details>'.length);
+    assert.equal(archivedAfter, archive, 'historical block must remain byte-identical');
+    assert.equal(roadmap.includes('### [CK.02] 02: Two'), false, 'live target must be deleted');
+    assert.equal((roadmap.match(/^### \[CK\.02\] 02: Three$/gm) ?? []).length, 1);
+    assert.equal(roadmap.includes('### [CK.02] 03: Three'), false);
+    assert.deepEqual(fs.readdirSync(planning('phases')).sort(), ['CK.02-01-one', 'CK.02-02-three']);
+    assert.deepEqual(out.references_left_untouched, []);
+  });
+
   // #4304 round 11 (B1): shipped history can remain open rather than wrapped
   // in <details>. A closed milestone heading owns history until the next
   // heading at the same or shallower level; qualified references inside that
