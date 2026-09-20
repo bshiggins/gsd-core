@@ -181,6 +181,29 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     );
   });
 
+  test('phase add output resolves through find-phase and phase list-plans by every bracket query spelling', () => {
+    const dir = project('adr-612-bracket-find-added-');
+    writeBracketFixture(dir);
+
+    run(['phase', 'add', 'User Dashboard'], dir);
+    const phaseDir = planning(dir, 'phases', 'CK.02-02-user-dashboard');
+    fs.writeFileSync(path.join(phaseDir, '02-01-PLAN.md'), '# Plan\n');
+
+    for (const query of ['02', '2', 'CK.02-02']) {
+      const found = run(['find-phase', query], dir);
+      assert.equal(found.found, true, query);
+      assert.equal(found.directory, '.planning/phases/CK.02-02-user-dashboard', query);
+      assert.deepEqual(found.plans, ['02-01-PLAN.md'], query);
+    }
+
+    const listed = run(['phase', 'list-plans', '02'], dir);
+    assert.equal(listed.phase_dir, '.planning/phases/CK.02-02-user-dashboard');
+    assert.deepEqual(
+      listed.plans,
+      ['.planning/phases/CK.02-02-user-dashboard/02-01-PLAN.md'],
+    );
+  });
+
   // #4304 round 12 (W1): readSubdirectories intentionally ignores symlinks,
   // so a planted link at the next allocated bracket directory used to be
   // invisible to allocation and then followed by the .gitkeep write.
@@ -1063,6 +1086,52 @@ for (const convention of [null, 'sequential', 'milestone-prefixed']) {
     assert.deepEqual(
       fs.readdirSync(planning(dir, 'phases')).sort(),
       ['CK-01.1-hotfix', 'CK-02-second', 'CK-03-third', 'CK-04-fourth'],
+    );
+
+    fs.writeFileSync(planning(dir, 'phases', 'CK-02-second', '02-01-PLAN.md'), '# Plan\n');
+    for (const query of ['02', '2']) {
+      const result = runGsdTools(['find-phase', query], dir);
+      assert.equal(result.success, true, result.error);
+      assert.equal(
+        result.output,
+        [
+          '{',
+          '  "found": true,',
+          '  "directory": ".planning/phases/CK-02-second",',
+          '  "phase_number": "02",',
+          '  "phase_name": "second",',
+          '  "plans": [',
+          '    "02-01-PLAN.md"',
+          '  ],',
+          '  "summaries": [],',
+          '  "plan_count": 1,',
+          '  "summary_count": 0,',
+          '  "plan_count_all": 1',
+          '}',
+        ].join('\n'),
+        query,
+      );
+    }
+    const qualified = runGsdTools(['find-phase', 'CK.02-02'], dir);
+    assert.equal(qualified.success, true, qualified.error);
+    assert.equal(
+      qualified.output,
+      [
+        '{',
+        '  "found": false,',
+        '  "directory": null,',
+        '  "phase_number": null,',
+        '  "phase_name": null,',
+        '  "plans": [],',
+        '  "summaries": [],',
+        '  "plan_count": null,',
+        '  "summary_count": null,',
+        '  "plan_count_all": null,',
+        '  "searched_directories": [',
+        '    ".planning/phases"',
+        '  ]',
+        '}',
+      ].join('\n'),
     );
   });
 }

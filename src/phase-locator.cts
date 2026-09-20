@@ -13,20 +13,20 @@
  *   - node:fs / node:path (stdlib)
  *   - ./phase-id.cjs       (normalizePhaseName, matchPhaseDirs, phaseNumberForMatch)
  *   - ./core-utils.cjs     (readSubdirectories, getPhaseFileStats, extractCanonicalPlanId, toPosixPath)
- *   - ./planning-workspace.cjs (planningDir)
+ *   - ./planning-workspace.cjs (planningDir, resolvePhaseIdConvention)
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdModule = require('./phase-id.cjs');
-const { normalizePhaseName, matchPhaseDirs, phaseNumberForMatch, isSentinelPhaseId, comparePhaseNum } = phaseIdModule;
+const { normalizePhaseName, matchPhaseDirs, phaseNumberForMatch, parsePhaseId, isSentinelPhaseId, comparePhaseNum } = phaseIdModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import coreUtilsModule = require('./core-utils.cjs');
 const { readSubdirectories, getPhaseFileStats, extractCanonicalPlanId, toPosixPath, findUnsummarizedPlans } = coreUtilsModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
-const { planningDir, planningRoot } = planningWorkspace;
+const { planningDir, planningRoot, resolvePhaseIdConvention } = planningWorkspace;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatterModule = require('./frontmatter.cjs');
 const { extractFrontmatter } = frontmatterModule;
@@ -204,7 +204,12 @@ function listArchiveVersionDirs(cwd: string, wsOverride?: string | null): Archiv
   return out;
 }
 
-function searchPhaseInDir(baseDir: string, relBase: string, normalized: string, convention?: string | null): PhaseSearchResult | null {
+function searchPhaseInDir(
+  baseDir: string,
+  relBase: string,
+  normalized: string,
+  convention?: string | null,
+): PhaseSearchResult | null {
   try {
     const dirs = readSubdirectories(baseDir, true);
     // #2528: canonical two-pass selection (exact token match, then the
@@ -242,9 +247,17 @@ function searchPhaseInDir(baseDir: string, relBase: string, normalized: string, 
 
     const match = matches[0];
 
-    const phaseToken = phaseNumberForMatch(match, usedBareFallback);
+    const phaseToken = phaseNumberForMatch(match, usedBareFallback, convention);
     const phaseNumber = phaseToken || normalized;
-    const afterToken = match.slice(phaseToken ? phaseToken.length : 0).replace(/^-/, '');
+    let afterToken: string;
+    if (convention === 'bracket') {
+      const id = parsePhaseId(match);
+      const idToken = `${id.phase}${id.subphase ? `.${id.subphase}` : ''}`;
+      const bracketPrefix = `${id.project}.${id.milestone}-${idToken}`;
+      afterToken = match.slice(bracketPrefix.length).replace(/^-/, '');
+    } else {
+      afterToken = match.slice(phaseToken ? phaseToken.length : 0).replace(/^-/, '');
+    }
     const phaseName = afterToken || null;
     const phaseDir = path.join(baseDir, match);
     const { plans: unsortedPlans, summaries: unsortedSummaries, hasResearch, hasContext, hasVerification, hasReviews } = getPhaseFileStats(phaseDir);
@@ -358,6 +371,10 @@ function findPhaseInternal(cwd: string, phase: unknown, convention?: string | nu
 
   const phasesDir = path.join(planningDir(cwd), 'phases');
   const normalized = normalizePhaseName(phase);
+  // #4304: bracket directories need the convention-aware matcher and token
+  // reader. Preserve every legacy lookup byte-for-byte by passing no
+  // convention unless the resolved project convention is exactly bracket.
+  const convention = resolvePhaseIdConvention(cwd) === 'bracket' ? 'bracket' : undefined;
 
   const relPhasesDir = toPosixPath(path.relative(cwd, phasesDir));
   // #4801: convention threaded through to the matcher (see searchPhaseInDir).

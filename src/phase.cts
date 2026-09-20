@@ -46,6 +46,7 @@ const {
   phaseMarkdownRegexSource,
   comparePhaseNum,
   matchPhaseDirs,
+  phaseNumberForMatch,
   isSentinelPhaseId,
   scopeToPhase,
   parsePhaseId,
@@ -556,6 +557,10 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
 
   const planBase = planningDir(cwd);
   const normalized = normalizePhaseName(phase);
+  // #4304: only bracket mode opts into bracket directory matching. Passing
+  // undefined for every other resolved convention preserves legacy selection
+  // and output bytes.
+  const convention = resolvePhaseIdConvention(cwd) === 'bracket' ? 'bracket' : undefined;
   const notFound = {
     found: false,
     directory: null,
@@ -609,7 +614,7 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
       // #2528: selection delegates to the canonical two-pass matcher (exact
       // token match, then the bare-integer leading-digit-run fallback) shared
       // with the locator and the phase-plan-index scan.
-      const { matches } = matchPhaseDirs(dirs, normalized);
+      const { matches, usedBareFallback } = matchPhaseDirs(dirs, normalized, convention);
       if (matches.length === 0) continue;
       if (matches.length > 1) {
         output({
@@ -621,12 +626,20 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
       }
       const match = matches[0];
 
-      const dirMatch =
-        match.match(
+      const dirMatch = convention === 'bracket'
+        ? null
+        : match.match(
           new RegExp(`^${OPTIONAL_PROJECT_CODE_PREFIX_SOURCE}(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i')
         ) || match.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i'));
-      const phaseNumber = dirMatch ? dirMatch[1] : normalized;
-      const phaseName = dirMatch && dirMatch[2] ? dirMatch[2] : null;
+      const phaseNumber = convention === 'bracket'
+        ? phaseNumberForMatch(match, usedBareFallback, convention)
+        : dirMatch ? dirMatch[1] : normalized;
+      let phaseName = dirMatch && dirMatch[2] ? dirMatch[2] : null;
+      if (convention === 'bracket') {
+        const id = parsePhaseId(match);
+        const idToken = `${id.phase}${id.subphase ? `.${id.subphase}` : ''}`;
+        phaseName = match.slice(`${id.project}.${id.milestone}-${idToken}`.length).replace(/^-/, '') || null;
+      }
 
       const phaseDir = path.join(searchDir, match);
       const phaseFiles = fs.readdirSync(phaseDir);

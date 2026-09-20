@@ -1505,8 +1505,8 @@ function matchPhaseDirs(dirs: string[], normalized: string, convention?: string 
  * directory's leading digit run (the whole point of the fallback is that the
  * extracted token is wrong for these dirs).
  */
-function phaseNumberForMatch(dirName: string, usedBareFallback: boolean): string {
-  if (!usedBareFallback) return extractPhaseToken(dirName);
+function phaseNumberForMatch(dirName: string, usedBareFallback: boolean, convention?: string | null): string {
+  if (!usedBareFallback) return extractPhaseToken(dirName, convention);
   const stripped = stripProjectCodePrefix(dirName);
   const prefix = dirName.slice(0, dirName.length - stripped.length);
   const m = stripped.match(LEADING_DIGIT_RUN_PREFIX_RE);
