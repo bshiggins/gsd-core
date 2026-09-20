@@ -1733,6 +1733,81 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(roadmap.includes('**Goal:** keep the sibling body'), true);
   });
 
+  // #4304 round 20 (B2): the reader inventories bracket phase headings at
+  // levels 2-4. A deeper next phase is still a sibling identity, not body
+  // content owned by the phase being removed.
+  test('stops bracket deletion at the next distinct phase heading at any depth', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '#### [CK.02] 03: Three',
+        '**Goal:** keep the deeper sibling body',
+        '',
+      ],
+      [
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', []],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    assert.equal(roadmap.includes('### [CK.02] 02: Two'), false);
+    assert.equal((roadmap.match(/^#### \[CK\.02\] 02: Three$/gm) ?? []).length, 1);
+    assert.equal(roadmap.includes('#### [CK.02] 03: Three'), false);
+    assert.equal(roadmap.includes('**Goal:** keep the deeper sibling body'), true);
+    assert.deepEqual(fs.readdirSync(planning('phases')).sort(), ['CK.02-02-three']);
+    assert.deepEqual(out.references_left_untouched, []);
+  });
+
+  test('deletes a non-phase deeper subheading with its bracket phase', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '#### Notes',
+        'This note belongs only to phase two.',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** keep the sibling body',
+        '',
+      ],
+      [
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', []],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+
+    assert.equal(result.success, true, result.error || result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    assert.equal(roadmap.includes('#### Notes'), false);
+    assert.equal(roadmap.includes('This note belongs only to phase two.'), false);
+    assert.equal(roadmap.includes('### [CK.02] 02: Three'), true);
+    assert.equal(roadmap.includes('**Goal:** keep the sibling body'), true);
+  });
+
   // #4304 round 11 (W1): the sub-phase safety guard must share the read
   // side's CommonMark fence handling. A heading-shaped example inside a
   // fence is documentation, not a child phase, and cannot block removal.

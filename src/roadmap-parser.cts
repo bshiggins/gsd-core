@@ -647,18 +647,27 @@ const BRACKET_PHASE_ENTRY_HEADING_RE = new RegExp(
   `^${PHASE_HEADING_PREFIX_SRC}${PHASE_NUMBER_TOKEN_SOURCE}${OPTIONAL_PHASE_TAG_SOURCE}\\s*:`,
   'i',
 );
+const LEGACY_PHASE_ENTRY_HEADING_RE =
+  /^(?:\[[^\]]{1,200}\]\s*)?Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]{0,200}\))?\s*:/i;
+
+/**
+ * Does one fence-excluded heading token use the reader's phase-entry grammar?
+ * Kept separate from heading depth so destructive consumers can apply the
+ * same bracket-plus-legacy recognition to tokens from `tokenizeHeadings`.
+ */
+function isPhaseEntryHeading(headingText: string, phaseIdConvention?: string | null): boolean {
+  if (LEGACY_PHASE_ENTRY_HEADING_RE.test(headingText)) return true;
+  return phaseIdConvention === 'bracket' && BRACKET_PHASE_ENTRY_HEADING_RE.test(headingText);
+}
 
 function hasPhaseEntries(markdown: string, phaseIdConvention?: string | null): boolean {
   // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
   // #3641: the widened grammar engages ONLY when the resolved convention is
   // 'bracket' — a project that has not opted in runs the legacy pattern
   // alone, byte-identically.
-  const phaseHeadingPattern = /^(?:\[[^\]]{1,200}\]\s*)?Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]{0,200}\))?\s*:/i;
-  const bracketMode = phaseIdConvention === 'bracket';
   for (const h of tokenizeHeadings(markdown)) {
     if (h.level < 2 || h.level > 4) continue;
-    if (phaseHeadingPattern.test(h.text)) return true;
-    if (bracketMode && BRACKET_PHASE_ENTRY_HEADING_RE.test(h.text)) return true;
+    if (isPhaseEntryHeading(h.text, phaseIdConvention)) return true;
   }
   // #3184 review finding: the bullet fallback must be fence-aware too, or a
   // FENCED markdown EXAMPLE of the `- [ ] **Phase N — Name**` syntax (e.g. a
@@ -2381,6 +2390,7 @@ export = {
   // owner (and its convention gate) instead of a private inline copy.
   extractPhaseFieldMultiline,
   hasPhaseEntries,
+  isPhaseEntryHeading,
   // #4304 (W1): exported so `phase.cts`'s milestone-marker
   // enumeration (bracketRecognizedMilestoneMarkers) can recognize a
   // version-less bracket milestone heading through the SAME grammar the

@@ -101,6 +101,7 @@ const {
   isClosedMilestoneHeading,
   isClosedMilestoneDetails,
   isRecognizedMilestoneHeading,
+  isPhaseEntryHeading,
 } = roadmapParserMod;
 // #4129: the single owner of "count the ROADMAP's milestone Complete rows"
 // (pure computation, no I/O — no cycle on this path) for the intent-first
@@ -3526,6 +3527,32 @@ function sameBracketPhaseId(a: BracketRoadmapPhaseId, b: BracketRoadmapPhaseId):
     && a.subphase === b.subphase;
 }
 
+/**
+ * Classify a fence-excluded heading token through the roadmap reader's shared
+ * bracket-plus-legacy phase-entry predicate, then decide whether it names a
+ * phase other than the selected removal target. Bracket headings retain their
+ * full project+milestone identity; a bare numeric `Phase NN:` heading is
+ * compared in the active target context. A reader-recognized custom legacy id
+ * cannot equal a numeric bracket target and is therefore distinct.
+ */
+function isDistinctReaderPhaseHeading(
+  heading: ReturnType<typeof tokenizeHeadings>[number],
+  targetId: BracketRoadmapPhaseId,
+): boolean {
+  if (heading.level < 2 || heading.level > 4) return false;
+  if (!isPhaseEntryHeading(heading.text, 'bracket')) return false;
+
+  const headingLine = '#'.repeat(heading.level) + ' ' + heading.text;
+  const owned = classifyBracketOwnedLine(headingLine);
+  if (owned.kind === 'heading' && owned.id) return !sameBracketPhaseId(owned.id, targetId);
+
+  const numericMatch = BRACKET_HEADING_LINE_RE.exec(headingLine);
+  const canonicalNumber = numericMatch?.[2] ? phaseToken(numericMatch[2]) : null;
+  if (!canonicalNumber) return true;
+  const [phase, subphase] = canonicalNumber.split('.');
+  return phase !== targetId.phase || subphase !== targetId.subphase;
+}
+
 function dashBracketPhaseId(id: BracketRoadmapPhaseId): string {
   return `${id.project}.${id.milestone}-${id.phase}${id.subphase ? `.${id.subphase}` : ''}`;
 }
@@ -4042,6 +4069,9 @@ function lineContainsTrackedBracketIdentity(
  * closing tag of the exact container that encloses the target, or the opening
  * tag of a container that starts after an outside target. Nested details do
  * not count until their own close has restored the target's original depth.
+ * The deletion extent also stops at the next distinct phase heading recognized
+ * by the reader, whatever its heading depth; ordinary deeper subheadings remain
+ * part of the target section.
  */
 function bracketPhaseDeletionContainerBoundary(content: string, targetOffset: number): number | null {
   const tags = trackRoadmapDetails(content).tags;
@@ -4121,6 +4151,10 @@ function updateRoadmapAfterBracketPhaseRemoval(
     const selectedTargetHeading = tokenizeHeadings(originalContent).find(isTargetHeading);
     let deletionEndOffset: number | undefined;
     if (selectedTargetHeading) {
+      const nextDistinctPhaseHeading = tokenizeHeadings(originalContent).find(
+        (heading) => heading.offset > selectedTargetHeading.offset
+          && isDistinctReaderPhaseHeading(heading, targetId),
+      );
       const containingRange = preDeleteRanges
         ? [preDeleteRanges.primary, ...(preDeleteRanges.details ? [preDeleteRanges.details] : [])]
           .find((range) => selectedTargetHeading.offset >= range.start && selectedTargetHeading.offset < range.end)
@@ -4136,6 +4170,7 @@ function updateRoadmapAfterBracketPhaseRemoval(
         containingRange?.end ?? originalContent.length,
         containerBoundary ?? originalContent.length,
         historicalBoundary ?? originalContent.length,
+        nextDistinctPhaseHeading?.offset ?? originalContent.length,
       );
     }
     let content = deleteSection(originalContent, isTargetHeading, { endOffset: deletionEndOffset });
