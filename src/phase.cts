@@ -442,18 +442,18 @@ function cmdPhaseNextDecimal(cwd: string, basePhase: string, raw: boolean): void
     const existingDecimals = Array.from(decimalSet)
       .sort((a, b) => a - b)
       .map((n) => renderCanonicalBracket
-        ? bracketArtifactToken(bracketPhaseId(bracketContext!, normalized, n))
+        ? bracketArtifactToken(bracketPhaseId(bracketContext, normalized, n))
         : `${normalized}.${n}`);
 
     let nextDecimal: string;
     if (decimalSet.size === 0) {
       nextDecimal = renderCanonicalBracket
-        ? bracketArtifactToken(bracketPhaseId(bracketContext!, normalized, 1))
+        ? bracketArtifactToken(bracketPhaseId(bracketContext, normalized, 1))
         : `${normalized}.1`;
     } else {
       const next = Math.max(...decimalSet) + 1;
       nextDecimal = renderCanonicalBracket
-        ? bracketArtifactToken(bracketPhaseId(bracketContext!, normalized, next))
+        ? bracketArtifactToken(bracketPhaseId(bracketContext, normalized, next))
         : `${normalized}.${next}`;
     }
 
