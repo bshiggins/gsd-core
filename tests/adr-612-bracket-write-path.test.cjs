@@ -1508,6 +1508,37 @@ for (const convention of [null, 'sequential', 'milestone-prefixed']) {
   });
 }
 
+for (const convention of [null, 'sequential', 'milestone-prefixed']) {
+  test(`#4304 normalization parity: ${String(convention)} matches upstream/next for a fenced phase heading`, () => {
+    const dir = project('adr-612-legacy-fenced-normalization-');
+    writeConfig(dir, convention);
+    fs.writeFileSync(
+      planning(dir, 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '### Phase 1: Foundation',
+        '**Goal:** Existing',
+        '',
+        '```md',
+        '### Phase 99: Example',
+        'prose',
+        '```',
+        '',
+      ].join('\n'),
+    );
+
+    run(['phase', 'add', 'Second'], dir);
+
+    const roadmap = fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8');
+    assert.equal(
+      roadmap.includes('```md\n\n### Phase 99: Example\n\nprose\n```'),
+      true,
+      'legacy write bytes must match upstream/next normalization',
+    );
+  });
+}
+
 test('#4304 byte identity: non-bracket phase-plan-index and init execute-phase outputs do not vary by convention', () => {
   const outputs = [];
   for (const convention of [null, 'sequential', 'milestone-prefixed']) {

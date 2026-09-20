@@ -249,3 +249,15 @@ describe('#4725: write normalization must not reflow untouched prose', () => {
     );
   });
 });
+
+describe('#4304: fenced heading normalization compatibility', () => {
+  test('default Markdown normalization matches upstream/next around a fenced heading followed by prose', () => {
+    const input = '```md\n### Phase 99: Example\nprose\n```\n';
+    // Golden bytes from upstream/next at the round-18 rebase base. Bracket
+    // writers may opt into preserving the input fence, but the default seam
+    // remains the upstream implementation used by every legacy convention.
+    const upstreamBytes = '```md\n\n### Phase 99: Example\n\nprose\n```\n';
+
+    assert.equal(normalizeContent(MD, input).content, upstreamBytes);
+  });
+});

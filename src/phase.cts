@@ -1732,7 +1732,11 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
     const insertAt = phaseEntryInsertOffset(rawContent, cwd, convention);
     const updatedContent = rawContent.slice(0, insertAt) + phaseEntry + rawContent.slice(insertAt);
 
-    platformWriteSync(roadmapPath, updatedContent);
+    platformWriteSync(
+      roadmapPath,
+      updatedContent,
+      bracketContext ? { preserveFencedMarkdownStructure: true } : undefined,
+    );
     return { newPhaseId: _newPhaseId, dirName: _dirName };
   });
 
@@ -1909,7 +1913,11 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
         naming_mode: config.phase_naming,
       });
     }
-    platformWriteSync(roadmapPath, rawContent);
+    platformWriteSync(
+      roadmapPath,
+      rawContent,
+      bracketContext ? { preserveFencedMarkdownStructure: true } : undefined,
+    );
     return added;
   });
   output({ phases: results, count: results.length }, raw);
@@ -2407,7 +2415,11 @@ function cmdPhaseInsert(
     platformEnsureDir(dirPath);
     platformWriteSync(path.join(dirPath, '.gitkeep'), '');
 
-    platformWriteSync(roadmapPath, updatedContent);
+    platformWriteSync(
+      roadmapPath,
+      updatedContent,
+      bracketContext ? { preserveFencedMarkdownStructure: true } : undefined,
+    );
     return { decimalPhase: _decimalPhase, dirName: _dirName };
   });
 
@@ -4140,7 +4152,8 @@ function updateRoadmapAfterBracketPhaseRemoval(
     }
     content = rewritten.join('');
 
-    platformWriteSync(roadmapPath, content);
+    const bracketNormalization = { preserveFencedMarkdownStructure: true } as const;
+    platformWriteSync(roadmapPath, content, bracketNormalization);
     // platformWriteSync's own markdown normalization (_normalizeMd) inserts
     // blank lines around headings/fences/lists and collapses runs of 3+
     // blank lines, so a KEPT line's position here can shift from its
@@ -4166,7 +4179,7 @@ function updateRoadmapAfterBracketPhaseRemoval(
       }
     }
     return {
-      updated: contentChangedAfterNormalize(roadmapPath, originalContent, content),
+      updated: contentChangedAfterNormalize(roadmapPath, originalContent, content, bracketNormalization),
       roadmapLinesRewritten,
       referencesLeftUntouched,
     };
