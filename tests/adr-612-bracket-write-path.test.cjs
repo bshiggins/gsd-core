@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { extractCurrentMilestone } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
 
 const projects = new Set();
 
@@ -434,7 +435,7 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     const result = runGsdTools(['phase', 'insert', '01', 'Second Hotfix'], dir);
 
     assert.equal(result.success, false, result.error || result.output);
-    assert.match(result.error, /missing a detail section/);
+    assert.match(result.error, /active milestone window/);
     assert.equal(fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8'), before);
     assert.deepEqual(fs.readdirSync(planning(dir, 'phases')), []);
   });
@@ -602,6 +603,102 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.equal(ck02Details.includes('### [CK.02] 03.01: Urgent fix (INSERTED)'), true);
   });
 
+  // #4304 round 16 (B1): the raw active ranges may still contain a shipped
+  // <details> archive. Searching those bytes for the first matching NUMBER
+  // selected [CK.01] 01 before the live [CK.02] 01 and wrote the new CK.02
+  // subphase inside history, where extractCurrentMilestone then hid it.
+  test('phase insert selects the live active-identity heading after an archived different-identity heading with the same number', () => {
+    const dir = project('adr-612-bracket-insert-live-identity-');
+    writeConfig(dir, 'bracket');
+    fs.writeFileSync(planning(dir, 'STATE.md'), '---\nmilestone: v2.1\n---\n');
+    const archive = [
+      '<details>',
+      '<summary>✅ [CK.01] v1.0 — SHIPPED 2026-01-01</summary>',
+      '',
+      '### [CK.01] 01: Archived One',
+      '',
+      '**Goal:** preserve',
+      '',
+      '### [CK.01] 02: Archived Two',
+      '',
+      '**Goal:** preserve',
+      '',
+      '</details>',
+    ].join('\n');
+    fs.writeFileSync(
+      planning(dir, 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.1 — Current',
+        '',
+        archive,
+        '',
+        '### [CK.02] 01: Live One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Live Two',
+        '**Goal:** keep',
+        '',
+      ].join('\n'),
+    );
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-01-live-one'), { recursive: true });
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-02-live-two'), { recursive: true });
+
+    const result = runGsdTools(['phase', 'insert', '1', 'Hotfix'], dir);
+    assert.equal(result.success, true, result.error || result.output);
+
+    const roadmap = fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8');
+    const archiveStart = roadmap.indexOf('<details>');
+    const archiveEnd = roadmap.indexOf('</details>', archiveStart);
+    assert.equal(
+      roadmap.slice(archiveStart, archiveEnd + '</details>'.length),
+      archive,
+      'shipped archive must remain byte-identical',
+    );
+    const liveOne = roadmap.indexOf('### [CK.02] 01: Live One');
+    const inserted = roadmap.indexOf('### [CK.02] 01.01: Hotfix (INSERTED)');
+    const liveTwo = roadmap.indexOf('### [CK.02] 02: Live Two');
+    assert.equal(liveOne < inserted && inserted < liveTwo, true, 'insert must follow the live target heading');
+    const current = extractCurrentMilestone(roadmap, dir);
+    assert.equal(current.includes('### [CK.02] 01.01: Hotfix (INSERTED)'), true);
+  });
+
+  test('phase insert refuses byte-identically when its only matching active-identity heading is archived', () => {
+    const dir = project('adr-612-bracket-insert-archive-only-');
+    writeConfig(dir, 'bracket');
+    fs.writeFileSync(planning(dir, 'STATE.md'), '---\nmilestone: v2.1\n---\n');
+    fs.writeFileSync(
+      planning(dir, 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.1 — Current',
+        '',
+        '<details>',
+        '<summary>✅ [CK.02] v2.0 — SHIPPED 2026-01-01</summary>',
+        '',
+        '### [CK.02] 01: Archived One',
+        '**Goal:** preserve',
+        '',
+        '</details>',
+        '',
+        '### [CK.02] 02: Live Two',
+        '**Goal:** keep',
+        '',
+      ].join('\n'),
+    );
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-01-archived-one'), { recursive: true });
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-02-live-two'), { recursive: true });
+    const before = snapshotTree(planning(dir));
+
+    const result = runGsdTools(['phase', 'insert', '1', 'Hotfix'], dir);
+
+    assert.equal(result.success, false, result.output);
+    assert.match(result.error, /active milestone window/i);
+    assert.deepEqual(snapshotTree(planning(dir)), before);
+  });
+
   test('an insert that fails to locate its header leaves the planning tree byte-identical', () => {
     const dir = project('adr-612-bracket-insert-refuse-');
     writeConfig(dir, 'bracket');
@@ -623,7 +720,7 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     const result = runGsdTools(['phase', 'insert', '9', 'Urgent fix'], dir);
 
     assert.equal(result.success, false, result.output);
-    assert.match(result.error, /missing a detail section|Could not find Phase 9 header/);
+    assert.match(result.error, /active milestone window/);
     assert.deepEqual(snapshotTree(planning(dir)), before);
   });
 

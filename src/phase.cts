@@ -2032,6 +2032,37 @@ function canonicalizeBracketPhaseArgument(
   return { normalized: canonicalToken, isDecimal: canonicalToken.includes('.') };
 }
 
+/**
+ * Select `phase insert`'s bracket target from the reader-owned active ranges.
+ * A raw range may still contain a shipped `<details>` archive, so range
+ * membership alone is not evidence that a same-numbered heading is live.
+ * Reuse bracket removal's historical-section classifier and owned-line parser:
+ * the latter derives its bracket intro from phase-id.cts's exported read
+ * grammar, then `sameBracketPhaseId` qualifies project, milestone, and the
+ * canonical phase number together. No bare-number fallback exists here.
+ */
+function activeBracketInsertHeading(
+  content: string,
+  targetId: BracketRoadmapPhaseId,
+  ranges: ReturnType<typeof currentMilestoneRawRanges>,
+): { start: number; length: number; rangeEnd: number } | null {
+  if (!ranges) return null;
+  const historicalLineStarts = archivedOrClosedMilestoneLineStarts(content);
+  const fencedLineNumbers = fencedRoadmapLineNumbers(content);
+  const searchRanges = [ranges.primary, ...(ranges.details ? [ranges.details] : [])];
+  const lines = splitRoadmapLineRecords(content);
+  for (const range of searchRanges) {
+    for (const line of lines) {
+      if (line.start < range.start || line.start >= range.end) continue;
+      if (historicalLineStarts.has(line.start) || fencedLineNumbers.has(line.lineNumber)) continue;
+      const owned = classifyBracketOwnedLine(line.text);
+      if (owned.kind !== 'heading' || !owned.id || !sameBracketPhaseId(owned.id, targetId)) continue;
+      return { start: line.start, length: line.text.length + line.eol.length, rangeEnd: range.end };
+    }
+  }
+  return null;
+}
+
 function cmdPhaseInsert(
   cwd: string,
   afterPhase: string,
@@ -2090,7 +2121,17 @@ function cmdPhaseInsert(
       convention,
     );
     const targetPattern = new RegExp(`#{2,4}\\s*${headingIntro}${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}:`, 'i');
-    const headingMatch = targetPattern.test(content);
+    const bracketSectionRanges = bracketContext
+      ? currentMilestoneRawRanges(rawContent, cwd, 'bracket')
+      : null;
+    const [targetPhase, targetSubphase] = normalizedAfter.split('.');
+    const bracketTargetId = bracketContext
+      ? bracketPhaseId(bracketContext, targetPhase, targetSubphase)
+      : null;
+    const bracketHeading = bracketTargetId
+      ? activeBracketInsertHeading(rawContent, bracketTargetId, bracketSectionRanges)
+      : null;
+    const headingMatch = bracketContext ? bracketHeading !== null : targetPattern.test(content);
 
     const bulletPattern = new RegExp(
       `-\\s*\\[[ x]\\]\\s*(?:\\*\\*)?${headingIntro}${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
@@ -2100,6 +2141,15 @@ function cmdPhaseInsert(
     const roadmapHasHeadingPhases = anyHeadingPattern.test(content);
     // #4304 review fix (Minor 3): bracket identities live in headings only, so a bracket ROADMAP never takes the legacy bullet-insertion branch — a bullet-only bracket ROADMAP falls through to the checklist-refusal path below instead.
     const isBulletStyle = !bracketContext && !headingMatch && bulletPattern.test(content) && !roadmapHasHeadingPhases;
+
+    if (bracketContext && !bracketHeading) {
+      const searchedRanges = bracketSectionRanges?.details
+        ? 'primary and Phase Details ranges'
+        : 'primary range';
+      error(
+        `Could not find live ${renderPhaseId(bracketTargetId!)} heading in the active milestone window (${searchedRanges})`,
+      );
+    }
 
     if (!headingMatch && !isBulletStyle) {
       const checklistPattern = new RegExp(
@@ -2226,21 +2276,14 @@ function cmdPhaseInsert(
         `(#{2,4}\\s*${headingIntro}${afterPhaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}:[^\\n]*\\n)`,
         'i',
       );
-      // #4304 Blocker 2 fix: a bracket ROADMAP can have the same phase number
-      // in more than one milestone (`[CK.01] 01:` and `[CK.02] 01:`) —
-      // headingIntro matches ANY project.milestone bracket, not just the
-      // active one, so rawContent.match found the FIRST occurrence in the
-      // whole document regardless of which milestone is active, and the
-      // "next phase" boundary search from there could land the insertion
-      // inside an earlier milestone's own section. Scope both the header
-      // lookup and the next-phase boundary to the active milestone's own
-      // section — the same raw offsets `currentMilestoneRawRanges` already
-      // derives for the read/scoping paths — so the insertion point can
-      // never land outside it. Falls back to the legacy whole-document
-      // search when the active milestone cannot be offset-scoped (mirrors
-      // cmdPhaseComplete's own null fallback for this same helper), and stays
-      // the untouched whole-document search for every non-bracket
-      // convention, which never had this cross-milestone ambiguity.
+      // #4304: bracket insertion is located by `activeBracketInsertHeading`
+      // above, which requires all three ownership facts together: the line is
+      // inside the reader-owned active window, is not historical under the
+      // shared remove/guard classifier, and parses to the active bracket
+      // identity plus canonical target number through the exported read
+      // grammar. This closes the raw-range hole where an archived `[CK.01]
+      // 01` inside `[CK.02]`'s primary bytes won a bare-number search. The
+      // legacy path below keeps its whole-document pattern byte-for-behavior.
       //
       // #4304 (B3): the pre-flight headingMatch check above ran
       // against extractCurrentMilestone's content, which (for a bracket
@@ -2251,9 +2294,6 @@ function cmdPhaseInsert(
       // milestone. Search the SAME two raw ranges the B3 remove fix
       // discovers (primary, then details) instead of primary alone, so a
       // heading the pre-flight check can see is also found here.
-      const bracketSectionRanges = bracketContext
-        ? currentMilestoneRawRanges(rawContent, cwd, 'bracket')
-        : null;
       const headerSearchRanges = bracketSectionRanges
         ? [
           bracketSectionRanges.primary,
@@ -2261,32 +2301,36 @@ function cmdPhaseInsert(
         ]
         : [{ start: 0, end: rawContent.length }];
 
-      let searchStart = headerSearchRanges[0].start;
-      let searchEnd = headerSearchRanges[0].end;
-      let headerMatch: RegExpMatchArray | null = null;
-      for (const range of headerSearchRanges) {
-        const searchWindow = rawContent.slice(range.start, range.end);
-        const match = searchWindow.match(headerPattern);
-        if (match) {
-          headerMatch = match;
-          searchStart = range.start;
-          searchEnd = range.end;
-          break;
+      let searchStart = bracketHeading?.start ?? headerSearchRanges[0].start;
+      let searchEnd = bracketHeading?.rangeEnd ?? headerSearchRanges[0].end;
+      let headerLength = bracketHeading?.length ?? 0;
+      if (!bracketHeading) {
+        let headerMatch: RegExpMatchArray | null = null;
+        for (const range of headerSearchRanges) {
+          const searchWindow = rawContent.slice(range.start, range.end);
+          const match = searchWindow.match(headerPattern);
+          if (match) {
+            headerMatch = match;
+            searchStart = range.start + (match.index as number);
+            searchEnd = range.end;
+            headerLength = match[0].length;
+            break;
+          }
+        }
+        if (!headerMatch) {
+          error(`Could not find Phase ${afterPhase} header`);
         }
       }
-      if (!headerMatch) {
-        error(`Could not find Phase ${afterPhase} header`);
-      }
 
-      const headerIdx = searchStart + rawContent.slice(searchStart, searchEnd).indexOf(headerMatch![0]);
-      const afterHeader = rawContent.slice(headerIdx + headerMatch![0].length, searchEnd);
+      const headerIdx = searchStart;
+      const afterHeader = rawContent.slice(headerIdx + headerLength, searchEnd);
       const nextPhaseMatch = afterHeader.match(
         new RegExp(`\\r?\\n#{2,4}\\s+${headingIntro}\\d[\\d.]*`, 'i'),
       );
 
       let insertIdx: number;
       if (nextPhaseMatch) {
-        insertIdx = headerIdx + headerMatch![0].length + (nextPhaseMatch.index as number);
+        insertIdx = headerIdx + headerLength + (nextPhaseMatch.index as number);
       } else {
         insertIdx = searchEnd;
       }
