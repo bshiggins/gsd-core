@@ -291,8 +291,10 @@ function cmdPhasesList(cwd: string, options: PhaseListOptions, raw: boolean): vo
       const normalized = normalizePhaseName(phase);
       // The pool is #3185's (physical set + archived); the matcher is this
       // PR's. `dirs` is deliberately not read here: on this base it is not
-      // assigned until the branch below picks a match.
-      const { matches } = matchPhaseDirs(lookupPool, normalized);
+      // assigned until the branch below picks a match. #4304 opts into the
+      // bracket directory grammar only when the current checkout resolves it.
+      const convention = resolvePhaseIdConvention(cwd) === 'bracket' ? 'bracket' : undefined;
+      const { matches } = matchPhaseDirs(lookupPool, normalized, convention);
       const match = matches[0];
       if (!match) {
         output({ files: [], count: 0, phase_dir: null, error: 'Phase not found' }, raw, '');
@@ -372,6 +374,9 @@ function cmdPhasesList(cwd: string, options: PhaseListOptions, raw: boolean): vo
 function cmdPhaseNextDecimal(cwd: string, basePhase: string, raw: boolean): void {
   const phasesDir = path.join(planningDir(cwd), 'phases');
   const normalized = normalizePhaseName(basePhase);
+  // #4304: the existence half is a phase-directory lookup. Only bracket mode
+  // widens its grammar; legacy conventions retain the historical call shape.
+  const convention = resolvePhaseIdConvention(cwd) === 'bracket' ? 'bracket' : undefined;
 
   try {
     let baseExists = false;
@@ -380,7 +385,7 @@ function cmdPhaseNextDecimal(cwd: string, basePhase: string, raw: boolean): void
     if (fs.existsSync(phasesDir)) {
       const entries = fs.readdirSync(phasesDir, { withFileTypes: true });
       const dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
-      baseExists = matchPhaseDirs(dirs, normalized).matches.length > 0;
+      baseExists = matchPhaseDirs(dirs, normalized, convention).matches.length > 0;
     }
 
     const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
@@ -876,6 +881,9 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
 
   const phasesDir = path.join(planningDir(cwd), 'phases');
   const normalized = normalizePhaseName(phase);
+  // #4304: execute-phase consumes this index, so a phase created with the
+  // bracket writer must resolve through the same convention-aware selector.
+  const convention = resolvePhaseIdConvention(cwd) === 'bracket' ? 'bracket' : undefined;
 
   let phaseDir: string | null = null;
   let phaseDirName: string | null = null;
@@ -890,7 +898,7 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
     // the locator and the find-phase scan (this site previously first-matched
     // with `.find()` and had no multi-match guard — the #2237 fail-loud rule
     // now applies here too, so the three resolution paths cannot disagree).
-    const { matches } = matchPhaseDirs(dirs, normalized);
+    const { matches } = matchPhaseDirs(dirs, normalized, convention);
     if (matches.length > 1) {
       ambiguousMatches = matches;
     } else if (matches.length === 1) {
@@ -4024,7 +4032,7 @@ function cmdPhaseRemove(
   const { matches: phaseDirMatches } = matchPhaseDirs(
     candidateDirs,
     normalized,
-    removeConvention,
+    removeConvention === 'bracket' ? 'bracket' : undefined,
   );
   if (phaseDirMatches.length > 1) {
     output(

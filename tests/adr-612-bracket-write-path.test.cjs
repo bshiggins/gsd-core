@@ -181,13 +181,30 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     );
   });
 
-  test('phase add output resolves through find-phase and phase list-plans by every bracket query spelling', () => {
+  test('phase add output resolves through every current-checkout phase-directory lookup', () => {
     const dir = project('adr-612-bracket-find-added-');
     writeBracketFixture(dir);
 
     run(['phase', 'add', 'User Dashboard'], dir);
     const phaseDir = planning(dir, 'phases', 'CK.02-02-user-dashboard');
-    fs.writeFileSync(path.join(phaseDir, '02-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(phaseDir, '02-01-PLAN.md'), [
+      '---',
+      'wave: 1',
+      'depends_on: []',
+      'autonomous: true',
+      '---',
+      '',
+      '# Plan',
+      '',
+    ].join('\n'));
+    fs.writeFileSync(path.join(phaseDir, '02-01-SUMMARY.md'), '# Summary\n\nSTATUS: failed\n');
+    fs.writeFileSync(path.join(phaseDir, '02-CONTEXT.md'), '# Context\n');
+    fs.writeFileSync(
+      planning(dir, 'STATE.md'),
+      fs.readFileSync(planning(dir, 'STATE.md'), 'utf8')
+        .replace('**Current Phase:** 01', '**Current Phase:** 02')
+        .replace('Phase: 01 (Foundation)', 'Phase: 02 (User Dashboard)'),
+    );
 
     for (const query of ['02', '2', 'CK.02-02']) {
       const found = run(['find-phase', query], dir);
@@ -202,6 +219,91 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
       listed.plans,
       ['.planning/phases/CK.02-02-user-dashboard/02-01-PLAN.md'],
     );
+
+    const index = run(['phase-plan-index', '02'], dir);
+    assert.equal(index.error, undefined);
+    assert.equal(index.plans.length, 1);
+    assert.equal(index.plans[0].id, '02-01');
+
+    const phasesListed = run(['phases', 'list', '--phase', '02', '--type', 'plans'], dir);
+    assert.equal(phasesListed.error, undefined);
+    assert.deepEqual(phasesListed.files, ['02-01-PLAN.md']);
+
+    const nextDecimal = run(['phase', 'next-decimal', '02'], dir);
+    assert.equal(nextDecimal.found, true);
+
+    const execute = run(['init', 'execute-phase', '02'], dir);
+    assert.equal(execute.phase_found, true);
+    assert.equal(execute.phase_dir, fs.realpathSync(phaseDir));
+    assert.equal(execute.plan_count, 1);
+
+    const smartEntry = run(['smart-entry', '--json'], dir);
+    assert.equal(smartEntry.signals.verify_failed, true);
+
+    const updated = run(['roadmap', 'update-plan-progress', '02'], dir);
+    assert.equal(updated.plan_count, 1);
+
+    const drift = run(['verify', 'context-drift', '02'], dir);
+    assert.notEqual(drift.reason, 'phase-not-found');
+
+    const manager = run(['init', 'manager'], dir);
+    const managed = manager.phases.find((phase) => phase.number === '02');
+    assert.ok(managed);
+    assert.notEqual(managed.disk_status, 'no_directory');
+
+    const analyzed = run(['roadmap', 'analyze'], dir);
+    const analyzedPhase = analyzed.phases.find((phase) => phase.number === '02');
+    assert.ok(analyzedPhase);
+    assert.notEqual(analyzedPhase.disk_status, 'no_directory');
+  });
+
+  test('milestone completion recognizes bracket phase directories as started', () => {
+    const dir = project('adr-612-bracket-milestone-complete-');
+    writeConfig(dir, 'bracket');
+    fs.writeFileSync(
+      planning(dir, 'STATE.md'),
+      '---\nstatus: executing\nmilestone: v2.0\ncurrent_phase: 02\n---\n',
+    );
+    // The milestone guard's existing reader recognizes legacy headings even
+    // during migration. Its disk lookup must still find the canonical bracket
+    // directory produced by the current checkout.
+    fs.writeFileSync(
+      planning(dir, 'ROADMAP.md'),
+      '# Roadmap\n\n## Milestone v2.0\n\n### Phase 2: New Work\n\n**Goal:** Existing\n',
+    );
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-02-new-work'), { recursive: true });
+
+    const result = runGsdTools(['milestone', 'complete', 'v2.0', '--confirm'], dir);
+
+    assert.equal(result.success, true, result.error);
+  });
+
+  test('roadmap analyze enriches a bracket phase declared only in a phase table', () => {
+    const dir = project('adr-612-bracket-table-lookup-');
+    writeConfig(dir, 'bracket');
+    fs.writeFileSync(
+      planning(dir, 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Foundation',
+        '',
+        '| Phase | Name |',
+        '| --- | --- |',
+        '| 02 | New Work |',
+        '',
+      ].join('\n'),
+    );
+    const phaseDir = planning(dir, 'phases', 'CK.02-02-new-work');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '02-01-PLAN.md'), '# Plan\n');
+
+    const analyzed = run(['roadmap', 'analyze'], dir);
+    const phase = analyzed.phases.find((row) => row.number === '02');
+
+    assert.ok(phase);
+    assert.notEqual(phase.disk_status, 'no_directory');
+    assert.equal(phase.plan_count, 1);
   });
 
   // #4304 round 12 (W1): readSubdirectories intentionally ignores symlinks,
@@ -1135,3 +1237,30 @@ for (const convention of [null, 'sequential', 'milestone-prefixed']) {
     );
   });
 }
+
+test('#4304 byte identity: non-bracket phase-plan-index and init execute-phase outputs do not vary by convention', () => {
+  const outputs = [];
+  for (const convention of [null, 'sequential', 'milestone-prefixed']) {
+    const dir = project('adr-612-legacy-lookup-bytes-');
+    writeConfig(dir, convention);
+    fs.writeFileSync(
+      planning(dir, 'ROADMAP.md'),
+      '# Roadmap\n\n### Phase 2: Second\n\n**Goal:** Existing\n',
+    );
+    const phaseDir = planning(dir, 'phases', 'CK-02-second');
+    fs.mkdirSync(phaseDir, { recursive: true });
+    fs.writeFileSync(path.join(phaseDir, '02-01-PLAN.md'), '---\nwave: 1\n---\n');
+
+    const index = runGsdTools(['phase-plan-index', '02'], dir);
+    assert.equal(index.success, true, index.error);
+    const execute = runGsdTools(['init', 'execute-phase', '02'], dir);
+    assert.equal(execute.success, true, execute.error);
+    outputs.push({
+      index: index.output.replaceAll(dir, '<PROJECT>'),
+      execute: execute.output.replaceAll(dir, '<PROJECT>'),
+    });
+  }
+
+  assert.deepEqual(outputs[1], outputs[0]);
+  assert.deepEqual(outputs[2], outputs[0]);
+});

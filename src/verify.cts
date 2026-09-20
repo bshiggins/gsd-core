@@ -67,7 +67,7 @@ import onboardProjectionMod = require('./onboard-projection.cjs');
 const { REQUIRED_CODEBASE_MAP_FILES } = onboardProjectionMod;
 import { realClock } from './clock.cjs';
 
-const { planningDir, planningRoot, withPlanningLock } = planningWorkspace;
+const { planningDir, planningRoot, resolvePhaseIdConvention, withPlanningLock } = planningWorkspace;
 const { defaultPhaseCleanCommitTimesMs } = verificationMod;
 const { extractFrontmatter, parseMustHavesBlock } = frontmatterMod;
 const { readStateHeadFreshness } = stateMod;
@@ -2079,11 +2079,14 @@ function cmdValidateAgents(cwd: string, raw: boolean): void {
  * requested token (e.g. "1" matching "11-expansion"). Falls back to an exact
  * directory-name match. Returns null if neither resolves. (#1571, #2528)
  */
-function resolvePhaseDirByToken(phasesDir: string, phaseArg: string): string | null {
+function resolvePhaseDirByToken(cwd: string, phasesDir: string, phaseArg: string): string | null {
   const normalizedPhase = normalizePhaseName(phaseArg);
   const dirEntries = fs.readdirSync(phasesDir, { withFileTypes: true });
   const dirNames = dirEntries.filter((e) => e.isDirectory()).map((e) => e.name);
-  const matched = matchPhaseDirs(dirNames, normalizedPhase).matches[0];
+  // #4304: both drift commands resolve a directory in the current checkout.
+  // Bracket is the only opt-in grammar; all other conventions remain legacy.
+  const convention = resolvePhaseIdConvention(cwd) === 'bracket' ? 'bracket' : undefined;
+  const matched = matchPhaseDirs(dirNames, normalizedPhase, convention).matches[0];
   if (matched) return path.join(phasesDir, matched);
   const contained = tryWithinRoot(phaseArg, phasesDir);
   if (contained !== null && fs.existsSync(contained)) return contained;
@@ -2144,7 +2147,7 @@ function cmdVerifyContextDrift(cwd: string, phaseArg: string | undefined, raw: b
 
   // Same phase-directory resolution rule cmdVerifySchemaDrift uses (#1571, #2528):
   // matchPhaseDirs, never a naive substring test.
-  const phaseDir = resolvePhaseDirByToken(phasesDir, phaseArg);
+  const phaseDir = resolvePhaseDirByToken(cwd, phasesDir, phaseArg);
   if (!phaseDir) {
     emitSkip('phase-not-found', `Phase directory not found: ${phaseArg}`);
     return;
@@ -2238,7 +2241,7 @@ function cmdVerifySchemaDrift(
   // matching "11-expansion"), making the drift gate inspect the wrong phase.
   // This shares the one selection rule with find-phase / verify
   // phase-completeness rather than restating it. (#1571, #2528)
-  const phaseDir = resolvePhaseDirByToken(phasesDir, phaseArg);
+  const phaseDir = resolvePhaseDirByToken(cwd, phasesDir, phaseArg);
 
   if (!phaseDir) {
     output(

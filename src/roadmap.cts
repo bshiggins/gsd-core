@@ -457,6 +457,9 @@ function collectAnalyzePhases(
   phaseDirNames: string[],
   convention?: string | null,
 ): AnalyzePhaseCollection {
+  // #4304: directory matching is convention-aware only for bracket. The
+  // caller still threads the full convention to heading and artifact readers.
+  const directoryConvention = convention === 'bracket' ? 'bracket' : undefined;
   // Extract all phase headings: ## Phase N: Name or ### Phase N: Name
   // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
   // #612: CAPTURING intro under the bracket convention — group 1 is the
@@ -555,7 +558,7 @@ function collectAnalyzePhases(
     // phase resolves to nothing.
     // Upstream centralized this choice in `matchPhaseDirs`; thread the same
     // convention into that owner rather than reviving the primitive `.find()`.
-    const dirMatch = matchPhaseDirs(phaseDirNames, normalized, convention).matches[0];
+    const dirMatch = matchPhaseDirs(phaseDirNames, normalized, directoryConvention).matches[0];
 
     if (dirMatch) {
       const counts = countPhasePlansAndSummaries(path.join(phasesDir, dirMatch), convention);
@@ -630,7 +633,11 @@ function collectAnalyzePhases(
     // Preserve that behavior while heading occurrences gain bracket identity.
     detailKeys.add(occurrenceKey(tr.id));
     if (seen.has(stripPadA(tr.id))) continue;
-    const dirMatchA = matchPhaseDirs(phaseDirNames, normalizePhaseName(tr.id)).matches[0];
+    const dirMatchA = matchPhaseDirs(
+      phaseDirNames,
+      normalizePhaseName(tr.id),
+      directoryConvention,
+    ).matches[0];
     let tPlanCount = 0;
     let tSummaryCount = 0;
     let tHasContext = false;
