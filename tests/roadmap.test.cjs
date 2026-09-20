@@ -5279,3 +5279,210 @@ describe('roadmap update-plan-progress — superseded plans (#4741)', () => {
     assert.ok(roadmap.includes('1/1 plans executed'), 'numbers and checkboxes agree');
   });
 });
+
+// ─── #4786: suffix-less hand-written plan lists tick in place, never duplicated ──
+
+describe('#4786: suffix-less hand-written plan lists are recognized, not duplicated', () => {
+  let tmpDir;
+  let roadmapPath;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-4786-');
+    roadmapPath = path.join(tmpDir, '.planning', 'ROADMAP.md');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  function writtenAfter() {
+    return fs.readFileSync(roadmapPath, 'utf-8');
+  }
+
+  test('#4786: a suffix-less hand-written plan list is ticked in place, never duplicated', () => {
+    // The issue's measured shape: a hand-written list WITHOUT the -PLAN.md
+    // suffix, carrying em-dash descriptions. The old detection keyed on the
+    // full plan filename, counted every plan "missing", and inserted a
+    // canonical list above the hand-written one (32 checkbox lines for 16
+    // plans, exit 0).
+    fs.writeFileSync(roadmapPath, [
+      '# ROADMAP',
+      '',
+      '### Phase 5: test phase',
+      '',
+      '**Plans:** 2/3 plans executed',
+      '',
+      'Plans:',
+      '',
+      '- [x] 5-01 — first: does the thing with a long hand-written description',
+      '- [x] 5-02 — second: does the other thing through submit(true)',
+      '- [ ] 5-03 — union run, redeploy and demo rebuild, live measurement',
+      '',
+    ].join('\n'));
+    createPhaseWithPlans(tmpDir, '5', [
+      '5-01-PLAN.md',
+      '5-02-PLAN.md',
+      '5-03-PLAN.md',
+    ]);
+    // All three plans have summaries (the issue's shape: the call lands the
+    // last summary, 15/16 → 16/16). #4741: only plans the count counts are
+    // tickable — a summary-less row is correctly left alone.
+    for (const n of ['5-01', '5-02', '5-03']) {
+      fs.writeFileSync(path.join(tmpDir, '.planning', 'phases', '05-test-phase', `${n}-SUMMARY.md`), '# Summary\n');
+    }
+
+    const result = runGsdTools(['roadmap', 'update-plan-progress', '5'], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+    const parsed = JSON.parse(result.output);
+    assert.equal(parsed.updated, true, 'the unchecked plan must be ticked');
+    assert.ok(
+      writtenAfter(result).includes('**Plans:** 3/3 plans executed'),
+      'the count line must update to 3/3',
+    );
+
+    const written = fs.readFileSync(roadmapPath, 'utf-8');
+    // The damage was the INSERTION — none may appear.
+    assert.ok(!written.includes('5-01-PLAN.md'), 'no canonical row may be inserted beside a recognized suffix-less list');
+    assert.ok(!written.includes('5-02-PLAN.md'), 'no canonical row may be inserted beside a recognized suffix-less list');
+    assert.ok(!written.includes('5-03-PLAN.md'), 'no canonical row may be inserted beside a recognized suffix-less list');
+    // The tick happened IN PLACE, with the hand-written description byte-identical.
+    assert.ok(
+      written.includes('- [x] 5-03 — union run, redeploy and demo rebuild, live measurement'),
+      `the unchecked suffix-less row must be ticked in place with its description intact; ROADMAP:\n${written}`,
+    );
+    assert.ok(
+      written.includes('- [x] 5-01 — first: does the thing with a long hand-written description'),
+      'already-ticked rows must be byte-identical',
+    );
+    assert.equal(
+      (written.match(/- \[.\] 5-0/g) || []).length,
+      3,
+      `exactly three checkbox rows must remain (no duplication); ROADMAP:\n${written}`,
+    );
+  });
+
+  test('#4786: a stem does not match a longer plan id', () => {
+    // Boundary: the new stem recognition must not let `- [x] 5-011` satisfy
+    // plan 5-01 (5-011 is a different plan). 5-01 carries no recognizable row,
+    // so the #1163 fresh-template insertion still fires for it — that is the
+    // documented contract; the pin is that 5-011 is not treated as 5-01.
+    fs.writeFileSync(roadmapPath, [
+      '# ROADMAP',
+      '',
+      '### Phase 5: test phase',
+      '',
+      'Plans:',
+      '',
+      '- [x] 5-011 — bogus longer id, not plan 5-01',
+      '',
+    ].join('\n'));
+    createPhaseWithPlans(tmpDir, '5', [
+      '5-01-PLAN.md',
+      '5-02-PLAN.md',
+      '5-03-PLAN.md',
+    ]);
+
+    const result = runGsdTools(['roadmap', 'update-plan-progress', '5'], tmpDir);
+    assert.ok(result.success, `Command failed: ${result.error}`);
+
+    const written = fs.readFileSync(roadmapPath, 'utf-8');
+    assert.ok(written.includes('- [ ] 5-01-PLAN.md'), '5-01 must still count as missing (5-011 is a different plan)');
+    assert.ok(written.includes('- [ ] 5-02-PLAN.md') && written.includes('- [ ] 5-03-PLAN.md'),
+      'all genuinely absent plans still insert');
+    assert.equal(
+      (written.match(/- \[.\] 5-0/g) || []).length,
+      4,
+      `3 inserted rows + the hand-written 5-011 row; ROADMAP:\n${written}`,
+    );
+  });
+});
+
+// ─── #4801: archived phase directories resolve in init.manager ──────────────
+
+describe('#4801: init.manager resolves archived phase directories', () => {
+  let tmpDir;
+
+  beforeEach(() => {
+    tmpDir = createTempProject('gsd-4801-');
+  });
+
+  afterEach(() => {
+    cleanup(tmpDir);
+  });
+
+  function writeState4801() {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nstatus: active\n---\n# State\n');
+  }
+
+  function writeRoadmap4801() {
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), [
+      '# Roadmap',
+      '',
+      '### Phase 3: shipped',
+      '',
+      'Goal: shipped before archive',
+      '',
+      '### Phase 5: live',
+      '',
+      'Goal: in progress',
+      '',
+      '### Phase 7: never started',
+      '',
+      'Goal: not started',
+      '',
+    ].join('\n'));
+  }
+
+  function seedArchivedPhase() {
+    // An archived, shipped phase: PLAN + SUMMARY + a NEWER passing VERIFICATION
+    // (mtime discipline per the #3057 fixture — the verification must postdate
+    // the summary for the completion projection to read it as fresh).
+    const arch = path.join(tmpDir, '.planning', 'milestones', 'v0.1-phases', '03-shipped');
+    fs.mkdirSync(arch, { recursive: true });
+    fs.writeFileSync(path.join(arch, '03-01-PLAN.md'), '# Plan\n');
+    fs.writeFileSync(path.join(arch, '03-01-SUMMARY.md'), '# Summary\n');
+    fs.writeFileSync(path.join(arch, '03-VERIFICATION.md'), '---\nstatus: passed\n---\n\n# Verification\n');
+    const older = new Date('2026-01-01T00:00:00.000Z');
+    const newer = new Date('2026-01-01T00:01:00.000Z');
+    fs.utimesSync(path.join(arch, '03-01-SUMMARY.md'), older, older);
+    fs.utimesSync(path.join(arch, '03-VERIFICATION.md'), newer, newer);
+  }
+
+  test('#4801: an archived phase directory resolves and reports complete', () => {
+    writeState4801();
+    writeRoadmap4801();
+    seedArchivedPhase();
+    // A live in-progress phase and a never-started phase for contrast.
+    const live = path.join(tmpDir, '.planning', 'phases', '05-live');
+    fs.mkdirSync(live, { recursive: true });
+    fs.writeFileSync(path.join(live, '05-01-PLAN.md'), '# Plan\n');
+
+    const output = JSON.parse(runGsdTools(['query', 'init.manager'], tmpDir).output);
+    const rows = new Map(output.phases.map((p) => [String(p.number), p]));
+
+    const archived = rows.get('3');
+    assert.ok(archived, 'the archived phase must appear in the enumeration');
+    assert.notStrictEqual(archived.disk_status, 'no_directory',
+      'an archived phase directory must resolve — no_directory means never started');
+    assert.strictEqual(archived.phase_complete, true,
+      'an archived phase with a passed verification reports complete');
+    const neverStarted = rows.get('7');
+    assert.strictEqual(neverStarted.disk_status, 'no_directory',
+      'a never-started phase still reports no_directory');
+  });
+
+  test('#4801: a live in-progress phase is unchanged by the archived-resolution swap', () => {
+    writeState4801();
+    writeRoadmap4801();
+    seedArchivedPhase();
+    const live = path.join(tmpDir, '.planning', 'phases', '05-live');
+    fs.mkdirSync(live, { recursive: true });
+    fs.writeFileSync(path.join(live, '05-01-PLAN.md'), '# Plan\n');
+
+    const output = JSON.parse(runGsdTools(['query', 'init.manager'], tmpDir).output);
+    const row = output.phases.find((p) => String(p.number) === '5');
+    assert.strictEqual(row.phase_complete, false);
+    assert.ok(['planned', 'empty', 'no_directory'].includes(row.disk_status),
+      `live plan-less phase stays incomplete; got ${row.disk_status}`);
+  });
+});
