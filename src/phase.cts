@@ -97,6 +97,7 @@ const {
   // (bracketOwnedLineOutsideActiveWindow) can recognize an archived section
   // instead of a re-typed copy of MILESTONE_CLOSED_MARKER_PATTERN.
   isClosedMilestoneHeading,
+  isClosedMilestoneDetails,
   isRecognizedMilestoneHeading,
 } = roadmapParserMod;
 // #4129: the single owner of "count the ROADMAP's milestone Complete rows"
@@ -2949,14 +2950,15 @@ function bracketPhaseOwnSubphases(
 
 /**
  * #4304 (B1): identify ROADMAP lines owned by historical milestone sections.
- * A `<details>` block is archived regardless of its summary text. Outside
- * details, a reader-recognized CLOSED/ARCHIVED/SHIPPED milestone heading owns
- * the section through the next reader-recognized milestone heading at the
- * same or shallower level. Headings come from tokenizeHeadings, so fenced
- * examples are neither historical markers nor section resets. Recognition is
- * imported from the window locator's milestone-vs-phase grammar before the
- * marker predicate is applied, so an ordinary phase title containing FAILED
- * or ✅ never opens or resets a historical section.
+ * A `<details>` block is historical only when the roadmap reader's own
+ * closed-summary classifier says it is; an active collapsed phase list stays
+ * live. Outside details, a reader-recognized CLOSED/ARCHIVED/SHIPPED milestone
+ * heading owns the section through the next reader-recognized milestone
+ * heading at the same or shallower level. Headings come from tokenizeHeadings,
+ * so fenced examples are neither historical markers nor section resets.
+ * Recognition is imported from the window locator's milestone-vs-phase
+ * grammar before the marker predicate is applied, so an ordinary phase title
+ * containing FAILED or ✅ never opens or resets a historical section.
  *
  * This is the single owner consumed by both the active-window safety guard and
  * bracket removal's rewrite pass. Historical lines are evidence of neither an
@@ -2965,13 +2967,23 @@ function bracketPhaseOwnSubphases(
 function archivedOrClosedMilestoneLineStarts(content: string): Set<number> {
   const historical = new Set<number>();
   const headingsByOffset = new Map(tokenizeHeadings(content).map((heading) => [heading.offset, heading]));
-  let inDetails = false;
+  let detailsBlock: { text: string; lineStarts: number[] } | null = null;
   let closedHeadingLevel = 0;
   for (const line of splitRoadmapLineRecords(content)) {
     const text = line.text;
-    if (/^\s*<details\b/i.test(text)) inDetails = true;
-    if (/^\s*<\/details\s*>/i.test(text)) {
-      inDetails = false;
+    if (!detailsBlock && /^\s*<details\b/i.test(text)) {
+      detailsBlock = { text: '', lineStarts: [] };
+    }
+    if (detailsBlock) {
+      detailsBlock.text += line.text + line.eol;
+      detailsBlock.lineStarts.push(line.start);
+      if (closedHeadingLevel > 0) historical.add(line.start);
+      if (/<\/details\s*>/i.test(text)) {
+        if (isClosedMilestoneDetails(detailsBlock.text)) {
+          for (const lineStart of detailsBlock.lineStarts) historical.add(lineStart);
+        }
+        detailsBlock = null;
+      }
       continue;
     }
     const heading = headingsByOffset.get(line.start);
@@ -2983,7 +2995,7 @@ function archivedOrClosedMilestoneLineStarts(content: string): Set<number> {
         closedHeadingLevel = level;
       }
     }
-    if (inDetails || closedHeadingLevel > 0) historical.add(line.start);
+    if (closedHeadingLevel > 0) historical.add(line.start);
   }
   return historical;
 }

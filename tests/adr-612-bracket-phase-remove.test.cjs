@@ -2891,6 +2891,57 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, []);
   });
 
+  test('renumbers an active milestone phase list collapsed inside details', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current 🚧',
+        '',
+        '<details>',
+        '<summary>Implementation phases</summary>',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '**Plans:** `03-01-PLAN.md`',
+        '',
+        '</details>',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+        ['CK.02-03-three', ['03-01-PLAN.md']],
+      ],
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const out = JSON.parse(result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+
+    assert.deepEqual(fs.readdirSync(planning('phases')).sort(), ['CK.02-01-one', 'CK.02-02-three']);
+    assert.equal(fs.existsSync(planning('phases', 'CK.02-02-three', '02-01-PLAN.md')), true);
+    assert.equal(roadmap.includes('- [ ] [CK.02] 02: Two'), false);
+    assert.equal(roadmap.includes('- [ ] [CK.02] 02: Three'), true);
+    assert.equal(roadmap.includes('- [ ] [CK.02] 03: Three'), false);
+    assert.equal(roadmap.includes('### [CK.02] 02: Two'), false);
+    assert.equal(roadmap.includes('### [CK.02] 02: Three'), true);
+    assert.equal(roadmap.includes('### [CK.02] 03: Three'), false);
+    assert.match(roadmap, /<details>\n<summary>Implementation phases<\/summary>/);
+    assert.deepEqual(out.references_left_untouched, []);
+  });
+
   // #4304 round 10 (W1, .planning/2026-09-18-4773-opus-round9-correctness.json
   // finding 2): the round-9 guard was additionally gated on `targetDir`, so a
   // ROADMAP-only target (a phase `phase add` created with no directory yet)

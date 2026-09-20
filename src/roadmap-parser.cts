@@ -100,10 +100,18 @@ function stripShippedMilestones(content: string): string {
  */
 function stripClosedMilestoneDetails(content: string): string {
   return content.replace(/<details\b[^>]*>[\s\S]*?<\/details>/gi, (block) => {
-    const summaryMatch = block.match(/<summary[^>]*>([^<]*)<\/summary>/i);
-    if (!summaryMatch) return block;
-    return isClosedMilestoneHeading(summaryMatch[1]) ? '' : block;
+    return isClosedMilestoneDetails(block) ? '' : block;
   });
+}
+
+/**
+ * Classify a complete `<details>` block through the same summary rule used by
+ * stripClosedMilestoneDetails. Destructive consumers share this predicate so
+ * an active collapsed phase list is never reclassified as shipped history.
+ */
+function isClosedMilestoneDetails(block: string): boolean {
+  const summaryMatch = block.match(/<summary[^>]*>([^<]*)<\/summary>/i);
+  return Boolean(summaryMatch && isClosedMilestoneHeading(summaryMatch[1]));
 }
 
 /**
@@ -2386,6 +2394,9 @@ export = {
   // itself already uses to skip a closed heading when selecting the active
   // one, instead of a re-typed copy of MILESTONE_CLOSED_MARKER_PATTERN.
   isClosedMilestoneHeading,
+  // #4304 (B3): destructive ROADMAP writers classify details blocks through
+  // the same closed-summary rule as stripClosedMilestoneDetails.
+  isClosedMilestoneDetails,
 };
 
 
