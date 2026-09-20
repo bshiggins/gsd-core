@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "count": 292,
+  "count": 294,
   "classes": {
     "ARCH": 1,
     "CI": 2,
@@ -19,7 +19,7 @@
     "PROHIB": 10,
     "RELEASE-NOTES": 31,
     "RULESET": 60,
-    "SEAM": 20,
+    "SEAM": 22,
     "SESSION": 9,
     "WAVE": 5,
     "WORKSTREAM": 5,
@@ -1279,7 +1279,7 @@
     {
       "id": "SEAM.phase-locator-bracket-resolution.owns",
       "klass": "SEAM",
-      "value": "findPhaseInternal and find-phase resolve phase_id_convention once; only bracket is passed to matchPhaseDirs and phaseNumberForMatch, while null, sequential, and milestone-prefixed lookups receive undefined and retain their prior bytes (#4304)"
+      "value": "every current-checkout phase-directory resolver threads phase_id_convention into matchPhaseDirs only when it resolves to bracket: findPhaseInternal/find-phase, phase-plan-index, phases list --phase, phase next-decimal, init manager, milestone complete's unstarted guard, roadmap analyze headings/table rows, smart-entry verification lookup, verify drift lookup, and phase remove; null, sequential, and milestone-prefixed lookups receive undefined and retain their prior bytes. After selection, bracket result shaping is used only when the matched directory carries BRACKET_DIR_PREFIX_SRC after foldBracketId; a legacy active or archived directory deliberately retained by bracket-mode matching keeps its exact pre-bracket phase_number/phase_name shaping (#4304)"
     },
     {
       "id": "SEAM.phase-locator-milestone-enum.enforced-by",
@@ -1300,6 +1300,16 @@
       "id": "SEAM.phase-remove-historical-selection.owns",
       "klass": "SEAM",
       "value": "updateRoadmapAfterBracketPhaseRemoval selects the first matching target heading that is inside the active milestone window and absent from archivedOrClosedMilestoneLineStarts; historical headings are ineligible before deleteSection runs (#4304)"
+    },
+    {
+      "id": "SEAM.phase-remove-window-guard-fences.enforced-by",
+      "klass": "SEAM",
+      "value": "test:tests/adr-612-bracket-phase-remove.test.cjs"
+    },
+    {
+      "id": "SEAM.phase-remove-window-guard-fences.owns",
+      "klass": "SEAM",
+      "value": "fencedRoadmapLineNumbers is the shared CommonMark fence exclusion for bracketPhaseOwnSubphases and bracketOwnedLineOutsideActiveWindow; fenced headings and checklists are documentation, never phase inventory or outside-window ownership evidence, and an unclosed fence owns through EOF (#4304)"
     },
     {
       "id": "SEAM.shellcmdproj-win-binary-resolution.enforced-by",
