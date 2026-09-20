@@ -71,7 +71,10 @@ const { milestoneToken, phaseToken } = phaseIdDisplayMod;
 import { escapeRegex } from './pattern.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-locator.cjs is an export= CommonJS module
 import phaseLocatorMod = require('./phase-locator.cjs');
-const { findPhaseInternal, getArchivedPhaseDirs, listMilestonePhaseDirs, listAllPhaseDirs, resolvePhaseDirectoryLookup } = phaseLocatorMod;
+const {
+  findPhaseInternal, getArchivedPhaseDirs, listMilestonePhaseDirs, listAllPhaseDirs,
+  resolvePhaseDirectoryLookup, matchPhaseDirsForLookup,
+} = phaseLocatorMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-scope.cjs is an export= CommonJS module
 import planningScopeMod = require('./planning-scope.cjs');
 const { SCOPE } = planningScopeMod;
@@ -295,13 +298,13 @@ function cmdPhasesList(cwd: string, options: PhaseListOptions, raw: boolean): vo
     if (phase) {
       // LOOKUP (b): search the physical set, plus archived when asked.
       const lookupPool = [...readSubdirectories(phasesDir, true), ...archivedLabels];
-      const { normalized, convention, bracketContext: lookupContext } = resolvePhaseDirectoryLookup(cwd, phase);
+      const lookup = resolvePhaseDirectoryLookup(cwd, phase);
       // The pool is #3185's (physical set + archived); the matcher is this
       // PR's. `dirs` is deliberately not read here: on this base it is not
       // assigned until the branch below picks a match. Under bracket, the
       // active project+milestone identity wins before migration-window legacy
       // names; differently-qualified historical dirs are never first-picked.
-      const { matches } = matchPhaseDirs(lookupPool, normalized, convention, lookupContext);
+      const { matches } = matchPhaseDirsForLookup(lookupPool, lookup);
       const match = matches[0];
       if (!match) {
         output({ files: [], count: 0, phase_dir: null, error: 'Phase not found' }, raw, '');
@@ -587,7 +590,8 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
   }
 
   const planBase = planningDir(cwd);
-  const { normalized, convention, bracketContext } = resolvePhaseDirectoryLookup(cwd, phase);
+  const lookup = resolvePhaseDirectoryLookup(cwd, phase);
+  const { normalized, convention } = lookup;
   const notFound = {
     found: false,
     directory: null,
@@ -641,11 +645,10 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
       // #2528: selection delegates to the canonical two-pass matcher (exact
       // token match, then the bare-integer leading-digit-run fallback) shared
       // with the locator and the phase-plan-index scan.
-      const { matches, usedBareFallback } = matchPhaseDirs(
+      const { matches, usedBareFallback } = matchPhaseDirsForLookup(
         dirs,
-        normalized,
-        convention,
-        searchDir === flatPhasesDir ? bracketContext : undefined,
+        lookup,
+        searchDir === flatPhasesDir ? undefined : null,
       );
       if (matches.length === 0) continue;
       if (matches.length > 1) {
@@ -909,7 +912,8 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
   }
 
   const phasesDir = path.join(planningDir(cwd), 'phases');
-  const { normalized, convention, bracketContext } = resolvePhaseDirectoryLookup(cwd, phase);
+  const lookup = resolvePhaseDirectoryLookup(cwd, phase);
+  const { normalized } = lookup;
 
   let phaseDir: string | null = null;
   let phaseDirName: string | null = null;
@@ -924,7 +928,7 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
     // the locator and the find-phase scan (this site previously first-matched
     // with `.find()` and had no multi-match guard — the #2237 fail-loud rule
     // now applies here too, so the three resolution paths cannot disagree).
-    const { matches } = matchPhaseDirs(dirs, normalized, convention, bracketContext);
+    const { matches } = matchPhaseDirsForLookup(dirs, lookup);
     if (matches.length > 1) {
       ambiguousMatches = matches;
     } else if (matches.length === 1) {

@@ -91,7 +91,9 @@ const { harvestPriorVerifyCommands } = verifyCommandGrounding;
 const { output, error, ERROR_REASON, formatDiagnosticToken } = io;
 const { loadConfig, loadConfigResolved } = configLoader;
 const { resolveModelInternal, resolveGranularityInternal, assertValidGranularityOverride } = modelResolver;
-const { findPhaseInternal, listMilestonePhaseDirs, listAllPhaseDirs, resolvePhaseDirectoryLookup } = phaseLocator;
+const {
+  findPhaseInternal, listMilestonePhaseDirs, listAllPhaseDirs,
+} = phaseLocator;
 const {
   getRoadmapPhaseInternal,
   getMilestoneInfo,

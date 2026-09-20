@@ -47,11 +47,8 @@ const { checkAgentsInstalled, checkCodexModelPosture, checkCodexSandboxPosture }
 import ioMod = require('./io.cjs');
 const { output, error } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-import phaseIdMod = require('./phase-id.cjs');
-const { matchPhaseDirs } = phaseIdMod;
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
-const { findPhaseInternal, resolvePhaseDirectoryLookup } = phaseLocatorMod;
+const { findPhaseInternal, resolvePhaseDirectoryLookup, matchPhaseDirsForLookup } = phaseLocatorMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
 const { stripShippedMilestones } = roadmapParserMod;
@@ -67,7 +64,7 @@ import onboardProjectionMod = require('./onboard-projection.cjs');
 const { REQUIRED_CODEBASE_MAP_FILES } = onboardProjectionMod;
 import { realClock } from './clock.cjs';
 
-const { planningDir, planningRoot, resolvePhaseIdConvention, withPlanningLock } = planningWorkspace;
+const { planningDir, planningRoot, withPlanningLock } = planningWorkspace;
 const { defaultPhaseCleanCommitTimesMs } = verificationMod;
 const { extractFrontmatter, parseMustHavesBlock } = frontmatterMod;
 const { readStateHeadFreshness } = stateMod;
@@ -2081,13 +2078,11 @@ function cmdValidateAgents(cwd: string, raw: boolean): void {
  */
 function resolvePhaseDirByToken(cwd: string, phasesDir: string, phaseArg: string): string | null {
   const lookup = resolvePhaseDirectoryLookup(cwd, phaseArg);
-  const normalizedPhase = lookup.normalized;
   const dirEntries = fs.readdirSync(phasesDir, { withFileTypes: true });
   const dirNames = dirEntries.filter((e) => e.isDirectory()).map((e) => e.name);
   // #4304: both drift commands resolve a directory in the current checkout.
   // Bracket is the only opt-in grammar; all other conventions remain legacy.
-  const convention = resolvePhaseIdConvention(cwd) === 'bracket' ? 'bracket' : undefined;
-  const matched = matchPhaseDirs(dirNames, normalizedPhase, convention, lookup.bracketContext).matches[0];
+  const matched = matchPhaseDirsForLookup(dirNames, lookup).matches[0];
   if (matched) return path.join(phasesDir, matched);
   const contained = tryWithinRoot(phaseArg, phasesDir);
   if (contained !== null && fs.existsSync(contained)) return contained;

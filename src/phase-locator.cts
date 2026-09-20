@@ -149,6 +149,7 @@ type BracketPhaseLookupContext = {
 
 interface PhaseDirectoryLookup {
   normalized: string;
+  legacyNormalized: string | undefined;
   convention: 'bracket' | undefined;
   bracketContext: BracketPhaseLookupContext | undefined;
 }
@@ -162,14 +163,19 @@ interface PhaseDirectoryLookup {
 function resolvePhaseDirectoryLookup(cwd: string, phase: unknown): PhaseDirectoryLookup {
   const legacyNormalized = normalizePhaseName(phase);
   if (resolvePhaseIdConvention(cwd) !== 'bracket') {
-    return { normalized: legacyNormalized, convention: undefined, bracketContext: undefined };
+    return {
+      normalized: legacyNormalized,
+      legacyNormalized: undefined,
+      convention: undefined,
+      bracketContext: undefined,
+    };
   }
 
   // The bracket writers canonicalize both numeric segments through phaseToken
   // (`1.1` -> `01.01`). Finish the convention-only query normalization at
-  // this shared locator boundary; normalizePhaseName intentionally keeps the
-  // legacy decimal spelling (`01.1`) and remains untouched for every other
-  // convention and for already-qualified bracket forms.
+  // this shared locator boundary while retaining normalizePhaseName's legacy
+  // decimal spelling (`01.1`) as the second-pass migration fallback. Every
+  // other convention and already-canonical bracket form remains single-pass.
   const normalized = phaseToken(legacyNormalized) ?? legacyNormalized;
 
   let bracketContext: BracketPhaseLookupContext | undefined;
@@ -183,7 +189,32 @@ function resolvePhaseDirectoryLookup(cwd: string, phase: unknown): PhaseDirector
     // Read-side lookup remains non-throwing when config/milestone state is
     // incomplete; matchPhaseDirs will surface ambiguity rather than guess.
   }
-  return { normalized, convention: 'bracket', bracketContext };
+  return {
+    normalized,
+    legacyNormalized: normalized === legacyNormalized ? undefined : legacyNormalized,
+    convention: 'bracket',
+    bracketContext,
+  };
+}
+
+/**
+ * Apply one resolved lookup to a directory set. Bracket queries try the writer-
+ * canonical spelling first, then the pre-bracket `normalizePhaseName` spelling
+ * only when the canonical pass finds nothing. `matchPhaseDirs` remains the
+ * single selection owner for both passes, including its migration-window legacy
+ * fallback and ambiguity behavior. Non-bracket lookups have no second spelling.
+ */
+function matchPhaseDirsForLookup(
+  dirs: string[],
+  lookup: PhaseDirectoryLookup,
+  bracketContextOverride?: BracketPhaseLookupContext | null,
+): ReturnType<typeof matchPhaseDirs> {
+  const bracketContext = bracketContextOverride === undefined
+    ? lookup.bracketContext
+    : bracketContextOverride;
+  const primary = matchPhaseDirs(dirs, lookup.normalized, lookup.convention, bracketContext);
+  if (primary.matches.length > 0 || lookup.legacyNormalized === undefined) return primary;
+  return matchPhaseDirs(dirs, lookup.legacyNormalized, lookup.convention, bracketContext);
 }
 
 // ─── Phase search helpers ─────────────────────────────────────────────────────
@@ -276,6 +307,7 @@ function searchPhaseInDir(
   normalized: string,
   convention?: string | null,
   bracketContext?: BracketPhaseLookupContext | null,
+  legacyNormalized?: string,
 ): PhaseSearchResult | null {
   try {
     const dirs = readSubdirectories(baseDir, true);
@@ -284,7 +316,16 @@ function searchPhaseInDir(
     // phase-plan-index scans — see phase-id.cts::matchPhaseDirs.
     // #4801: the convention is threaded (optional) so bracket-convention
     // consumers get exact token matching here too.
-    const { matches, usedBareFallback } = matchPhaseDirs(dirs, normalized, convention, bracketContext);
+    const { matches, usedBareFallback } = matchPhaseDirsForLookup(
+      dirs,
+      {
+        normalized,
+        legacyNormalized,
+        convention: convention === 'bracket' ? 'bracket' : undefined,
+        bracketContext: bracketContext ?? undefined,
+      },
+      bracketContext,
+    );
     if (matches.length === 0) return null;
 
     // #2237: fail loud when multiple directories match the same bare phase
@@ -442,11 +483,18 @@ function findPhaseInternal(cwd: string, phase: unknown, convention?: string | nu
   if (!phase) return null;
 
   const phasesDir = path.join(planningDir(cwd), 'phases');
-  const { normalized, convention, bracketContext } = resolvePhaseDirectoryLookup(cwd, phase);
+  const { normalized, legacyNormalized, convention, bracketContext } = resolvePhaseDirectoryLookup(cwd, phase);
 
   const relPhasesDir = toPosixPath(path.relative(cwd, phasesDir));
   // #4801: convention threaded through to the matcher (see searchPhaseInDir).
-  const current = searchPhaseInDir(phasesDir, relPhasesDir, normalized, convention, bracketContext);
+  const current = searchPhaseInDir(
+    phasesDir,
+    relPhasesDir,
+    normalized,
+    convention,
+    bracketContext,
+    legacyNormalized,
+  );
   if (current) return current;
 
   // #2855: scope the archived-milestone fallback to the SAME workstream as the
@@ -460,7 +508,14 @@ function findPhaseInternal(cwd: string, phase: unknown, convention?: string | nu
   // getArchivedPhaseDirs via listArchiveVersionDirs (see its doc comment).
   for (const { version, archivePath } of listArchiveVersionDirs(cwd)) {
     const relBase = toPosixPath(path.relative(cwd, archivePath));
-    const result = searchPhaseInDir(archivePath, relBase, normalized, convention);
+    const result = searchPhaseInDir(
+      archivePath,
+      relBase,
+      normalized,
+      convention,
+      null,
+      legacyNormalized,
+    );
     if (result) {
       result.archived = version;
       return result;
@@ -678,6 +733,7 @@ function getAllArchivedPhaseDirs(cwd: string): ArchivedPhaseDir[] {
 export = {
   searchPhaseInDir,
   resolvePhaseDirectoryLookup,
+  matchPhaseDirsForLookup,
   findPhaseInternal,
   getArchivedPhaseDirs,
   getAllArchivedPhaseDirs,

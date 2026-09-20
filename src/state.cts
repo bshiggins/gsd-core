@@ -26,7 +26,6 @@ import phaseIdMod = require('./phase-id.cjs');
 const {
   parsePhaseFromProse,
   PHASE_NUMBER_TOKEN_SOURCE,
-  matchPhaseDirs,
   phaseKeyFromToken,
   phaseKeyFromDir,
   phaseHeadingPrefixSrcFor,
@@ -114,7 +113,7 @@ const { SCOPE } = planningScopeMod;
 type Scope = planningScopeMod.Scope;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
-const { listMilestonePhaseDirs, resolvePhaseDirectoryLookup } = phaseLocatorMod;
+const { listMilestonePhaseDirs, resolvePhaseDirectoryLookup, matchPhaseDirsForLookup } = phaseLocatorMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import stateTransitionMod = require('./state-transition.cjs');
 // #3873 (ADR-3473 §8.8): FRONTMATTER_KEY_TO_BODY_LABEL below is now a
@@ -1086,11 +1085,11 @@ function unsummarizedPlansForPositionPhase(
   const candidateDirs = windowed.scope === SCOPE.COMPLETE ? windowed.value : [];
   // Canonical phase-token → directory matching (phase-id owner, #2562): both
   // sides of the comparison derived by the same function, never a local regex.
-  const { matches } = matchPhaseDirs(candidateDirs, lookup.normalized, convention, lookup.bracketContext);
+  const { matches } = matchPhaseDirsForLookup(candidateDirs, lookup);
   if (matches.length > 0) return scanOutstanding(phasesDir, matches[0]);
   const unscoped = listMilestonePhaseDirs(phasesDir);
   if (unscoped.scope !== SCOPE.COMPLETE) return null;
-  const retry = matchPhaseDirs(unscoped.value, lookup.normalized, convention, lookup.bracketContext);
+  const retry = matchPhaseDirsForLookup(unscoped.value, lookup);
   if (retry.matches.length === 0) return null;
   return scanOutstanding(phasesDir, retry.matches[0]);
 }

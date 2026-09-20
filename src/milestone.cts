@@ -36,7 +36,7 @@ import stateContract = require('./state-contract.cjs');
 const { publishStateContract } = stateContract;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { matchPhaseDirs, PHASE_NUMBER_TOKEN_SOURCE, isSentinelPhaseId, isSentinelPhaseDir } = phaseIdMod;
+const { PHASE_NUMBER_TOKEN_SOURCE, isSentinelPhaseId, isSentinelPhaseDir } = phaseIdMod;
 import { escapeRegex } from './pattern.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
@@ -57,7 +57,7 @@ import planScanMod = require('./plan-scan.cjs');
 const { scanPhasePlans } = planScanMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-locator.cjs is an export= CommonJS module
 import phaseLocatorMod = require('./phase-locator.cjs');
-const { listMilestonePhaseDirs, resolvePhaseDirectoryLookup } = phaseLocatorMod;
+const { listMilestonePhaseDirs, resolvePhaseDirectoryLookup, matchPhaseDirsForLookup } = phaseLocatorMod;
 const { planningPaths, resolvePhaseIdConvention } = planningWorkspace;
 const { extractFrontmatter } = frontmatterMod;
 // ADR-3408 §8.3 / #3469: `writeStateMd` gets sync and NO preservation — the
@@ -761,19 +761,13 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
         // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this local check already covered both 0 and 999; now delegates to the single canonical owner.
         if (isSentinelPhaseId(phaseNum)) continue;
         const lookup = resolvePhaseDirectoryLookup(cwd, phaseNum);
-        const normalized = lookup.normalized;
         // A phase has disk_status: 'no_directory' when no phase directory
         // with a matching token exists on disk. Use the same matchPhaseDirs
         // owner that roadmap.analyze uses to avoid false positives on decimal
         // (2.1) and letter-suffix (12A) phase IDs. (#2528) Under #4304 the
-        // current checkout's bracket convention is threaded here too, while
-        // every non-bracket convention keeps the two-argument lookup bytes.
-        const hasDirectory = matchPhaseDirs(
-          phaseDirEntries,
-          normalized,
-          phaseConvention === 'bracket' ? 'bracket' : undefined,
-          lookup.bracketContext,
-        ).matches.length > 0;
+        // current checkout's bracket convention and migration-window legacy
+        // fallback are both owned by the shared lookup adapter.
+        const hasDirectory = matchPhaseDirsForLookup(phaseDirEntries, lookup).matches.length > 0;
         if (!hasDirectory) {
           noDirectoryPhases.push(phaseNum);
         }
