@@ -64,6 +64,32 @@ describe('bracket grammar: dependency references preserve qualified identity', (
   });
 });
 
+describe('phase checklist grammar preserves the legacy greedy match outside bracket mode', () => {
+  const line = '- [x] Phase 1: Prepare Phase 2: handoff';
+
+  function upstreamNextParse(checklistLine) {
+    const match = /-\s*\[([xX ])\]\s*.*Phase\s+(\d+(?:\.\d+)?)(?=[:\s])/i.exec(checklistLine);
+    return match
+      ? { checked: match[1].toLowerCase() === 'x', bracketId: undefined, phaseToken: match[2] }
+      : null;
+  }
+
+  test('null, sequential, and milestone-prefixed return upstream/next phase 2', () => {
+    const expected = upstreamNextParse(line);
+    assert.deepStrictEqual(expected, { checked: true, bracketId: undefined, phaseToken: '2' });
+    for (const convention of [null, 'sequential', 'milestone-prefixed']) {
+      assert.deepStrictEqual(core.parsePhaseChecklistLine(line, convention), expected, String(convention));
+    }
+  });
+
+  test('bracket mode keeps the lazy identity-aware match from round 23', () => {
+    assert.deepStrictEqual(
+      core.parsePhaseChecklistLine('- [x] [CK.02] 01: Prepare Phase 02: handoff', 'bracket'),
+      { checked: true, bracketId: 'CK.02', phaseToken: '01' },
+    );
+  });
+});
+
 // ─── ADR §3 round-trip example table (doc-parity) ───────────────────────────
 const TABLE = [
   { display: '[GSD.02] 05.03-01', dir: 'GSD.02-05.03-feature' },

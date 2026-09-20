@@ -399,9 +399,11 @@ type PhaseChecklistLine = {
  * Parse one roadmap phase-checkbox row through the same grammar used by the
  * manager and destructive writers. The historical manager spelling permits
  * arbitrary presentation text (including bold markers) between the checkbox
- * and phase intro, and treats either whitespace or a colon immediately after
- * the phase token as the boundary. Returning semantic fields keeps consumers
- * from depending on capture-group offsets.
+ * and phase intro and greedily selects the last Phase-shaped intro on the row.
+ * Bracket mode uses the lazy identity-aware match so title prose cannot replace
+ * the leading `[CODE.MM] PP` identity. Both paths treat whitespace or a colon
+ * immediately after the phase token as the boundary. Returning semantic fields
+ * keeps consumers from depending on capture-group offsets.
  */
 function parsePhaseChecklistLine(
   line: string,
@@ -413,8 +415,9 @@ function parsePhaseChecklistLine(
     convention,
     capturesBracketId,
   );
+  const presentation = capturesBracketId ? '.*?' : '.*';
   const pattern = new RegExp(
-    `-\\s*\\[([xX ])\\]\\s*.*?${intro}(${PHASE_NUMBER_TOKEN_SOURCE})`
+    `-\\s*\\[([xX ])\\]\\s*${presentation}${intro}(${PHASE_NUMBER_TOKEN_SOURCE})`
       + `${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s])`,
     'i',
   );
