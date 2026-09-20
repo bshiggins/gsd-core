@@ -346,6 +346,68 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.deepEqual(out.existing, ['02.01']);
   });
 
+  test('phase next-decimal preserves the legacy 999 backlog inventory under bracket configuration', () => {
+    const dir = project('adr-612-bracket-next-decimal-backlog-');
+    writeConfig(dir, 'bracket');
+    fs.writeFileSync(planning(dir, 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    fs.writeFileSync(
+      planning(dir, 'ROADMAP.md'),
+      '# Roadmap\n\n## [CK.02] v2.0 — Current\n\n### Phase 999.1: First\n\n### Phase 999.3: Third\n',
+    );
+    fs.mkdirSync(planning(dir, 'phases', 'CK-999.01-first'), { recursive: true });
+    fs.mkdirSync(planning(dir, 'phases', 'CK-999.03-third'), { recursive: true });
+
+    const out = run(['phase', 'next-decimal', '999'], dir);
+
+    assert.equal(out.next, '999.4');
+    assert.deepEqual(out.existing, ['999.1', '999.3']);
+  });
+
+  test('phase next-decimal unions bracket and legacy directory spellings for a bracket parent', () => {
+    const dir = project('adr-612-bracket-next-decimal-mixed-dirs-');
+    writeConfig(dir, 'bracket');
+    fs.writeFileSync(planning(dir, 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    fs.writeFileSync(
+      planning(dir, 'ROADMAP.md'),
+      '# Roadmap\n\n## [CK.02] v2.0 — Current\n\n### [CK.02] 02: Parent\n',
+    );
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-02-parent'), { recursive: true });
+    fs.mkdirSync(planning(dir, 'phases', 'CK-02.1-old'), { recursive: true });
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-02.02-new'), { recursive: true });
+
+    const out = run(['phase', 'next-decimal', '02'], dir);
+
+    assert.equal(out.next, '02.03');
+    assert.deepEqual(out.existing, ['02.01', '02.02']);
+  });
+
+  test('phase next-decimal unions bracket and legacy ROADMAP-only children for a bracket parent', () => {
+    const dir = project('adr-612-bracket-next-decimal-mixed-roadmap-');
+    writeConfig(dir, 'bracket');
+    fs.writeFileSync(planning(dir, 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+    fs.writeFileSync(
+      planning(dir, 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '### [CK.02] 02: Parent',
+        '',
+        '### Phase 02.1: Legacy child',
+        '',
+        '- [ ] **[CK.02] 02.02: Bracket child**',
+        '',
+      ].join('\n'),
+    );
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-02-parent'), { recursive: true });
+
+    const out = run(['phase', 'next-decimal', '02'], dir);
+
+    assert.equal(out.next, '02.03');
+    assert.deepEqual(out.existing, ['02.01', '02.02']);
+  });
+
   test('phase next-decimal returns canonical 02.01 for a bracket parent with no children', () => {
     const dir = project('adr-612-bracket-next-decimal-empty-');
     writeConfig(dir, 'bracket');

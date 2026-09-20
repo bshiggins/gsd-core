@@ -398,6 +398,7 @@ function cmdPhaseNextDecimal(cwd: string, basePhase: string, raw: boolean): void
   try {
     let baseExists = false;
     const decimalSet = new Set<number>();
+    const bracketScanMeta = { bracketSpellingFound: false };
     const scanDecimals = (roadmapContent: string): void => {
       const found = bracketContext
         ? scanExistingBracketDecimalPhaseNumbers(
@@ -405,6 +406,7 @@ function cmdPhaseNextDecimal(cwd: string, basePhase: string, raw: boolean): void
           roadmapContent ? extractCurrentMilestone(roadmapContent, cwd) : '',
           normalized,
           bracketContext,
+          bracketScanMeta,
         )
         : scanExistingDecimalPhaseNumbers(phasesDir, roadmapContent, normalized);
       for (const n of found) decimalSet.add(n);
@@ -430,21 +432,27 @@ function cmdPhaseNextDecimal(cwd: string, basePhase: string, raw: boolean): void
       scanDecimals('');
     }
 
+    // add-backlog still asks for parent 999 and writes legacy CK-999.x
+    // directories. Preserve that upstream output only when the sentinel
+    // parent is legacy-only; a real bracket-spelled parent keeps canonical
+    // two-digit sub-tokens like every other bracket parent.
+    const renderCanonicalBracket = bracketContext !== null
+      && !(Number(normalized) === 999 && !bracketScanMeta.bracketSpellingFound);
     const existingDecimals = Array.from(decimalSet)
       .sort((a, b) => a - b)
-      .map((n) => bracketContext
-        ? bracketArtifactToken(bracketPhaseId(bracketContext, normalized, n))
+      .map((n) => renderCanonicalBracket
+        ? bracketArtifactToken(bracketPhaseId(bracketContext!, normalized, n))
         : `${normalized}.${n}`);
 
     let nextDecimal: string;
     if (decimalSet.size === 0) {
-      nextDecimal = bracketContext
-        ? bracketArtifactToken(bracketPhaseId(bracketContext, normalized, 1))
+      nextDecimal = renderCanonicalBracket
+        ? bracketArtifactToken(bracketPhaseId(bracketContext!, normalized, 1))
         : `${normalized}.1`;
     } else {
       const next = Math.max(...decimalSet) + 1;
-      nextDecimal = bracketContext
-        ? bracketArtifactToken(bracketPhaseId(bracketContext, normalized, next))
+      nextDecimal = renderCanonicalBracket
+        ? bracketArtifactToken(bracketPhaseId(bracketContext!, normalized, next))
         : `${normalized}.${next}`;
     }
 
@@ -2015,8 +2023,15 @@ function scanExistingBracketDecimalPhaseNumbers(
   roadmapContent: string,
   base: string,
   context: BracketWriteContext,
+  meta?: { bracketSpellingFound: boolean },
 ): Set<number> {
-  const decimalSet = new Set<number>();
+  // A bracket repository can be mid-migration, and add-backlog deliberately
+  // remains a legacy sentinel writer. Inventory is therefore the UNION of
+  // the legacy spellings and the canonical bracket spellings that readers
+  // accept. Do not route the 999 parent exclusively through
+  // scanMilestonePhaseIds: that reader intentionally excludes the icebox
+  // range for milestone counting, while allocation must include it.
+  const decimalSet = scanExistingDecimalPhaseNumbers(phasesDir, roadmapContent, base);
   for (const token of scanMilestonePhaseIds(roadmapContent, 'bracket')) {
     const [phase, subphase, extra] = String(token).split('.');
     if (!extra && Number(phase) === Number(base) && /^\d+$/.test(subphase ?? '')) {
@@ -2024,9 +2039,49 @@ function scanExistingBracketDecimalPhaseNumbers(
     }
   }
   for (const { id } of bracketIdsInContext(phasesDir, context)) {
-    if (Number(id.phase) === Number(base) && id.subphase) {
-      decimalSet.add(Number(id.subphase));
+    if (Number(id.phase) !== Number(base)) continue;
+    if (meta) meta.bracketSpellingFound = true;
+    if (id.subphase) decimalSet.add(Number(id.subphase));
+  }
+
+  const intro = phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.ANY_BRACKET, 'bracket', true);
+  const entryPattern = new RegExp(
+    `^${intro}(${PHASE_NUMBER_TOKEN_SOURCE})${OPTIONAL_PHASE_TAG_SOURCE}[ \\t]*:`,
+    'i',
+  );
+  const addRoadmapToken = (bracketId: string | undefined, token: string): void => {
+    const [phase, subphase, extra] = token.split('.');
+    if (extra || Number(phase) !== Number(base) || !/^\d+$/.test(subphase ?? '')) return;
+    if (bracketId) {
+      if (foldBracketId(bracketId) !== foldBracketId(`${context.project}.${context.milestone}`)) return;
+      if (meta) meta.bracketSpellingFound = true;
     }
+    decimalSet.add(Number(subphase));
+  };
+
+  // tokenizeHeadings is the fence-aware reader surface and, unlike the
+  // milestone membership scanner, retains sentinel headings for this
+  // allocation-specific inventory.
+  for (const heading of tokenizeHeadings(roadmapContent)) {
+    if (heading.level < 2 || heading.level > 4) continue;
+    const match = entryPattern.exec(heading.text);
+    if (match) addRoadmapToken(match[1], match[2]);
+  }
+
+  // The manager accepts bracket checklist rows without requiring a detail
+  // heading. Match that same phase-intro grammar here so ROADMAP-only children
+  // still reserve their number. Fenced examples are documentation, not live
+  // inventory.
+  const checklistPattern = new RegExp(
+    `^[ \\t]*-[ \\t]*\\[[ xX]\\][ \\t]*.*${intro}`
+      + `(${PHASE_NUMBER_TOKEN_SOURCE})${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s])`,
+    'i',
+  );
+  const fencedLines = fencedRoadmapLineNumbers(roadmapContent);
+  for (const [index, line] of roadmapContent.split('\n').entries()) {
+    if (fencedLines.has(index + 1)) continue;
+    const match = checklistPattern.exec(line.replace(/\r$/, ''));
+    if (match) addRoadmapToken(match[1], match[2]);
   }
   return decimalSet;
 }
