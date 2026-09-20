@@ -2733,6 +2733,142 @@ describe('roadmap upgrade --convention bracket', () => {
     });
   });
 
+  // #4698: two directories that each, from their own independent scan,
+  // uniquely resolve to the SAME single heading never form a tie group (each
+  // directory's own scan finds exactly one candidate), so the pre-check above
+  // is blind to them. The first directory visited claimed the heading, the
+  // second found its only candidate already used and was silently skipped:
+  // ROADMAP.md converted, config stamped "bracket", the second directory left
+  // on disk under its legacy name where the idempotency guard never revisits
+  // it. Every directory that structurally matches at least one heading must
+  // either resolve or refuse.
+  describe('refuses two directories that each resolve to the same single phase heading (#4698)', () => {
+    function buildSameNumberSiblings(label, dirs) {
+      const cwd = materializeEmptyFixture(label);
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'config.json'),
+        JSON.stringify({ project_code: 'GSD', phase_id_convention: null }, null, 2) + '\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v1.0 Core',
+          '',
+          '- [ ] **Phase 1: Alpha**',
+          '- [ ] **Phase 2: Beta**',
+          '',
+          '### Phase 1: Alpha',
+          '**Goal**: a',
+          '',
+          '### Phase 2: Beta',
+          '**Goal**: b',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      for (const dir of dirs) {
+        fs.mkdirSync(path.join(phasesDir, dir), { recursive: true });
+        fs.writeFileSync(path.join(phasesDir, dir, '01-01-PLAN.md'), '---\nphase: "01"\n---\n# plan\n', 'utf8');
+      }
+      return cwd;
+    }
+
+    test('a stale copy sorting after the real directory is refused, naming both, and writes nothing', () => {
+      const cwd = buildSameNumberSiblings('same-number-siblings', ['01-alpha', '01-alpha-old', '02-beta']);
+      const before = snapshotTree(cwd, { skipGit: true });
+
+      const dryRun = runBracketUpgrade(cwd);
+      assertExited(dryRun, 1, 'same-number sibling directories dry-run');
+      assert.match(dryRun.stderr, /01-alpha-old/, 'the refusal must name the skipped directory');
+      assert.match(dryRun.stderr, /"01-alpha"/, 'the refusal must name the directory that claimed the heading');
+      assert.match(dryRun.stderr, /### Phase 1: Alpha/, 'the refusal must name the contested heading');
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'a refusal must write nothing');
+
+      const apply = runBracketUpgrade(cwd, ['--apply']);
+      assertExited(apply, 1, 'same-number sibling directories --apply');
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, '--apply must refuse before any write');
+      const config = JSON.parse(fs.readFileSync(path.join(cwd, '.planning', 'config.json'), 'utf8'));
+      assert.equal(config.phase_id_convention, null, 'the convention must not be stamped');
+    });
+
+    test('a stale copy sorting before the real directory is refused the same way', () => {
+      const cwd = buildSameNumberSiblings('same-number-siblings-first', ['01-a-stale', '01-alpha', '02-beta']);
+      const before = snapshotTree(cwd, { skipGit: true });
+
+      const result = runBracketUpgrade(cwd);
+
+      assertExited(result, 1, 'stale-first same-number sibling directories dry-run');
+      assert.match(result.stderr, /"01-alpha"/, 'the refusal must name the directory left without a candidate');
+      assert.match(result.stderr, /01-a-stale/, 'the refusal must name the directory that claimed the heading');
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'a refusal must write nothing');
+    });
+
+    test('a stale M-NN-shaped copy that the legacy grammar reads as the same number is refused too', () => {
+      const cwd = buildSameNumberSiblings('same-number-siblings-mnn-shaped', ['01-alpha', '02-beta', '2-04-beta-old']);
+      const before = snapshotTree(cwd, { skipGit: true });
+
+      const result = runBracketUpgrade(cwd);
+
+      assertExited(result, 1, 'M-NN-shaped same-number sibling dry-run');
+      assert.match(result.stderr, /2-04-beta-old/, 'the refusal must name the stale copy');
+      assert.match(result.stderr, /### Phase 2: Beta/, 'the refusal must name the contested heading');
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'a refusal must write nothing');
+    });
+
+    test('an unrelated directory that matches no heading is still left alone', () => {
+      const cwd = buildSameNumberSiblings('same-number-siblings-orphan', ['01-alpha', '02-beta', '07-orphan']);
+
+      const plan = parseDryRun(runBracketUpgrade(cwd), 'orphan directory dry-run');
+
+      assert.deepEqual(
+        plan.phases.map(({ oldDir, newDir }) => ({ oldDir, newDir })).sort((a, b) => a.oldDir.localeCompare(b.oldDir)),
+        [
+          { oldDir: '01-alpha', newDir: 'GSD.01-01-alpha' },
+          { oldDir: '02-beta', newDir: 'GSD.01-02-beta' },
+        ],
+      );
+    });
+
+    test('a duplicate M-NN child directory is refused rather than downgraded to its unused parent heading', () => {
+      const cwd = materializeFixture('mnn-multi-milestone');
+      fs.writeFileSync(
+        path.join(cwd, '.planning', 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## v2.0 — Existing milestone',
+          '',
+          '### Phase 2-04: Parent',
+          '',
+          '- [ ] **Phase 2-04:** Parent',
+          '',
+          '### Phase 2-04-01: Deep slice',
+          '',
+          '- [x] Phase 2-04-01: Deep slice',
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+      const phasesDir = path.join(cwd, '.planning', 'phases');
+      helpers.cleanup(path.join(phasesDir, 'GSD-02-01-foundation'));
+      fs.mkdirSync(path.join(phasesDir, 'GSD-02-04-01-deep-slice-old'), { recursive: true });
+      fs.writeFileSync(path.join(phasesDir, 'GSD-02-04-01-deep-slice-old', '02-04-01-PLAN.md'), '# stale\n', 'utf8');
+      const before = snapshotTree(cwd, { skipGit: true });
+
+      const result = runBracketUpgrade(cwd);
+
+      assertExited(result, 1, 'duplicate M-NN child directory dry-run');
+      assert.match(result.stderr, /GSD-02-04-01-deep-slice-old/, 'the refusal must name the duplicate child directory');
+      assert.match(result.stderr, /### Phase 2-04-01: Deep slice/, 'the refusal must name the child heading, not the parent');
+      assert.doesNotMatch(result.stderr, /GSD\.02-04-deep-slice-old/, 'the duplicate must never be handed the parent identity');
+      assert.deepEqual(snapshotTree(cwd, { skipGit: true }), before, 'a refusal must write nothing');
+    });
+  });
+
   // #4144 round 8 I1: Tier 2 (non-bold) checklist matching had no token
   // boundary requirement after the phase number at all, so prose that
   // merely STARTS WITH a phase number and continues as a hyphenated

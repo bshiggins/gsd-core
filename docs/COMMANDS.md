@@ -2040,8 +2040,10 @@ multi-milestone phase (or a checklist bullet outside every section) has no
 unambiguous reader-recognized milestone section; the same legacy phase
 number appears twice within one milestone section; a directory matches more
 than one candidate phase heading and its slug does not disambiguate exactly
-one of them; or a rename's target directory name already exists on disk and
-is not itself part of the same migration.
+one of them; two directories resolve to the same phase heading (a stale
+same-number copy beside the real directory), so that neither can be left
+unrenamed on disk; or a rename's target directory name already exists on disk
+and is not itself part of the same migration.
 
 | Flag | Required | Description |
 |------|----------|-------------|

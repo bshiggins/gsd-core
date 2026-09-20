@@ -1367,10 +1367,10 @@ function computeBracketPlan(cwd: string): MigrationPlan {
   // archived `<details>` milestone whose directory was already cleaned up,
   // or a decimal insert whose sibling milestone has no directory at all.
   // That shape is never the silent-drop hazard above: the depletion loop
-  // below only ever drops a directory WITHOUT a slug check when a tie group
-  // has MORE directories than unused candidates (a directory visited with no
-  // unused candidate left just falls through its own `if (tied.length === 0)
-  // continue`, below). With fewer (or equal) directories than candidates,
+  // below only ever ran out of unused candidates for a directory when a tie
+  // group had MORE directories than candidates (and since #4698 a directory
+  // whose every matching heading is already claimed refuses in that loop
+  // instead of falling through). With fewer (or equal) directories than candidates,
   // every directory the loop below visits is either resolved by its own
   // slug comparison or refused loudly on its own — a BALANCED group (equal
   // counts — e.g. exactly `01-gamma`/`01-zeta` tying with {Zeta, Gamma}) is
@@ -1438,7 +1438,7 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     }
   }
 
-  const orderedMappings = [...idMapping.values()].map((mapping) => ({ mapping, used: false }));
+  const orderedMappings = [...idMapping.values()].map((mapping) => ({ mapping, used: false, claimedBy: null as string | null }));
   const phases: PhaseRename[] = [];
   for (const dirName of existingDirs) {
     // #4698 Blocker 2: scan EVERY still-unused candidate and keep the MOST
@@ -1479,21 +1479,45 @@ function computeBracketPlan(cwd: string): MigrationPlan {
     // straight to its sole match with no check at all (there is no sibling
     // to confuse it with); one that WAS still gets a (prefix-tolerant, not
     // exact) sanity check against the sole remaining candidate.
+    //
+    // #4698: the scan runs over EVERY candidate, used or not, and only then
+    // narrows to the unused ones. Scanning the unused candidates alone let
+    // two directories that each uniquely match the same single heading
+    // (`01-alpha` / `01-alpha-old` under one `### Phase 1: Alpha`; no tie
+    // group, so the pre-check above never sees them) fall through: the
+    // first visited claimed the heading, the second found nothing unused
+    // and was silently skipped, left on disk under its legacy name after
+    // ROADMAP.md was converted and the convention stamped. In an M-NN tree
+    // the same scan was worse than a skip: a duplicate child directory
+    // whose child heading was already claimed fell back to its still-unused
+    // PARENT heading and was renamed as the parent phase. A directory that
+    // structurally matches at least one heading now either resolves or
+    // refuses; only a directory matching no heading at all is passed over.
     let bestSpecificity = -1;
-    let tied: Array<{ candidate: (typeof orderedMappings)[number]; match: { slug: string; matchedToken: string } }> = [];
+    let matched: Array<{ candidate: (typeof orderedMappings)[number]; match: { slug: string; matchedToken: string } }> = [];
     for (const candidate of orderedMappings) {
-      if (candidate.used) continue;
       const match = matchBracketSourceDir(dirName, candidate.mapping);
       if (!match) continue;
       const specificity = bracketMappingSpecificity(candidate.mapping);
       if (specificity > bestSpecificity) {
         bestSpecificity = specificity;
-        tied = [{ candidate, match }];
+        matched = [{ candidate, match }];
       } else if (specificity === bestSpecificity) {
-        tied.push({ candidate, match });
+        matched.push({ candidate, match });
       }
     }
-    if (tied.length === 0) continue;
+    if (matched.length === 0) continue;
+    const tied = matched.filter((entry) => !entry.candidate.used);
+    if (tied.length === 0) {
+      const claimants = [...new Set(matched.map((entry) => entry.candidate.claimedBy).filter((name): name is string => name !== null))];
+      throw new Error(
+        `Cannot resolve phase directory ${JSON.stringify(dirName)}: every phase heading it matches was already `
+        + `claimed by another directory sharing its phase number (${claimants.map((name) => JSON.stringify(name)).join(', ')}). `
+        + 'Refusing rather than silently leaving it unrenamed on disk; remove or rename the stale duplicate '
+        + 'and re-run:\n'
+        + matched.map((entry) => `  ${lines[entry.candidate.mapping.lineIndex]}`).join('\n'),
+      );
+    }
 
     let winner = tied[0];
     if (tied.length > 1) {
@@ -1538,6 +1562,7 @@ function computeBracketPlan(cwd: string): MigrationPlan {
       }
     }
     winner.candidate.used = true;
+    winner.candidate.claimedBy = dirName;
     const hit = winner.candidate;
     const matchedSlug = winner.match.slug;
     const matchedToken = winner.match.matchedToken;
