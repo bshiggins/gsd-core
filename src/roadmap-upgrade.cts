@@ -2391,4 +2391,10 @@ export = {
   computeMigrationPlan,
   applyMigration,
   computeDependsOnRewrites,
+  // #4698 review round 28: exported for the property test that drives the REAL
+  // roadmap transform (the same function applyMigration writes through) rather
+  // than a hand-rolled line-replacer stand-in, per ADR-1508's precedent of
+  // exporting an internal solely to satisfy RULESET.TESTS.property-based-testing.
+  // Not a new production seam: applyMigration remains its only caller in `src/`.
+  applyRoadmapEdits,
 };
