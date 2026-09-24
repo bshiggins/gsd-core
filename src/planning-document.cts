@@ -12,7 +12,10 @@
  *
  * This phase migrates NO call site — it is purely additive (ADR-4910 §7).
  * Only `boldField` nodes are writable; `table`/`checklist` nodes parse and
- * read only (their writers are Phase 3's escaping work).
+ * read only. Phase 3 (#4958) checked its own evidence (#4736, #4793) and
+ * found neither needed a table/checklist writer here — see ADR-4910's
+ * 2026-09-24 amendment. A writer for either kind is unclaimed until a real
+ * call site names it.
  *
  * Hyrum's Law commitment (row 3 of the design's behaviour table): `serialize`
  * with zero staged edits returns `doc.source` BYTE-IDENTICAL — never a
@@ -229,7 +232,15 @@ function fencedLineIndices(lines: LineInfo[]): Set<number> {
   return set;
 }
 
-const BOLD_FIELD_RE = /^(\s*)(\*\*[^*\r\n]+:\*\*)([ \t]*)([^\r\n]*)$/;
+/** Matches both shipped bold-field spellings: colon-inside (`**Label:**`,
+ * the original grammar) and colon-outside (`**Label**:`, the canonical form
+ * used throughout `templates/roadmap.md`). Each alternative's trailing
+ * marker is exactly 3 characters (`:**` or `**:`), so `token.slice(2, -3)`
+ * in `parseBoldFieldLine` strips the leading `**` and the spelling-specific
+ * trailing marker identically for both, yielding the same `label` either
+ * way. Deliberately excludes a bare unbolded `Label:` form — see Phase 1's
+ * prose-vs-field disambiguation design. */
+const BOLD_FIELD_RE = /^(\s*)(\*\*[^*\r\n]+(?::\*\*|\*\*:))([ \t]*)([^\r\n]*)$/;
 /** Boundary marking a hand-written trailing annotation on a field line —
  * the token owner must never destroy prose past this separator. */
 const TRAILING_SEPARATOR_RE = / — /;

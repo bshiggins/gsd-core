@@ -118,7 +118,7 @@ Clarify WHAT a phase delivers through Socratic questioning with quantitative amb
 
 | Flag | Description |
 |------|-------------|
-| `--auto` | Skip interactive questions; Claude selects recommended defaults and writes SPEC.md |
+| `--auto` | Skip interactive questions; Claude selects recommended defaults and writes SPEC.md. An existing SPEC.md is **reused as-is**, never regenerated |
 | `--text` | Use plain-text numbered lists instead of TUI menus (required for `/rc` remote sessions) |
 
 **Position in workflow:** `spec-phase → discuss-phase → plan-phase → execute-phase → verify`
@@ -178,11 +178,17 @@ Generate UI design contract for frontend phases.
 |----------|----------|-------------|
 | `N` | No | Phase number (defaults to current phase) |
 
+| Flag | Description |
+|------|-------------|
+| `--auto` | Skip interactive questions. An existing UI-SPEC.md is **reused as-is** and sent straight to the checker, never re-researched |
+| `--text` | Use plain-text numbered lists instead of TUI menus |
+
 **Prerequisites:** `.planning/ROADMAP.md` exists, phase has frontend/UI work
 **Produces:** `{phase}-UI-SPEC.md`
 
 ```bash
 /gsd-ui-phase 2                     # Design contract for phase 2
+/gsd-ui-phase 2 --auto              # Non-interactive; reuses an existing UI-SPEC
 ```
 
 ---
@@ -426,9 +432,14 @@ Retroactive 6-pillar visual audit of implemented frontend.
 
 For richer visual evidence, pair this with `gsd-browser` or another browser MCP server so the audit can capture screenshots, state, console/network context, and reproducible interaction steps.
 
+| Flag | Description |
+|------|-------------|
+| `--auto` | Skip interactive questions. An existing UI-REVIEW.md is **reused as-is**, never re-audited |
+
 ```bash
 /gsd-ui-review                      # Audit current phase
 /gsd-ui-review 3                    # Audit phase 3
+/gsd-ui-review 3 --auto             # Non-interactive; reuses an existing UI-REVIEW
 ```
 
 ---
@@ -1288,15 +1299,16 @@ Extract reusable patterns, anti-patterns, and architectural decisions from compl
 ### `gsd-tools check verify-command-paths`
 
 Deterministic resolvability probe over a phase's `<automated>` verify commands (#2401). Run
-automatically by `/gsd-plan-phase` before the plan-check pass and handed to `gsd-plan-checker`;
-runnable by hand to see what the checker saw.
+automatically by `/gsd-plan-phase` and by `/gsd-quick --validate` (#4767) before the plan-check
+pass and handed to `gsd-plan-checker`; runnable by hand to see what the checker saw.
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `N` | **Yes** | Phase number whose `-PLAN.md` files are probed |
+| `N` | One of `N` / `--dir` | Phase number whose `-PLAN.md` files are probed |
 
 | Flag | Description |
 |------|-------------|
+| `--dir <path>` | Probe the `-PLAN.md` files in this directory instead of a phase (quick mode's `.planning/quick/<id>/`); resolved against the project root (#4767) |
 | `--raw` | Emit the JSON payload with no surrounding prose |
 
 **Prerequisites:** none — an unresolvable phase degrades to a JSON payload with `readError` set
@@ -1328,7 +1340,7 @@ the replacement to the planner.
 | `missing_dir` | `blocker` | The resolved directory does not exist, or is not a directory |
 | `no_manifest` | `blocker` | The directory exists but holds no `package.json` / `Makefile` the command needs |
 | `dynamic_path` | `warning` | The path contains `$`, a backtick, `*`, `?`, or `~` — refused, not guessed |
-| `outside_root` | `warning` | A bare ancestor climb (`cd ../..`); the base differs under worktree execution |
+| `outside_root` | `warning` | A bare ancestor climb (`cd ../..`), or an absolute target outside the project root (#4767); the base differs under worktree execution, and an absolute target is pinned to one checkout — the filesystem is not consulted |
 | `script_missing` | `warning` | `npm run <script>` names a script the manifest does not define — this phase may add it |
 | `manifest_unreadable` | `warning` | `package.json` is oversized, unparseable, or not a JSON object |
 | `null` | `none` | Nothing to report |
@@ -1337,6 +1349,7 @@ A non-empty `readError` means the probe **could not look** — distinct from fin
 
 ```bash
 gsd-tools check verify-command-paths 3 --raw    # probe phase 3's verify commands
+gsd-tools check verify-command-paths --dir .planning/quick/260915-abc-task --raw   # a quick plan's dir
 ```
 
 See [Resolve verify-command path findings](how-to/resolve-verify-command-path-findings.md).
@@ -1659,9 +1672,14 @@ Generate an AI-SPEC.md design contract for phases that involve building AI syste
 
 **Spawns:** 3 parallel specialist agents: domain-researcher, framework-selector, ai-researcher, and eval-planner
 
+| Flag | Description |
+|------|-------------|
+| `--auto` | Skip interactive questions. An existing AI-SPEC.md is **reused as-is**, never regenerated |
+
 ```bash
 /gsd-ai-integration-phase              # Wizard for the current phase
 /gsd-ai-integration-phase 3           # Wizard for a specific phase
+/gsd-ai-integration-phase 3 --auto    # Non-interactive; reuses an existing AI-SPEC
 ```
 
 ---
@@ -1673,9 +1691,14 @@ Audit an executed AI phase's evaluation coverage and produce an EVAL-REVIEW.md r
 **Prerequisites:** Phase has been executed and has an `AI-SPEC.md`
 **Produces:** `{phase}-EVAL-REVIEW.md` with findings, gaps, and remediation guidance
 
+| Flag | Description |
+|------|-------------|
+| `--auto` | Skip interactive questions. An existing EVAL-REVIEW.md is **reused as-is**, never re-audited |
+
 ```bash
 /gsd-eval-review                       # Audit current phase
 /gsd-eval-review 3                     # Audit a specific phase
+/gsd-eval-review 3 --auto              # Non-interactive; reuses an existing EVAL-REVIEW
 ```
 
 ---

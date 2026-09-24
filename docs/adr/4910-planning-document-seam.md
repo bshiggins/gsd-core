@@ -613,3 +613,138 @@ Raised by a maintainer ruling on 2026-09-21, after §5 shipped in
 recorded in that PR as an interpretation of #4906's *"an unparseable shape surfaces `could-not-parse`
 with the offending span"* — a sentence that carries no read-or-write qualifier — and the
 interpretation was made without examining the write side at all.
+
+## Amendment (2026-09-22): two of Phase 2's cited defects are already fixed, and STATE.md's field-write engine is re-scoped out
+
+Phase 2's evidence list read *#4852, #4862, #4499*. Two of those three are **already fixed on
+`next`, independently of this epic**, and the third — #4862 — exposed a subsystem whose blast radius
+disqualifies it from a mechanical migration. All three claims below were reproduced against the
+built module, not inferred from reading source.
+
+### #4499 is already fixed
+
+`src/frontmatter.cts`'s `spliceFrontmatter` already preserves untouched top-level keys verbatim,
+per-key, comparing structural equality before deciding whether to regenerate a key's raw text.
+Reproduced: a document with `must_haves` and `tags` block sequences, with only `wave` changed,
+round-trips those two keys **byte-identically**. This predates this epic — the mechanism (`#1572`
+in its own comments) already implements the identity-preservation rule Decision 3 asks for, for
+YAML frontmatter specifically.
+
+**Struck from Phase 2's evidence.** Frontmatter is a different grammar from the body-field grammar
+this seam models (`boldField` / `table` / `checklist`) — Decision 1 treats it as one opaque region,
+supplied by `frontmatter.cts` as a layer, not decomposed into writable nodes. `spliceFrontmatter`'s
+internal per-key YAML splicing is therefore not a "verb writes a field with its own regex" instance
+in the sense this phase targets, and it is not broken. No migration is owed here.
+
+### #4862 is already fixed at its own level, and its subsystem is re-scoped out
+
+`state-document.cts`'s `stateReplaceField` already anchors its bold-field pattern to line start with
+same-line-only leading whitespace (its own comments cite `#4243`). Reproduced: writing `Last
+Activity` leaves a sibling `**Last Activity Description:**` field and the `state_head` frontmatter
+key both intact. The exact symptom #4862 reported does not reproduce.
+
+**What #4862's site actually is, measured rather than assumed:** `stateReplaceField` /
+`stateReplaceFieldWithFallback` carries a **CRITICAL** `get_impact(direction=both)` rating — 190+
+affected symbols, truncated as a lower bound. So, measured the same way, do `phase.cts`'s
+`mutateMilestonePhase` (121) and `roadmap.cts`'s `cmdRoadmapUpdatePlanProgress` (200) — the two
+sites Phase 2 *does* keep. **The CRITICAL label does not distinguish these groups**, and an earlier
+draft of this amendment claimed it did without checking the second two; corrected here. All three
+symbols live in large, single-file modules (`phase.cts` at 4,800+ lines, `roadmap.cts` at 1,600+,
+`state-transition.cts` at 3,500+), and `direction: both` walks into every sibling function such a
+file touches — a known measurement artifact of bidirectional impact on a large shared module, not
+evidence specific to any one of these three symbols' actual behavior.
+
+**What genuinely distinguishes them is architectural, and this is the actual basis for the
+re-scoping:** `stateReplaceField` is one building block inside `updateCore`
+(`state-transition.cts`), which is a full read-modify-write transaction — session-vs-body field
+routing (`sessionLabelsForBodyField`), a three-condition frontmatter-fallback case (`#3699` case D),
+frontmatter reconstruction and re-sync, and post-write preservation reconciliation
+(`readModifyWriteStateMd`). Its own comments cite four prior hardening passes against exactly the
+corruption classes this epic worries about — `#3374`, `#3699`, `#4010`, `#4243` — predating #4906.
+`mutateMilestonePhase` and `cmdRoadmapUpdatePlanProgress`, by contrast, are each **one field, one
+grammar, a three-arm decision that collapses onto a single `setFieldValue` call plus a caller-side
+pre-check**, inside a confinement window another module already computes — a substitution of
+mechanism with the same inputs and outputs, not a design task.
+
+This is not "a verb brings its own regex to a field write." `updateCore` is a proven,
+actively-maintained transactional engine that already defends against silent corruption, and it
+does not map onto `PlanningDoc`'s current node model at all: there is no node concept for a
+multi-field transaction, a frontmatter-derived-from-body sync pass, or a session-scoped write with
+an archive-shadowing guard. Migrating it would mean designing that model, not calling an existing
+seam function.
+
+**The STATE.md field-write engine is re-scoped out of Phase 2** on that architectural basis. It is
+not defective, so there is no urgency, and its migration — if ever undertaken — needs its own design
+phase with its own node-model design, not a slot inside a phase whose other deliverable is a
+same-mechanism substitution in `phase.cts`/`roadmap.cts`.
+
+**Struck from Phase 2's evidence.**
+
+### What Phase 2 actually delivers
+
+With both struck, Phase 2's census is exactly the `**Plans:**` line: `src/phase.cts`'s
+`planCountBodyPattern` (still live — one capture group, confined by `withPhaseSection` but still a
+regex the seam should own) and `src/roadmap.cts`'s `planCountPattern` (the correct three-arm sibling,
+still a duplicate implementation under Decision 2's "two copies that agree today are the same
+defect" rule). Both write the same field on the same artifact and migrate together onto one seam
+call. `#4852` remains the phase's fail-first evidence; `Refs #4852`, since it is already closed
+`NOT_PLANNED`.
+
+No new phase number is opened for the STATE.md engine. If a future contributor wants to bring
+`STATE.md` under this seam, that is new work requiring its own issue, its own design, and its own
+`get_impact` accounting — not an unclaimed fragment of this phase.
+
+## Amendment (2026-09-24): Phase 3 does not add table/checklist writers — the "arrive with Phase 3" claim was aspirational, not evidence-backed
+
+Phase 1's own docstring on `planning-document.cts` and `CONTEXT.md`'s Planning Document Module
+glossary entry both state, in near-identical wording: *"table/checklist writers arrive with Phase
+3."* Phase 3's actual evidence — [#4736](https://github.com/open-gsd/gsd-core/issues/4736) and
+[#4793](https://github.com/open-gsd/gsd-core/issues/4793) — does not need either, checked directly
+against both call sites before writing this phase's code, not assumed:
+
+- **#4736** (`quick.md` Step 7c writes unescaped prose into STATE.md's Quick Tasks table) is fixed
+  by routing the workflow through `src/markdown-table.cts`'s existing `appendQuickTaskRow`, called
+  via the `quick-tasks-append` CLI subcommand. That function already implements Decision 4's exact
+  contract — one escape function (`escapeCell`), shared by the reader (`parseMarkdownTable`,
+  `matchTableSchema`) and the writer, refusing (a fail-loud `Result`) rather than guessing on an
+  unrecognized schema. The defect was that `quick.md`'s own text never called it, not that the
+  escaping capability was missing. This never touches `planning-document.cts`: STATE.md's field-write
+  engine was explicitly re-scoped out of this epic by Phase 2's own 2026-09-22 amendment above, and
+  building a `table`-node writer for one call site inside that already-out-of-scope engine would
+  either bypass `readModifyWriteStateMd`'s locking/resync discipline or require the STATE.md
+  transactional redesign Phase 2 already declined to do here.
+- **#4793** (`src/decisions.cts`'s `parseDecisions` rejects a second plain-prose colon in a decision
+  title) is fixed entirely inside `decisions.cts`'s own dedicated grammar (`bulletTitledColonRe`).
+  `decisions.cts` has never imported `planning-document.cts` — it is a standalone parser for
+  `<decisions>` blocks in phase `CONTEXT.md` files, which are not `.planning/` root artifacts in
+  `PLANNING_ARTIFACTS`'s sense (`isCanonicalPlanningFile`'s registry does not cover per-phase
+  `CONTEXT.md` files at all). There is no writer counterpart to fix here either — decisions are
+  hand-written by a human or by `discuss-phase`'s own prose generation, never re-serialized by a
+  structural writer; the fix is a reader-side grammar widening (Decision 4a's "the reader is liberal
+  toward a human's variation" half), not a writer change.
+
+**Corrected, rather than silently left inaccurate.** `planning-document.cts`'s docstring and
+`CONTEXT.md`'s glossary entry are updated in this same PR to remove the "arrive with Phase 3" claim:
+`table`/`checklist` nodes remain parse-and-read-only, and no phase in this epic's remaining evidence
+(Phases 4-6, reviewed against their own cited issues before writing this sentence) currently names a
+call site that needs a `table`- or `checklist`-node writer. If one is found later, it is that
+phase's deliverable, stated there with its own evidence — not a debt silently carried past a phase
+whose own docstring promised it and then didn't measure whether the promise was still true.
+
+**`emittable ⊆ accepted` (§4a) is already satisfied and needed no new test.** `PlanningDoc`'s only
+currently-writable node kind is `boldField`, and
+`tests/planning-document.test.cjs`'s existing fast-check property ("row 31: every value
+setFieldValue accepts round-trips identically" — a document-shaped generator per
+`CONTRIBUTING.md`'s fixture-provenance rule, 300 seeded runs) already asserts, for the whole
+registry as it currently stands, that every value the writer accepts round-trips identically once
+spliced and re-parsed. Neither of this phase's two fixes touches `setFieldValue`, `serialize`, or
+`parsePlanningDoc`, so this phase's obligation is to confirm the property still holds (it does,
+unmodified), not to author a new one.
+
+**What Phase 3 actually delivers:** `quick-tasks-append` gains an optional `--status` flag
+(threading through to `appendQuickTaskRow`'s pre-existing `status` field), closing the last gap that
+kept `quick.md`'s `$VALIDATE_MODE` row shape on the raw-markdown path; `quick.md` Step 7c is rewritten
+to call `quick-tasks-append` instead of authoring the row via the Edit tool; and
+`bulletTitledColonRe` is widened to treat the LAST bare colon before the closing `**` as the title
+separator, so a plain-prose second colon no longer forces `could-not-parse`, while a title with zero
+bare colons still does (the #1639 discipline, unweakened — pinned by a negative-control test).
