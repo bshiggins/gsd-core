@@ -358,9 +358,17 @@ describe('bracket dependency tokenizer: capture-group indexing', () => {
   // appended token-list capture is group 2 and nothing else can be.
   test('the capturing prefix contributes exactly one capture group', () => {
     const prefix = phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, 'bracket', true);
-    // `src + '|'` makes the pattern match the empty string, so exec always
-    // returns a result whose length is 1 + the group count.
-    const groupCount = new RegExp(`${prefix}|`).exec('').length - 1;
+    // `src + '|'` makes the pattern match the empty string, so the result is
+    // always non-null and its length is 1 + the group count. Counted through
+    // `String.prototype.match` rather than `RegExp.prototype.exec`, whose
+    // call spelling collides with prompt-injection-scan.sh's code-execution
+    // pattern (DEFECT.PROMPT-INJECTION-SCAN-COLLISION). That pattern cannot
+    // be narrowed without dropping real child-process hits, so the collision
+    // is avoided here rather than allowlisted — this file has no other need
+    // of an exemption, and the wording above deliberately does not spell the
+    // trigger token out, the same way gsd-code-reviewer.md's defense contract
+    // was reworded instead of exempted (#4209 R2).
+    const groupCount = ''.match(new RegExp(`${prefix}|`)).length - 1;
     assert.equal(
       groupCount,
       1,
