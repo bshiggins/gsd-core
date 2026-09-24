@@ -35,6 +35,9 @@ const {
   renderPhaseId,
   renderMilestoneId,
   toDir,
+  phaseHeadingPrefixSrcFor,
+  tokenizePhaseDependencyReferences,
+  PHASE_HEADING_BASELINE,
 } = require('../gsd-core/bin/lib/phase-id.cjs');
 
 // ─── Generators ──────────────────────────────────────────────────────────────
@@ -334,6 +337,76 @@ describe('bracket phase id: toDir slug guards', () => {
           assert.throws(() => toDir(mutated, slug), /^Error: toDir: invalid /);
         },
       ),
+    );
+  });
+});
+
+// ─── Capture-group indexing (#4773 review round 29, Minor 2) ─────────────────
+//
+// `tokenizePhaseDependencyReferences` composes its bracket-display regex as
+// `phaseHeadingPrefixSrcFor(LABEL_ONLY, 'bracket', true)` + an appended
+// token-list capture, then reads the bracket id as group 1 and the token list
+// as group 2. Those indices are POSITIONAL: a capturing group added anywhere
+// inside the prefix — including inside either of its two alternatives, or
+// inside BRACKET_ID_SRC — silently shifts the token list to a later index, and
+// the reader would then slice the wrong span without failing loudly. The
+// review could not rule this out from the regex definitions alone, so the
+// invariant is pinned here rather than left to inspection.
+
+describe('bracket dependency tokenizer: capture-group indexing', () => {
+  // Structural: the capturing prefix contributes EXACTLY one group, so the
+  // appended token-list capture is group 2 and nothing else can be.
+  test('the capturing prefix contributes exactly one capture group', () => {
+    const prefix = phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, 'bracket', true);
+    // `src + '|'` makes the pattern match the empty string, so exec always
+    // returns a result whose length is 1 + the group count.
+    const groupCount = new RegExp(`${prefix}|`).exec('').length - 1;
+    assert.equal(
+      groupCount,
+      1,
+      'a capture group added to the phase-heading prefix shifts the dependency ' +
+        'tokenizer\'s token-list group off index 2',
+    );
+  });
+
+  // Behavioural: the offsets the tokenizer reports must actually point at the
+  // token it names. A misindexed group survives a "did it find something"
+  // assertion but not this one.
+  test('property: reported offsets point at the token that was named', () => {
+    const numberArb = fc.nat({ max: 99 }).map((n) => String(n).padStart(2, '0'));
+    fc.assert(
+      fc.property(
+        projectArb,
+        numberArb,
+        fc.array(numberArb, { minLength: 1, maxLength: 3 }),
+        // Every spelling the bracket alternative admits: any case, optional
+        // `Phase` label, zero or more spaces after the bracket.
+        fc.constantFrom('] ', ']', '] Phase ', '] PHASE ', ']phase '),
+        (project, milestone, tokens, joint) => {
+          const prose = `${`[${project}.${milestone}`}${joint}${tokens.join(', ')}`;
+          const found = tokenizePhaseDependencyReferences(prose, 'bracket');
+          assert.equal(found.length, tokens.length);
+          found.forEach((ref, i) => {
+            assert.equal(ref.kind, 'qualified');
+            // The span [start, end) must be the token's own text — this is
+            // what breaks if the token list is read from the wrong group.
+            assert.equal(prose.slice(ref.start, ref.end), tokens[i]);
+            assert.ok(ref.token.endsWith(tokens[i]));
+          });
+        },
+      ),
+    );
+  });
+
+  // The unqualified spelling takes the prefix's OTHER alternative, which
+  // captures nothing — group 1 is undefined and the reference is legacy, not
+  // qualified. This is the branch the `if (!displayMatch[1]) continue;` guard
+  // exists for.
+  test('an unqualified mention stays legacy, not qualified', () => {
+    const found = tokenizePhaseDependencyReferences('Phase 03, 04', 'bracket');
+    assert.deepEqual(
+      found.map((r) => [r.kind, r.token]),
+      [['legacy', '03'], ['legacy', '04']],
     );
   });
 });
