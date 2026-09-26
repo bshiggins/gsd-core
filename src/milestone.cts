@@ -36,7 +36,7 @@ import stateContract = require('./state-contract.cjs');
 const { publishStateContract } = stateContract;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { PHASE_NUMBER_TOKEN_SOURCE, isSentinelPhaseId, isSentinelPhaseDir } = phaseIdMod;
+const { isSentinelPhaseId, isSentinelPhaseDir, buildPhaseHeadingScanRegex, PHASE_HEADING_BASELINE } = phaseIdMod;
 import { escapeRegex } from './pattern.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapParserMod = require('./roadmap-parser.cjs');
@@ -737,8 +737,22 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
       // windows converge to the same value regardless of which version drove
       // the lookup.
       const scopedContent = sliceMilestoneWindow(roadmapContent, version) ?? extractCurrentMilestone(roadmapContent, cwd);
-      // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
-      const phasePattern = new RegExp(`#{2,4}\\s*Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n]+)`, 'gi');
+      // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag, owned
+      // by buildPhaseHeadingScanRegex (phase-id.cts) so this guard also
+      // recognizes bracket-convention headings instead of hand-rolling a
+      // literal `Phase\s+`.
+      // #4984 fix: resolved ONCE and threaded into BOTH the heading scan and
+      // the disk-side matchPhaseDirs check below — the heading scan alone
+      // recognizing `[GSD.02] 01:` and extracting the bare phase-number token
+      // "01" is only half the fix. Without also passing this convention to
+      // matchPhaseDirs, its bracket-qualified match arm never fires, "01"
+      // matches no bracket directory name ("GSD.02-01-setup"), and every
+      // properly-scaffolded bracket phase reads as disk_status: 'no_directory'
+      // — turning a real bracket project's own phases into false "ROADMAP
+      // lists N unstarted phase(s)" failures on `milestone complete`.
+      const { regex: phasePattern, phaseNumGroup } = buildPhaseHeadingScanRegex(
+        PHASE_HEADING_BASELINE.ANY_BRACKET, phaseConvention,
+      );
       const noDirectoryPhases: string[] = [];
       let pm: RegExpExecArray | null;
       const phaseDirEntries = ((): string[] => {
@@ -752,7 +766,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
         }
       })();
       while ((pm = phasePattern.exec(scopedContent)) !== null) {
-        const phaseNum = pm[1];
+        const phaseNum = pm[phaseNumGroup];
         // Phase 0 (pre-milestone) and Phase 999 (backlog) are sentinels, not
         // real phases — they legitimately have no directory and must not block
         // milestone completion. Mirrors the engine-wide sentinel convention

@@ -431,6 +431,46 @@ function parsePhaseChecklistLine(
   };
 }
 
+/** Group layout for a `buildPhaseHeadingScanRegex` match, so a caller never computes its own offset. */
+interface PhaseHeadingScanPattern {
+  /** Anchored, multiline, global — one `.exec()` loop call per scan, same as every current call site. */
+  regex: RegExp;
+  /** `1` when `convention === 'bracket'` (the bracket id capture), else `null` — never present. */
+  bracketGroup: number | null;
+  /** The phase-number token capture (`PHASE_NUMBER_TOKEN_SOURCE`). */
+  phaseNumGroup: number;
+  /** The heading-title capture (everything after the colon on the heading line). */
+  phaseNameGroup: number;
+}
+
+/**
+ * The single owner of the "scan a whole document for every phase heading"
+ * pattern (#4865 / ADR-4910 §8) — anchored (`^ {0,3}#{2,4}`, so indentation up
+ * to 3 spaces is tolerated but a heading is never matched mid-line), global,
+ * multiline, convention-aware via `phaseHeadingPrefixSrcFor`. Returns the
+ * capture-group layout alongside the regex so a caller never re-derives the
+ * bracket-convention offset (`const G = convention === 'bracket' ? 1 : 0`)
+ * itself — a second, independently-computed offset is exactly the kind of
+ * drift `scripts/lint-phase-id-drift.cjs` exists to catch structurally, not
+ * just by pattern text.
+ *
+ * Distinct from `buildPhaseHeadingRegex` (`src/roadmap.cts`), which searches
+ * for ONE already-known phase number (anchored `^`, no `g` flag, phase number
+ * interpolated literally) — a different contract for a different question.
+ * This function answers "which phases exist in this content", not "does this
+ * specific phase exist".
+ */
+function buildPhaseHeadingScanRegex(baseline: string, convention?: string | null): PhaseHeadingScanPattern {
+  const bracketGroup = convention === 'bracket' ? 1 : null;
+  const phaseNumGroup = bracketGroup ? 2 : 1;
+  const phaseNameGroup = phaseNumGroup + 1;
+  const regex = new RegExp(
+    `^ {0,3}#{2,4}\\s*${phaseHeadingPrefixSrcFor(baseline, convention, true)}(${PHASE_NUMBER_TOKEN_SOURCE})${OPTIONAL_PHASE_TAG_SOURCE}:\\s*([^\\n]+)`,
+    'gim',
+  );
+  return { regex, bracketGroup, phaseNumGroup, phaseNameGroup };
+}
+
 function stripProjectCodePrefix(value: unknown, caseInsensitive = true): string {
   const input = String(value);
   const re = caseInsensitive ? PROJECT_CODE_PREFIX_STRIP_RE_I : PROJECT_CODE_PREFIX_STRIP_RE;
@@ -760,6 +800,20 @@ function renderPhaseId(id: PhaseId): string {
   const sub = id.subphase ? `.${id.subphase}` : '';
   const plan = id.plan ? `-${id.plan}` : '';
   return `${renderMilestoneId(id)} ${id.phase}${sub}${plan}`;
+}
+
+/** Whether a legacy phase token has a lossless spelling in bracket display grammar. */
+function isBracketPhaseTokenRepresentable(token: unknown): boolean {
+  try {
+    const bracketToken = normalizePhaseName(token)
+      .split('.')
+      .map((segment) => segment.padStart(2, '0'))
+      .join('.');
+    parsePhaseId(`[GSD.00] ${bracketToken}`);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // PhaseId is a structural type: nothing forces a caller through parsePhaseId,
@@ -1337,7 +1391,7 @@ function isPhaseArtifact(fileName: string, phaseDirName: string, convention?: st
  * whichever path produced the candidates, which is what makes a bracket dir
  * read exactly what its legacy twin reads.
  */
-function matchesPhaseTokenCandidates(fileName: string, rawCandidates: string[]): boolean {
+function expandPhaseTokenCandidates(rawCandidates: string[]): Set<string> {
   // Each reading is compared in BOTH its padded and de-padded form: files are
   // written padded by `normalizePhaseName` (`cmdScaffold`) while directories
   // are often not (`1-unpadded`), and legacy trees carry the reverse pairing.
@@ -1345,12 +1399,27 @@ function matchesPhaseTokenCandidates(fileName: string, rawCandidates: string[]):
   // sub-phase (`03A`, `03.1`) has no meaningful de-padded form and is left
   // alone, so this only ever ADDS a reading and can never drop one.
   const depad = (t: string): string => (/^\d+$/.test(t) ? String(Number(t)) : t);
-  const candidates = new Set(
+  return new Set(
     rawCandidates
       .flatMap(t => [t, normalizePhaseName(t), depad(t)])
       .map(t => t.toUpperCase()),
   );
+}
 
+function matchesPhaseTokenCandidates(fileName: string, rawCandidates: string[]): boolean {
+  const candidates = expandPhaseTokenCandidates(rawCandidates);
+
+  if (matchPhaseTokenCandidateSpan(fileName, candidates) !== null) return true;
+
+  // FIX 2: token-less filename (bare "VERIFICATION.md"/"UAT.md") — containment
+  // in this phase's own directory listing is sufficient.
+  return derivePhaseTokenSegments(fileName).tokenSegments.length === 0;
+}
+
+function matchPhaseTokenCandidateSpan(
+  fileName: string,
+  candidates: Iterable<string>,
+): { start: number; end: number } | null {
   const fileUpper = fileName.toUpperCase();
   for (const candidate of candidates) {
     // A dotted sub-phase segment (e.g. `01.1-CONTEXT.md`) is a legitimate
@@ -1377,12 +1446,50 @@ function matchesPhaseTokenCandidates(fileName: string, rawCandidates: string[]):
       fileUpper.startsWith(`${candidate}-`) ||
       fileUpper.startsWith(`${candidate}.`) ||
       fileUpper.startsWith(`${candidate}_`)
-    ) return true;
+    ) return { start: 0, end: candidate.length };
+  }
+  return null;
+}
+
+/**
+ * Return the exact leading token span by which the phase-artifact reader
+ * attributes a phase-qualified filename to `phaseDirName`.
+ *
+ * Membership is first decided by `isPhaseArtifact`, then the span is selected
+ * from the same padded, de-padded, case-folded candidate set used by
+ * `matchesPhaseTokenCandidates`. Token-less containment fallbacks return null
+ * because there is no phase token in the filename to replace.
+ */
+function phaseArtifactTokenSpan(
+  fileName: string,
+  phaseDirName: string,
+  convention?: string | null,
+): { start: number; end: number } | null {
+  if (!isPhaseArtifact(fileName, phaseDirName, convention)) return null;
+
+  if (convention === 'bracket') {
+    const bracketDir = phaseDirName.match(BRACKET_DIR_TOKEN_RE);
+    if (bracketDir) {
+      const qualified = fileName.match(BRACKET_QUALIFIED_KEY_RE);
+      if (qualified && bracketQualifiedKey(fileName, convention) !== null) {
+        return { start: 0, end: qualified[0].length };
+      }
+      const bracketCandidates = expandPhaseTokenCandidates([bracketDir[1]]);
+      return matchPhaseTokenCandidateSpan(fileName, bracketCandidates);
+    }
   }
 
-  // FIX 2: token-less filename (bare "VERIFICATION.md"/"UAT.md") — containment
-  // in this phase's own directory listing is sufficient.
-  return derivePhaseTokenSegments(fileName).tokenSegments.length === 0;
+  const { tokenSegments } = derivePhaseTokenSegments(phaseDirName);
+  if (tokenSegments.length === 0) return null;
+  const literalToken = extractPhaseToken(phaseDirName);
+  const strippedDir = stripProjectCodePrefix(phaseDirName);
+  const strippedToken = strippedDir !== phaseDirName ? extractPhaseToken(strippedDir) : literalToken;
+  const leadingRunMatch = strippedDir.match(LEADING_DIGIT_RUN_RE);
+  const rawCandidates = [literalToken, strippedToken, leadingRunMatch?.[1]].filter(
+    (token): token is string => Boolean(token),
+  );
+  const candidates = expandPhaseTokenCandidates(rawCandidates);
+  return matchPhaseTokenCandidateSpan(fileName, candidates);
 }
 
 /**
@@ -1913,6 +2020,7 @@ export = {
   phaseHeadingPrefixSrcFor,
   parsePhaseChecklistLine,
   bracketQualifiedIntroSrcFor,
+  buildPhaseHeadingScanRegex,
   foldBracketId,
   bracketQualifiedKey,
   stripProjectCodePrefix,
@@ -1922,6 +2030,7 @@ export = {
   parsePhaseId,
   renderMilestoneId,
   renderPhaseId,
+  isBracketPhaseTokenRepresentable,
   toDir,
   SENTINEL_RANGES,
   isSentinelPhaseId,
@@ -1931,6 +2040,7 @@ export = {
   comparePhaseNum,
   extractPhaseToken,
   isPhaseArtifact,
+  phaseArtifactTokenSpan,
   scopeToPhase,
   phaseTokenMatches,
   matchPhaseDirs,

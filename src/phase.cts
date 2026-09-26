@@ -801,13 +801,22 @@ interface RawPlan {
  * none left in this file) degrades to the pre-#3897 two-tier behavior rather
  * than throwing on a missing argument.
  */
+/**
+ * The dependency resolver's one comparison normalization. Callers that must
+ * predict whether a token names a plan reuse this seam instead of copying its
+ * case-folding rule.
+ */
+function normalizeDependencyToken(token: unknown): string {
+  return String(token).toLowerCase();
+}
+
 function resolveDependencyId(
   dep: string,
   planMap: Map<string, RawPlan>,
   canonicalToId: Map<string, string>,
   shortFormToId?: Map<string, string>,
 ): string | null {
-  const lower = dep.toLowerCase();
+  const lower = normalizeDependencyToken(dep);
   if (planMap.has(lower)) return (planMap.get(lower) as RawPlan).id;
   if (canonicalToId.has(lower)) return canonicalToId.get(lower) as string;
   return shortFormToId?.get(lower) ?? null;
@@ -847,7 +856,7 @@ function buildShortFormToId(rawPlans: RawPlan[]): Map<string, string> {
     const canonical = extractCanonicalPlanId(p.id);
     const lastDash = canonical.lastIndexOf('-');
     if (lastDash > 0 && lastDash < canonical.length - 1) {
-      const shortForm = canonical.slice(lastDash + 1).toLowerCase();
+      const shortForm = normalizeDependencyToken(canonical.slice(lastDash + 1));
       if (/^\d+$/.test(shortForm) && !shortFormToId.has(shortForm)) {
         shortFormToId.set(shortForm, p.id);
       }
@@ -1090,7 +1099,7 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
 
   const seenLower = new Map<string, string>();
   for (const p of rawPlans) {
-    const lower = p.id.toLowerCase();
+    const lower = normalizeDependencyToken(p.id);
     const existing = seenLower.get(lower);
     if (existing !== undefined) {
       error(
@@ -1101,9 +1110,9 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
     seenLower.set(lower, p.id);
   }
 
-  const planMap = new Map(rawPlans.map((p) => [p.id.toLowerCase(), p]));
+  const planMap = new Map(rawPlans.map((p) => [normalizeDependencyToken(p.id), p]));
   const canonicalToId = new Map(
-    rawPlans.map((p) => [extractCanonicalPlanId(p.id).toLowerCase(), p.id]),
+    rawPlans.map((p) => [normalizeDependencyToken(extractCanonicalPlanId(p.id)), p.id]),
   );
   // #3897 rung 4 (ADR-3473 §8.9) — the third depends_on resolution tier.
   // Resolves a bare in-phase plan-number short form (e.g. "01") to its owning
@@ -1573,6 +1582,7 @@ function collectSiblingWorktreePhaseNums(
   const siblingPlanningDir = (wt: string): string => planningDir(wt, ws);
   const dirNumPattern = /^(?:[A-Z][A-Z0-9]*-)?(\d+)-/;
   // Same header shape the allocators scan locally (#1729 tag tolerance).
+  // phase-id-owner: pre-existing hand-rolled Phase-heading pattern — grandfathered pending Phase 6 migration (ADR-4910 §8, epic #4906)
   const headerPattern = /#{2,4}\s*Phase\s+(\d+)[A-Z]?(?:\.\d+)*(?:\s*\([^)\n]{0,200}\))?:/gi;
   for (const line of porcelain.split('\n')) {
     if (!line.startsWith('worktree ')) continue;
@@ -1714,6 +1724,7 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
 
       // 1) Section headers: ### Phase N: / ## Phase N: / #### Phase N:
       // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
+      // phase-id-owner: pre-existing hand-rolled Phase-heading pattern — grandfathered pending Phase 6 migration (ADR-4910 §8, epic #4906)
       const headerPattern = /#{2,4}\s*Phase\s+(\d+)[A-Z]?(?:\.\d+)*(?:\s*\([^)\n]{0,200}\))?:/gi;
       // 2) Roadmap bullet entries: - [ ] **Phase N: ...** (all checkbox variants)
       // The lookahead accepts colon, decimal-dot, whitespace, bold-close asterisk,
@@ -1864,6 +1875,7 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
       // bullets, on-disk dirs. The bullet scan was missing here — a bullet-only
       // `Phase N` row was invisible to batch allocation (#3849 secondary).
       // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
+      // phase-id-owner: pre-existing hand-rolled Phase-heading pattern — grandfathered pending Phase 6 migration (ADR-4910 §8, epic #4906)
       const phasePattern = /#{2,4}\s*Phase\s+(\d+)[A-Z]?(?:\.\d+)*(?:\s*\([^)\n]{0,200}\))?:/gi;
       const bulletPattern = /^[ \t]*-[ \t]*\[[^\]]{0,200}\][ \t]*\*{0,2}Phase[ \t]+(\d+)(?=[:.\s*]|$)/gim;
       let m: RegExpExecArray | null;
@@ -2031,6 +2043,7 @@ function scanExistingDecimalPhaseNumbers(phasesDir: string, rawContent: string, 
   }
 
   const rmPhasePattern = new RegExp(
+    // phase-id-owner: pre-existing hand-rolled Phase-heading pattern — grandfathered pending Phase 6 migration (ADR-4910 §8, epic #4906)
     `#{2,4}\\s*Phase\\s+${phaseMarkdownRegexSource(base)}\\.(\\d+)${OPTIONAL_PHASE_TAG_SOURCE}\\s*:`,
     'gi',
   );
@@ -2882,6 +2895,7 @@ function updateRoadmapAfterPhaseRemoval(
       // #1729: fold an optional pre-colon ( ) tag into the suffix capture so it
       // is re-emitted verbatim — a tagged later phase still gets renumbered.
       content = content.replace(
+        // phase-id-owner: pre-existing hand-rolled Phase-heading pattern — grandfathered pending Phase 6 migration (ADR-4910 §8, epic #4906)
         /(#{2,4}\s*Phase\s+)(\d+(?:\.\d+)?)((?:\s*\([^)\r\n]{0,200}\))?\s*:)/gi,
         (_match, prefix: string, num: string, suffix: string) =>
           `${prefix}${decrementRoadmapPhaseToken(num, removedInt)}${suffix}`,
@@ -4825,6 +4839,7 @@ function writePlanningFileSet(writes: WriteSpec[]): number {
 function phaseDisplayNameFromRoadmap(roadmapContent: string | null, phaseNum: string | null): string | null {
   if (!roadmapContent || !phaseNum) return null;
   const phaseEscaped = phaseMarkdownRegexSource(phaseNum);
+  // phase-id-owner: pre-existing hand-rolled Phase-heading pattern — grandfathered pending Phase 6 migration (ADR-4910 §8, epic #4906)
   const heading = roadmapContent.match(new RegExp(`^#{2,4}\\s*Phase\\s+${phaseEscaped}${OPTIONAL_PHASE_TAG_SOURCE}\\s*:\\s*([^\\n]+)`, 'im'));
   if (!heading) return null;
   const name = heading[1].replace(/\(INSERTED\)/i, '').trim();
@@ -6236,6 +6251,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           const currentMilestoneRoadmap = extractCurrentMilestone(roadmapContent, cwd);
           const phaseSectionMatch = currentMilestoneRoadmap.match(
             new RegExp(
+              // phase-id-owner: pre-existing hand-rolled Phase-heading pattern — grandfathered pending Phase 6 migration (ADR-4910 §8, epic #4906)
               `(#{2,4}\\s*Phase\\s+${phaseEsc}${OPTIONAL_PHASE_TAG_SOURCE}[:\\s][\\s\\S]*?)(?=#{2,4}\\s*Phase\\s+|$)`,
               'i',
             ),
@@ -7154,4 +7170,5 @@ export = {
   cmdPhaseListPlans,
   computeDependencyLevels,
   buildShortFormToId,
+  normalizeDependencyToken,
 };
