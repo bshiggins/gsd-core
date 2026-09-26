@@ -704,19 +704,6 @@ const BRACKET_PHASE_ENTRY_HEADING_RE = new RegExp(
   `^${PHASE_HEADING_PREFIX_SRC}${PHASE_NUMBER_TOKEN_SOURCE}${OPTIONAL_PHASE_TAG_SOURCE}\\s*:`,
   'i',
 );
-const LEGACY_PHASE_ENTRY_HEADING_RE =
-  /^(?:\[[^\]]{1,200}\]\s*)?Phase\s+([\w][\w.-]*)(?:\s*\([^)\n]{0,200}\))?\s*:/i;
-
-/**
- * Does one fence-excluded heading token use the reader's phase-entry grammar?
- * Kept separate from heading depth so destructive consumers can apply the
- * same bracket-plus-legacy recognition to tokens from `tokenizeHeadings`.
- */
-function isPhaseEntryHeading(headingText: string, phaseIdConvention?: string | null): boolean {
-  if (LEGACY_PHASE_ENTRY_HEADING_RE.test(headingText)) return true;
-  return phaseIdConvention === 'bracket' && BRACKET_PHASE_ENTRY_HEADING_RE.test(headingText);
-}
-
 // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal
 // mirror of OPTIONAL_PHASE_TAG_SOURCE). Hoisted out of hasPhaseEntries (#4144
 // round 5 Blocker 1) so a consumer OUTSIDE this file's own phase-entry count —
@@ -734,11 +721,23 @@ const PHASE_HEADING_TEXT_RE = /^(?:\[[^\]]{1,200}\]\s*)?Phase\s+([\w][\w.-]*)(?:
  * leading `#{1,6}` markers and surrounding whitespace already stripped
  * (`tokenizeHeadings`'s own `h.text`, or the equivalent for a line a caller
  * already knows is a `#{2,4}` heading) — is a phase heading by the readers'
- * own grammar. The single owner of this test; `hasPhaseEntries` below is
- * itself just the first caller.
+ * own grammar. The single owner of this test: `hasPhaseEntries` reaches it
+ * through `isPhaseEntryHeading` below, and the bracket roadmap migrator
+ * calls it directly.
  */
 function isPhaseHeadingText(headingText: string): boolean {
   return PHASE_HEADING_TEXT_RE.test(headingText);
+}
+
+/**
+ * Does one fence-excluded heading token use the reader's phase-entry grammar?
+ * Kept separate from heading depth so destructive consumers can apply the
+ * same bracket-plus-legacy recognition to tokens from `tokenizeHeadings`.
+ * The legacy arm is `isPhaseHeadingText`, that grammar's single owner.
+ */
+function isPhaseEntryHeading(headingText: string, phaseIdConvention?: string | null): boolean {
+  if (isPhaseHeadingText(headingText)) return true;
+  return phaseIdConvention === 'bracket' && BRACKET_PHASE_ENTRY_HEADING_RE.test(headingText);
 }
 
 function hasPhaseEntries(markdown: string, phaseIdConvention?: string | null): boolean {
