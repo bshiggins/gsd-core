@@ -766,6 +766,24 @@ function collectTablePhaseRows(window: string): Array<{ id: string; name: string
 }
 
 /**
+ * True when `content` contains a GFM table whose header row is phase-listing
+ * SHAPED (`| Phase | ... |`), regardless of whether it also declares a `Name`
+ * column. `collectTablePhaseRows` correctly refuses to mint a phase from a
+ * `| Phase | Status |`-shaped table (no name column, so no declaration) —
+ * but that table's mere presence still signals this roadmap has moved to
+ * table-based tracking, not checklist-based tracking. Callers that decide
+ * whether to treat bare checklist entries as phase declarations (#4899's
+ * roadmap.cts synthesis fallback) must see this signal even when
+ * `collectTablePhaseRows` itself returns nothing for the same content —
+ * otherwise a thin, name-less Progress table cannot suppress a checklist
+ * synthesis it was never meant to coexist with.
+ */
+function hasPhaseListingTableHeader(content: string): boolean {
+  const unfenced = stripFencedCode(content).text;
+  return unfenced.split(/\r?\n/).some((line) => PHASE_LISTING_HEADER_RE.test(line));
+}
+
+/**
  * #3262: the sole owner of "which phase ids does THIS milestone window
  * declare". Extracted verbatim from `getMilestonePhaseFilter`'s former inline
  * heading scan + bullet scan so the new `roadmap milestone-scope` probe (the
@@ -1079,6 +1097,7 @@ function extractCurrentMilestoneScoped(content: string, cwd?: string, ws?: strin
         const preambleCutoff = firstMilestoneMatch ? firstMilestoneMatch.index! : detailsOpenIdx;
         const preamble = stripTaggedBlocks(content.slice(0, preambleCutoff), 'details')
           // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
+          // phase-id-owner: pre-existing hand-rolled Phase-heading pattern — grandfathered pending Phase 6 migration (ADR-4910 §8, epic #4906)
           .replace(/^#{2,4}\s*Phase\s+[\w][\w.-]*(?:\s*\([^)\n]{0,200}\))?\s*:[^\n]*(?:\n(?!#{1,6}\s)[^\n]*)*\n?/gim, '')
           .replace(/^#{1,4}\s*Phase Details\b[^\n]*\n?/gim, '');
         const value = preamble + content.slice(detailsOpenIdx, detailsEnd);
@@ -1327,6 +1346,7 @@ function extractCurrentMilestoneScoped(content: string, cwd?: string, ws?: strin
   // every phase (phase_count: 0, exit 0). Only strip preamble phase details when
   // the selected milestone section actually contains its own — otherwise the
   // preamble phases ARE this milestone's phases and must be preserved.
+  // phase-id-owner: pre-existing hand-rolled Phase-heading pattern — grandfathered pending Phase 6 migration (ADR-4910 §8, epic #4906)
   const currentSectionHasPhaseDetails = /^#{2,4}\s*Phase\s+\S/im.test(currentSection);
   const preambleBase = stripTaggedBlocks(beforeMilestones, 'details');
   // #3235: the conditional wraps the REPLACE, not the pattern. This used to select between the
@@ -1335,6 +1355,7 @@ function extractCurrentMilestoneScoped(content: string, cwd?: string, ws?: strin
   // replacement argument, so changing `''` would silently give the no-op branch a real effect.
   // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
   const preambleWithoutPhaseDetails = currentSectionHasPhaseDetails
+    // phase-id-owner: pre-existing hand-rolled Phase-heading pattern — grandfathered pending Phase 6 migration (ADR-4910 §8, epic #4906)
     ? preambleBase.replace(/^#{2,4}\s*Phase\s+[\w][\w.-]*(?:\s*\([^)\n]{0,200}\))?\s*:[^\n]*(?:\n(?!#{1,6}\s)[^\n]*)*\n?/gim, '')
     : preambleBase;
   // Unconditional in BOTH branches -- the #730 `Phase Details` heading strip is independent of
@@ -2331,6 +2352,7 @@ export = {
   // guards and the edit-phase workflow's pre/post capture are built on.
   scanMilestonePhaseIds,
   collectTablePhaseRows,
+  hasPhaseListingTableHeader,
   findMilestoneScopeHeadingLines,
   // #3641: the scope axis's phase-ENTRY predicate, exported so roadmap
   // validate's V004 document-level check routes through the same single
@@ -2356,15 +2378,26 @@ export = {
  */
 function extractPhaseFieldMultiline(section: string, label: string): string | null {
   // #2769 label shapes: `**X:**`, `**X**:`, and the spaced `**X** :`.
+  // #4837: anchored to line start (`^[ \t]*`, `m` flag) so an inline
+  // `**Label**` mention embedded in an EARLIER field's own body text cannot
+  // shadow the real field's own declaration line. `[ \t]*` (not `\s*`) keeps
+  // the anchor scoped to same-line leading whitespace under the `m` flag.
   const labelRe = new RegExp(
-    '\\*\\*' + label + '(?::\\*\\*|\\*\\*\\s*:?)\\s*([^\\n]+)',
-    'i',
+    '^[ \\t]*\\*\\*' + label + '(?::\\*\\*|\\*\\*\\s*:?)\\s*([^\\n]+)',
+    'im',
   );
   const match = section.match(labelRe);
   if (!match) return null;
   const startIdx = match.index ?? 0;
   const after = section.slice(startIdx + match[0].length);
   const firstLine = match[1].trim();
+  // #4837 (isolated-review finding): the continuation loop's fence-stop check
+  // only ever sees lines AFTER the label's own line — a fence opener on the
+  // SAME line as the label (`**Requirements:** ```js`) was invisible to it,
+  // leaking one line of fence content before the closing fence line
+  // coincidentally matched the same stop check. Checked here too, so a fence
+  // opening on the label's own line is caught just as conservatively.
+  if (/^(?:`{3,}|~{3,})/.test(firstLine)) return null;
   const contLines = [];
   const lines = after.split('\n');
   for (let li = 0; li < lines.length; li++) {
@@ -2374,9 +2407,19 @@ function extractPhaseFieldMultiline(section: string, label: string): string | nu
     // continuation line.
     if (li === 0 && !raw.trim()) continue;
     if (!raw.trim()) break;
-    if (/^\s*\*\*[A-Z][A-Za-z ]*:?(\*\*)?:?\s/.test(raw)) break;
+    // #4837: a list item is a structural boundary — the real corruption
+    // vector (a `- Deferred to Phase N: OTHER-ID` bullet folding a foreign
+    // REQ-ID into this field's citation-scan input).
+    if (/^\s*[-*+]\s/.test(raw)) break;
+    // #4837: case-insensitive label-start character class — a
+    // lowercase-first-letter label (`**requirements:**`) is as much a field
+    // boundary as a capitalized one.
+    if (/^\s*\*\*[A-Za-z][A-Za-z ]*:?(\*\*)?:?\s/.test(raw)) break;
     if (/^\s*#{1,4}\s/.test(raw)) break;
     if (/^\s*\|/.test(raw)) break;
+    // #4837: a fenced code block opener stops the scan — folding fence
+    // content is never safe, and stopping early is conservative.
+    if (/^\s*(?:`{3,}|~{3,})/.test(raw)) break;
     contLines.push(raw.trim());
   }
   return [firstLine, ...contLines].join(' ').trim() || null;
