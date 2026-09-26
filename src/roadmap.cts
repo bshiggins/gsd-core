@@ -834,8 +834,8 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
   if (phases.length === 0 && checklistOccurrences.length > 0 && !hasPhaseListingTableHeader(effectiveContent)) {
     for (const occ of checklistOccurrences) {
       if (isSentinelPhase(occ.token, occ.bracketId)) continue;
-      const normalized = normalizePhaseName(occ.token);
-      const dirMatch = matchPhaseDirs(_phaseDirNames, normalized, convention).matches[0];
+      const checklistLookup = resolvePhaseDirectoryLookup(cwd, occ.token);
+      const dirMatch = matchPhaseDirsForLookup(_phaseDirNames, checklistLookup).matches[0];
       let diskStatus = 'no_directory';
       let planCount = 0;
       let summaryCount = 0;
