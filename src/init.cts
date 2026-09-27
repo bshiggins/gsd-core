@@ -28,6 +28,8 @@ import roadmapParser = require('./roadmap-parser.cjs');
 import coreUtils = require('./core-utils.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id.cjs is an export= CommonJS module
 import phaseId = require('./phase-id.cjs');
+// eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id-display.cjs is an export= CommonJS module
+import phaseIdDisplayMod = require('./phase-id-display.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- worktree-safety.cjs is an export= CommonJS module
 import worktreeSafety = require('./worktree-safety.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-workspace.cjs is an export= CommonJS module
@@ -121,6 +123,7 @@ const {
   PHASE_HEADING_BASELINE,
   buildPhaseHeadingScanRegex,
 } = phaseId;
+const { phaseToken } = phaseIdDisplayMod;
 const { pruneOrphanedWorktrees } = worktreeSafety;
 
 const {
@@ -2908,11 +2911,13 @@ function cmdInitManager(cwd: string, raw: boolean): void {
     'gi',
   );
   const phases: Record<string, unknown>[] = [];
+  const bracketIdsByPhaseNumber = new Map<string, string>();
   let match: RegExpExecArray | null;
 
   while ((match = phasePattern.exec(content)) !== null) {
     const bracketId = capturesBracketId ? match[1] : undefined;
     const phaseNum = capturesBracketId ? match[2] : match[1];
+    if (bracketId) bracketIdsByPhaseNumber.set(phaseNum, bracketId);
     const phaseName = (capturesBracketId ? match[3] : match[2])
       .replace(/\(INSERTED\)/i, '')
       .trim();
@@ -3114,12 +3119,25 @@ function cmdInitManager(cwd: string, raw: boolean): void {
     }
   };
   const phaseByBracketIdentity = new Map<string, Record<string, unknown>>();
+  const bracketIdentityByPhaseNumber = new Map<string, string>();
   const completedBracketIdentities = new Set<string>();
   if (phaseIdConvention === 'bracket') {
     for (const phase of phases) {
-      if (typeof phase['display_id'] !== 'string') continue;
-      const key = bracketIdentityKey(phase['display_id']);
+      const phaseNumber = phase['number'] as string;
+      const bracketId = bracketIdsByPhaseNumber.get(phaseNumber);
+      const canonicalPhaseToken = phaseToken(phaseNumber);
+      // #4304 re-review Major 4: key each heading on the reader's canonical
+      // token, not on a strict parse of its rendered display. An accepted
+      // unpadded heading (`### [CK.02] 1:`) gets no display_id, because
+      // parsePhaseId rejects `CK.02-1`, so it had no identity at all and a
+      // checked `[CK.02] 01` row completed it while phase_complete was false.
+      // phaseToken pads the number to `01`, and `CK.02-01` is the form
+      // parsePhaseId accepts; canonical headings key exactly as before.
+      const key = bracketId && canonicalPhaseToken
+        ? bracketIdentityKey(`${bracketId}-${canonicalPhaseToken}`)
+        : null;
       if (!key) continue;
+      bracketIdentityByPhaseNumber.set(normalizePhaseNumber(phaseNumber), key);
       phaseByBracketIdentity.set(key, phase);
       if (phase['phase_complete'] === true) completedBracketIdentities.add(key);
     }
@@ -3135,8 +3153,8 @@ function cmdInitManager(cwd: string, raw: boolean): void {
       const key = bracketIdentityKey(identity);
       if (!key) continue;
       const current = phaseMap.get(normalizePhaseNumber(checkbox.phaseToken));
-      const currentKey = typeof current?.['display_id'] === 'string'
-        ? bracketIdentityKey(current['display_id'])
+      const currentKey = current
+        ? bracketIdentityByPhaseNumber.get(normalizePhaseNumber(current['number'] as string)) ?? null
         : null;
       if (!current || currentKey !== key || current['phase_complete'] === true) {
         completedBracketIdentities.add(key);

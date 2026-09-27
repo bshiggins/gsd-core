@@ -275,6 +275,43 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     }
   });
 
+  test('init manager does not complete an unpadded current bracket heading from its checked canonical row', () => {
+    const dir = project('adr-612-bracket-manager-unpadded-current-heading-');
+    writeBracketFixture(dir);
+    fs.writeFileSync(
+      planning(dir, 'ROADMAP.md'),
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 - Current',
+        '',
+        '- [x] [CK.02] 01: Foundation',
+        '- [ ] [CK.02] 02: Follow-up',
+        '',
+        '### [CK.02] 1: Foundation',
+        '',
+        '**Goal:** Current work remains incomplete',
+        '',
+        '### [CK.02] 02: Follow-up',
+        '',
+        '**Goal:** Must wait for foundation',
+        '**Depends on:** [CK.02] 01',
+        '',
+      ].join('\n'),
+    );
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-01-foundation'), { recursive: true });
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-02-follow-up'), { recursive: true });
+
+    const output = run(['init', 'manager'], dir);
+    const foundation = output.phases.find((row) => row.number === '1');
+    const followUp = output.phases.find((row) => row.number === '02');
+
+    assert.ok(foundation, 'manager must report the unpadded current foundation heading');
+    assert.equal(foundation.phase_complete, false, 'the unchecked disk state must remain incomplete');
+    assert.ok(followUp, 'manager must report the dependent follow-up heading');
+    assert.equal(followUp.deps_satisfied, false, 'the checked checklist row must not satisfy its dependency');
+  });
+
   test('init manager waits for every phase in a qualified dependency list', () => {
     const dir = project('adr-612-bracket-manager-qualified-list-');
     writeBracketFixture(dir);
