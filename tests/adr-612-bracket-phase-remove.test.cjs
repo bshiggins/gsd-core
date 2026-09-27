@@ -1617,6 +1617,50 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(snapshotTree(planning()), before);
   });
 
+  test('refuses removal when the active reader resolves a legacy-spelled child directory', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current',
+        '',
+        '- [ ] [CK.02] 02: Core',
+        '- [ ] [CK.02] 03: Next',
+        '- [ ] [CK.02] 03.01: Next Sub',
+        '',
+        '### [CK.02] 02: Core',
+        '**Goal:** must remain with its child',
+        '',
+        '### [CK.02] 03: Next',
+        '**Goal:** must not renumber onto the legacy child',
+        '',
+        '### [CK.02] 03.01: Next Sub',
+        '**Goal:** remain in place',
+        '',
+      ],
+      [
+        ['CK.02-02-core', []],
+        ['CK-02.1-child', []],
+        ['CK.02-03-next', []],
+        ['CK.02-03.01-sub', []],
+      ],
+    );
+    const before = snapshotTree(planning());
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+
+    assert.equal(result.success, false, result.output);
+    assert.match(result.error, /still has sub-phase/i);
+    assert.match(result.error, /\[CK\.02\] 02\.01/);
+    assert.deepEqual(snapshotTree(planning()), before);
+    assert.deepEqual(fs.readdirSync(planning('phases')).sort(), [
+      'CK-02.1-child',
+      'CK.02-02-core',
+      'CK.02-03-next',
+      'CK.02-03.01-sub',
+    ]);
+  });
+
   // #4304 round 17 (W2): the active raw milestone range can contain a shipped
   // details archive with the same folded bracket code. The removal rewrite
   // already excludes those reader-classified historical lines, but the

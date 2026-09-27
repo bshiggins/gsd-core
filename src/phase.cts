@@ -3395,6 +3395,22 @@ function bracketPhaseOwnSubphases(
   for (const { id } of bracketIdsInContext(phasesDir, context)) {
     record(Number(id.phase), id.subphase === undefined ? undefined : Number(id.subphase));
   }
+  // #4304 re-review Major 3: bracketIdsInContext skips names outside the
+  // canonical bracket grammar, but the reader also resolves migration-window
+  // legacy children such as `CK-02.1-child`, and the allocator already
+  // reserves them (readerResolvableBracketDirectoryPhaseNumber). Inventory
+  // that same universe the same way: take each directory's own key and keep
+  // a sub-phase of the target only when the active bracket reader resolves
+  // that directory for that key. `record` dedupes canonical children.
+  for (const dir of readSubdirectories(phasesDir, true)) {
+    const [phasePart, subphasePart, ...rest] = phaseKeyFromDir(dir, 'bracket').split('.');
+    if (rest.length > 0 || subphasePart === undefined) continue;
+    if (!/^\d+$/.test(phasePart) || !/^\d+$/.test(subphasePart)) continue;
+    if (Number(phasePart) !== targetInt) continue;
+    const key = `${phasePart}.${subphasePart}`;
+    if (!matchPhaseDirs([dir], key, 'bracket', context).matches.includes(dir)) continue;
+    record(targetInt, Number(subphasePart));
+  }
   const roadmapLines = splitRoadmapLineRecords(roadmapContent);
   const fencedLineNumbers = fencedRoadmapLineNumbers(roadmapContent);
   const historicalLineStarts = archivedOrClosedMilestoneLineStarts(roadmapContent);
