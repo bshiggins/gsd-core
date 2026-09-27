@@ -3456,14 +3456,24 @@ describe('phase insert command', () => {
   // — matching the widening the design doc / test matrix call for on this
   // pair, unlike the "counter" sites (collectSiblingWorktreePhaseNums,
   // cmdPhaseAdd/-Batch) which deliberately stay non-widened.
+  //
+  // #4304 (ADR-612 PR-4): bracket insert now emits the canonical bracket
+  // identity and refuses without a resolvable active milestone, so the
+  // fixture carries a milestone heading and STATE.md milestone, and the
+  // expectations take the bracket spelling (`01.01`). The #5007 point is
+  // asserted unchanged: the bracket-tagged target and the next bracket-tagged
+  // heading are both recognized, so the entry lands directly after the target.
   test('#5007: finds and inserts after a bracket-tagged target heading under the bracket convention', () => {
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'config.json'),
       JSON.stringify({ phase_id_convention: 'bracket', project_code: 'GSD' }),
     );
+    fs.writeFileSync(path.join(tmpDir, '.planning', 'STATE.md'), '---\nmilestone: v1.0\n---\n');
     fs.writeFileSync(
       path.join(tmpDir, '.planning', 'ROADMAP.md'),
       `# Roadmap
+
+## [GSD.01] v1.0 Foundation
 
 ### [GSD.01] Phase 1: Foundation
 **Goal:** Setup
@@ -3478,12 +3488,16 @@ describe('phase insert command', () => {
     assert.ok(result.success, `Command failed: ${result.error}`);
 
     const output = JSON.parse(result.output);
-    assert.strictEqual(output.phase_number, '01.1', 'should be 01.1');
+    assert.strictEqual(output.phase_number, '01.01', 'should be 01.01');
 
     const roadmap = fs.readFileSync(path.join(tmpDir, '.planning', 'ROADMAP.md'), 'utf-8');
     assert.ok(
-      roadmap.includes('Phase 01.1: Fix Critical Bug (INSERTED)'),
+      roadmap.includes('### [GSD.01] 01.01: Fix Critical Bug (INSERTED)'),
       'roadmap should include inserted phase',
+    );
+    assert.ok(
+      roadmap.indexOf('[GSD.01] Phase 1') < roadmap.indexOf('[GSD.01] 01.01'),
+      'inserted phase must follow the bracket-tagged target header',
     );
     // The neighboring next-phase-boundary regex (a few lines below
     // headerPattern, NOT one of the 11 originally-marked sites but the same
@@ -3491,7 +3505,7 @@ describe('phase insert command', () => {
     // land directly after the target section — not fall through to
     // end-of-file because `[GSD.01] Phase 2:` was unrecognized as a boundary.
     assert.ok(
-      roadmap.indexOf('Phase 01.1') < roadmap.indexOf('[GSD.01] Phase 2'),
+      roadmap.indexOf('[GSD.01] 01.01') < roadmap.indexOf('[GSD.01] Phase 2'),
       'inserted phase must land between the bracket-tagged target header and the next phase, not at the end of the document',
     );
   });
