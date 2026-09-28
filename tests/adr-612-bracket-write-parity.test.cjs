@@ -1,6 +1,6 @@
 'use strict';
 
-// #4304 (ADR-612 PR-4 review fix, Major finding) — parity test between the
+// #4304: parity test between the
 // phase/state write paths' bracket-numeric canonicalization and the Phase Id
 // Display Module's `renderBracketPhaseDisplay`/`renderBracketMilestoneDisplay`,
 // which now own that grammar alone (`milestoneToken`/`phaseToken`,
@@ -122,7 +122,7 @@ const MILESTONE_SPELLINGS = ['v2', '2', 'v02', '2.0', 'v2.0', 'v10'];
 const PHASE_SPELLINGS = ['3', '03', '3.1', '03.01', '12'];
 const ADAPTER_REJECTED = ['v2.0.1', 'abc', '3.1.1'];
 
-describe('#4304 review fix (Major): write-path bracket canonicalization matches the adapter', () => {
+describe('#4304: write-path bracket canonicalization matches the adapter', () => {
   for (const milestone of MILESTONE_SPELLINGS) {
     test(`phase add heading and directory carry the adapter's token for milestone "${milestone}"`, () => {
       const dir = project();

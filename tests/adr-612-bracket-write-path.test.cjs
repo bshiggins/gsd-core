@@ -486,7 +486,7 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.equal(found.directory, '.planning/phases/CK-01.1-hotfix');
   });
 
-  // #4304 round 17 (W1): next-decimal's base lookup was bracket-aware, but
+  // #4304: next-decimal's base lookup was bracket-aware, but
   // its child inventory still used the legacy directory/heading patterns.
   // That split answer proposed the already-occupied 02.01 slot as "02.1".
   test('phase next-decimal inventories canonical bracket subphases from directories and headings', () => {
@@ -755,7 +755,7 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.equal(out.directory, '.planning/phases/CK.02-01-first-current');
   });
 
-  // #4304 round 12 (W1): readSubdirectories intentionally ignores symlinks,
+  // #4304: readSubdirectories intentionally ignores symlinks,
   // so a planted link at the next allocated bracket directory used to be
   // invisible to allocation and then followed by the .gitkeep write.
   test('phase add refuses a symlink planted at the allocated bracket directory without writing through it', () => {
@@ -810,7 +810,7 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
   });
 
   test('a bracket ROADMAP with only bullet-style phase rows refuses phase insert instead of falling back to legacy bullet insertion', () => {
-    // #4304 review fix (Minor 3): bracket identities live in headings only
+    // #4304: bracket identities live in headings only
     // (cmdPhaseInsert forces isBulletStyle=false whenever bracketContext is
     // set), so a bracket ROADMAP whose only phase row is bullet-style must
     // take the checklist-only refusal path, not the legacy bullet-insertion
@@ -840,7 +840,7 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.deepEqual(fs.readdirSync(planning(dir, 'phases')), []);
   });
 
-  // #4304 round-5 Blocker 3: the pre-flight headingMatch check ran against
+  // #4304: the pre-flight headingMatch check ran against
   // extractCurrentMilestone's content, which merges the primary section with
   // a later "(Phase Details)" section sharing the same milestone identity —
   // so it passed even when the target's own detail heading lives ONLY in
@@ -848,7 +848,7 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
   // sibling milestone. The actual header search that followed was scoped to
   // bracketSectionRanges.primary alone, so it failed AFTER platformEnsureDir
   // had already created the new phase's directory: a partial write. The
-  // header search must check both ranges the round-3 remove fix already
+  // header search must check both ranges the removal logic already
   // discovers (primary and Phase Details), and every validation — locating
   // the header and computing the ROADMAP edit — must happen before any
   // directory is created.
@@ -919,14 +919,14 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     );
   });
 
-  // #4304 round 6 (B1): currentMilestoneRawRanges' details-range end
+  // #4304: currentMilestoneRawRanges' details-range end
   // (roadmap-parser.cts:2298) called computeMilestoneSectionEnd WITHOUT the
   // bracketBoundary the SAME function already applies to the primary range
   // (bracketAwareMilestoneSection, consumed a few lines above) — so on a
   // version-less bracket milestone heading (no v\d+.\d+ / emoji marker) the
   // active details window ran through the NEXT sibling milestone's OWN
   // "(Phase Details)" section instead of stopping at it. Insert's header
-  // search (which walks this SAME details range, discovered by round 5's
+  // search (which walks this SAME details range, found in both milestone sections
   // B3 fix) then planted the new section inside the wrong milestone.
   test('phase insert locates its Phase Details heading correctly when milestone headings carry no version token', () => {
     const dir = project('adr-612-bracket-insert-versionless-details-');
@@ -1003,7 +1003,7 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.equal(ck02Details.includes('### [CK.02] 03.01: Urgent fix (INSERTED)'), true);
   });
 
-  // #4304 round 16 (B1): the raw active ranges may still contain a shipped
+  // #4304: the raw active ranges may still contain a shipped
   // <details> archive. Searching those bytes for the first matching NUMBER
   // selected [CK.01] 01 before the live [CK.02] 01 and wrote the new CK.02
   // subphase inside history, where extractCurrentMilestone then hid it.
@@ -1064,7 +1064,7 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.equal(current.includes('### [CK.02] 01.01: Hotfix (INSERTED)'), true);
   });
 
-  // #4304 round 17 (B1): round 16 made target selection fence-aware, but the
+  // #4304: target selection is fence-aware, but the
   // subsequent next-heading boundary still searched raw bytes. A phase-shaped
   // heading inside a fenced example therefore became the splice boundary and
   // placed the new live phase inside documentation, where roadmap readers
@@ -1198,7 +1198,7 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.equal(roadmap.includes('### [CK.02] 03: Beta'), true);
   });
 
-  // #4304 round-5 Blocker 4: the per-description loop computed a phase
+  // #4304: the per-description loop computed a phase
   // number, called toDir (which THROWS "slug sanitizes to empty" for a
   // description that transliterates to nothing), and immediately created
   // that item's directory — all inside one loop iteration. An item further
@@ -1315,7 +1315,7 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
   });
 
-  // #4304 Blocker 2: the bracket branch validated the parent heading against
+  // #4304: the bracket branch validated the parent heading against
   // extractCurrentMilestone (correctly scoped to the active milestone) but
   // then located the insertion point with headerPattern against the WHOLE
   // rawContent. rawContent.match found CK.01's OWN "01:" heading first (an
@@ -1452,7 +1452,7 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     );
   });
 
-  // #4304 round-5 W4 (fix): `phase insert 1.1` normalized its bare argument
+  // #4304: `phase insert 1.1` normalized its bare argument
   // through the legacy normalizePhaseName, which pads only the FIRST
   // segment ("1.1" -> "01.1") and never matches the bracket-canonical
   // "01.01" heading, so it errored "Phase 1.1 not found" even though
@@ -1507,8 +1507,8 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.equal(fs.existsSync(planning(dir, 'phases', 'CK.02-01.02-second-sub')), true);
   });
 
-  // #4304 round 6 (I1): `phase insert` only ever canonicalized a BARE
-  // argument through phaseToken (round 5's W4) — a qualified id
+  // #4304: `phase insert` only ever canonicalized a BARE
+  // argument through phaseToken — a qualified id
   // ("CK.02-01") or a display id ("[CK.02] 01") failed phaseToken (which
   // only ever accepts digits/dots) and refused with "cannot be resolved",
   // even though `phase remove` already accepts both forms. Insert now
@@ -1541,9 +1541,9 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     );
   });
 
-  // #4304 round 6 (I1): insert's directory allocation called `toDir`
+  // #4304: insert's directory allocation called `toDir`
   // directly, bypassing the bracketDirNameOrRefuse wrapper `phase add`/
-  // `phase add-batch` already route through (round 5, B4) — an
+  // `phase add-batch` already route through the same wrapper — an
   // empty-slug or all-digit description crashed with an uncaught
   // "toDir: slug sanitizes to empty" throw instead of the wrapper's clean
   // "Cannot create a phase directory for ..." refusal. Both controls use
@@ -1652,7 +1652,7 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.equal(JSON.parse(runGsdTools(['state', 'json'], dir).output).milestone, 'v2.0');
   });
 
-  // #4304 round-3 Blocker 2: phaseEntryInsertOffset called currentMilestoneRawRanges
+  // #4304: phaseEntryInsertOffset called currentMilestoneRawRanges
   // without the resolved convention, so on version-less bracket headings
   // (`## [CK.02] Current` followed by `## [CK.03] Future`) it got null and
   // fell back to whole-document insertion (past CK.03, at EOF) instead of

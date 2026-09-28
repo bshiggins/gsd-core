@@ -6,7 +6,7 @@
  *
  * Module: gsd-core/bin/lib/phase-id.cjs (src/phase-id.cts)
  *
- * Why this file exists (#4773 review round 28, trek-e Blocker): the bracket
+ * Why this file exists: the bracket
  * identifier is a bijective-ish parse/serialize contract, which is exactly the
  * class `RULESET.TESTS.property-based-testing` names as ABSOLUTE (CONTEXT.md
  * predicate 1849). The sibling `adr-612-bracket-{grammar,write-path,
@@ -341,7 +341,7 @@ describe('bracket phase id: toDir slug guards', () => {
   });
 });
 
-// ─── Capture-group indexing (#4773 review round 29, Minor 2) ─────────────────
+// ─── Capture-group indexing ─────────────────
 //
 // `tokenizePhaseDependencyReferences` composes its bracket-display regex as
 // `phaseHeadingPrefixSrcFor(LABEL_ONLY, 'bracket', true)` + an appended

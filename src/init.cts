@@ -3126,7 +3126,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
       const phaseNumber = phase['number'] as string;
       const bracketId = bracketIdsByPhaseNumber.get(phaseNumber);
       const canonicalPhaseToken = phaseToken(phaseNumber);
-      // #4304 re-review Major 4: key each heading on the reader's canonical
+      // #4304: key each heading on the reader's canonical
       // token, not on a strict parse of its rendered display. An accepted
       // unpadded heading (`### [CK.02] 1:`) gets no display_id, because
       // parsePhaseId rejects `CK.02-1`, so it had no identity at all and a

@@ -321,7 +321,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(roadmap.includes('### [CK.02] 02: Two'), true);
   });
 
-  // #4304 Blocker 1: a qualified bracket id (`CK.02-02`) used to resolve and
+  // #4304: a qualified bracket id (`CK.02-02`) used to resolve and
   // delete its directory, then crash on `parseInt(normalized, 10)` (NaN)
   // inside renameBracketPhases/updateRoadmapAfterBracketPhaseRemoval, leaving
   // ROADMAP and STATE unsynced with the already-deleted directory. The fix
@@ -402,7 +402,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(snapshotTree(planning()), before);
   });
 
-  // #4304 round-3 Blocker 1: `normalizePhaseName` (the legacy grammar) pads
+  // #4304: `normalizePhaseName` (the legacy grammar) pads
   // only a decimal query's leading integer, not its subphase segment — "1.1"
   // normalizes to "01.1", not the bracket directory's own "01.01" — so the
   // bare-argument path never matched CK.02-01.01-first, yet still deleted the
@@ -463,7 +463,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     cleanup(dirPadded);
   });
 
-  // #4304 Blocker 3: the artifact-token rewrite (`03-01-PLAN.md` -> `02-01-PLAN.md`)
+  // #4304: the artifact-token rewrite (`03-01-PLAN.md` -> `02-01-PLAN.md`)
   // ran as a global replace with no milestone qualifier, so an EARLIER
   // milestone's own same-numbered artifact reference was corrupted even
   // though that milestone's directory/files were never touched. The display-id
@@ -599,8 +599,8 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(roadmapAfter.includes('### [CK.02] 03: Three'), false);
   });
 
-  // #4304 round-3 Blocker 3: round 2 confined BOTH the display-id replace and
-  // the bare artifact-token replace to `ranges.primary`, but a fully
+  // #4304: both the display-id replacement and bare artifact-token rewrite
+  // were scoped to `ranges.primary`, but a fully
   // qualified reference (a global Progress table AFTER a later sibling
   // milestone, e.g. CK.03) carries its own milestone and cannot collide —
   // scoping it too left it stale after a renumber.
@@ -1038,7 +1038,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, [proseLine]);
   });
 
-  // #4304 round-5 Blocker 1: classifyBracketOwnedLine's table-row guard and
+  // #4304: classifyBracketOwnedLine's table-row guard and
   // bold-cell strip were regex LITERALS written with doubled backslashes
   // (`/^[ \\t]*\\|/`, `/^\\*\\*(.*)\\*\\*$/`), so the guard matched every
   // line (an empty alternation branch) and any prose line beginning with the
@@ -1116,7 +1116,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal((roadmap.match(/^\| \*\*\[CK\.02\] 02\*\* \|/gm) ?? []).length, 1);
   });
 
-  // #4304 round-5 Blocker 2: renameBracketPhases renames a later phase's
+  // #4304: renameBracketPhases renames a later phase's
   // sub-phase directories and artifact files on disk (03.01 -> 02.01), but
   // updateRoadmapAfterBracketPhaseRemoval's own token collection tracked
   // only bare integer phase numbers, so a decimal identity like
@@ -1194,7 +1194,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, []);
   });
 
-  // #4304 round-5 Blocker 5: references_left_untouched re-searched the
+  // #4304: references_left_untouched re-searched the
   // PERSISTED (already-rewritten) content for pre-renumber ids, so whenever
   // two or more phases shift, a later phase's NEW value collides textually
   // with an earlier phase's OLD value and every correctly-rewritten line
@@ -1256,7 +1256,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, []);
   });
 
-  // #4304 round-5 Blocker 5: dangling references to the REMOVED identity
+  // #4304: dangling references to the REMOVED identity
   // (not renumbered — deleted) were missed because the check only
   // recognized the legacy "Phase NN" spelling, not the display or dash
   // qualified forms.
@@ -1303,7 +1303,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched.sort((a, b) => a - b), [dependsLine, blockedLine].sort((a, b) => a - b));
   });
 
-  // #4304 round-5 Blocker 5: a stale pre-renumber reference followed by
+  // #4304: a stale pre-renumber reference followed by
   // sentence-final punctuation or a directory-name suffix was missed
   // because the (?![\d.]) lookahead rejected any following '.', and a
   // dash-form reference embedded in a directory path (a hyphen following
@@ -1357,7 +1357,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched.sort((a, b) => a - b), [blockedLine, dirNameLine].sort((a, b) => a - b));
   });
 
-  // #4304 round-5 W2 (fix): deleteSection removes the FIRST matching
+  // #4304: deleteSection removes the FIRST matching
   // heading in the whole document, not the one inside the active milestone
   // — a shipped v2.0 milestone and an active v2.1 milestone sharing the
   // same bracket code (milestoneToken folds both to [CK.02]) let a shipped
@@ -1431,7 +1431,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal((activeSection.match(/^### \[CK\.02\] 02:/gm) ?? []).length, 1);
   });
 
-  // #4304 round 6 (B1): currentMilestoneRawRanges' details-range END omitted
+  // #4304: currentMilestoneRawRanges' details-range END omitted
   // the bracketBoundary the SAME function applies to the primary range end
   // (roadmap-parser.cts:2298), so on version-less bracket milestone headings
   // the active details window ran through the NEXT sibling milestone's own
@@ -1492,9 +1492,9 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
 
     // The sibling milestone's own Phase Details section is untouched — in
     // particular its own bare artifact token still names the file that
-    // actually exists on disk, not '02-01-PLAN.md' (round 5's own W2 fix
-    // already keeps the HEADING out of the leaked window; this pins the
-    // bare-artifact-token rewrite the leaked window also drove).
+    // actually exists on disk, not '02-01-PLAN.md'. The heading stays out of
+    // the leaked window while this pins the bare-artifact-token rewrite that
+    // the leaked window also drove.
     const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
     const ck03SectionAfter = roadmap.slice(roadmap.indexOf('## [CK.03] Future (Phase Details)'));
     assert.equal(
@@ -1521,7 +1521,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(fs.existsSync(planning('phases', 'CK.02-02-three', '02-01-PLAN.md')), true);
   });
 
-  // #4304 round 6 (W1): progress/table rows were deleted roadmap-wide with
+  // #4304: progress/table rows were deleted roadmap-wide with
   // no active-range check (src/phase.cts:3099-3104), so a shipped milestone
   // sharing the bracket code lost its own completed-phase row, and any
   // non-Progress table (a Requirements Traceability table) whose first cell
@@ -1612,7 +1612,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(roadmap.includes('| [CK.01] 02 | REQ-01 | Done |'), true);
   });
 
-  // #4304 round 6 (W2): removing an integer phase that has its own
+  // #4304: removing an integer phase that has its own
   // sub-phases neither removed nor refused them (computeBracketRenumberMapping's
   // filter only ever selects phase > removedInt, never phase === removedInt) —
   // the sub-phase directories and ROADMAP rows stayed while the NEXT phase's
@@ -1727,7 +1727,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     ]);
   });
 
-  // #4304 round 17 (W2): the active raw milestone range can contain a shipped
+  // #4304: the active raw milestone range can contain a shipped
   // details archive with the same folded bracket code. The removal rewrite
   // already excludes those reader-classified historical lines, but the
   // parent-child guard did not, so an archived 02.01 blocked removal of the
@@ -1791,7 +1791,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(fs.readdirSync(planning('phases')).sort(), ['CK.02-01-one', 'CK.02-02-three']);
   });
 
-  // #4304 round 18 (B1): selecting the live heading is not enough. The
+  // #4304: selecting the live heading is not enough. The
   // section deletion itself must stop at the active container boundary when
   // the target is the final heading inside an open details block.
   test('keeps an active details close and following milestone notes byte-identical when removing its last phase', () => {
@@ -1833,7 +1833,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(JSON.parse(result.output).references_left_untouched, []);
   });
 
-  // #4304 round 18 (B1): a historical details archive can begin immediately
+  // #4304: a historical details archive can begin immediately
   // after the target and contain only deeper headings. Heading depth alone
   // must not let the target deletion consume the archive through EOF.
   test('keeps an immediately following shipped details archive with deeper headings byte-identical', () => {
@@ -1873,7 +1873,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(JSON.parse(result.output).references_left_untouched, []);
   });
 
-  // #4304 round 19 (B1): a details tag inside a fenced HTML example is
+  // #4304: a details tag inside a fenced HTML example is
   // documentation, not a container boundary. Treating it as live markup cut
   // deletion off inside the target section, leaving the closing fence behind;
   // that unterminated fence then hid the live sibling from renumbering.
@@ -1929,7 +1929,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, []);
   });
 
-  // #4304 round 19 inventory: the shared historical classifier also tracked
+  // #4304: the shared historical classifier also tracked
   // details tags on raw lines. A fenced fake close inside a shipped archive
   // must not end protection before the archive's real closing tag.
   test('ignores fenced details tags while protecting shipped history', () => {
@@ -1982,7 +1982,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, []);
   });
 
-  // #4304 round 20 (B1): a shipped archive can contain nested release-note
+  // #4304: a shipped archive can contain nested release-note
   // details before its phase inventory. Closing the nested block must not end
   // the outer archive's historical ownership or let removal select its phase.
   test('tracks nested details depth while protecting a shipped archive', () => {
@@ -2070,7 +2070,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(roadmap.includes('**Goal:** keep the sibling body'), true);
   });
 
-  // #4304 round 20 (B2): the reader inventories bracket phase headings at
+  // #4304: the reader inventories bracket phase headings at
   // levels 2-4. A deeper next phase is still a sibling identity, not body
   // content owned by the phase being removed.
   test('stops bracket deletion at the next distinct phase heading at any depth', () => {
@@ -2145,7 +2145,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(roadmap.includes('**Goal:** keep the sibling body'), true);
   });
 
-  // #4304 round 11 (W1): the sub-phase safety guard must share the read
+  // #4304: the sub-phase safety guard must share the read
   // side's CommonMark fence handling. A heading-shaped example inside a
   // fence is documentation, not a child phase, and cannot block removal.
   test('does not treat a fenced example sub-phase as a real child', () => {
@@ -2231,7 +2231,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(roadmap.includes('### [CK.02] 02.01: Two Sub B'), true);
   });
 
-  // #4304 round 6 (W3): the read grammar admits BOTH `[CK.02] 02:` and the
+  // #4304: the read grammar admits BOTH `[CK.02] 02:` and the
   // labeled `[CK.02] Phase 02:` spelling (pinned at
   // tests/adr-612-bracket-grammar.test.cjs:644), and this PR's own owned-
   // line classifier (BRACKET_HEADING_LINE_RE et al) already admits it too —
@@ -2306,7 +2306,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, []);
   });
 
-  // #4304 round 6 (B5 follow-up): references_left_untouched exists so the
+  // #4304: references_left_untouched exists so the
   // report never omits a dangling reference to the removed identity.
   // bracketQualifiedMentionedInLine only ever recognized the label-less
   // display form ("[CK.02] 02"), which is not a substring of a labeled
@@ -2315,7 +2315,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
   // just-removed phase, spelled in the labeled bracket form) survived the
   // removal byte-identical but was never flagged. Fixed by teaching
   // bracketQualifiedMentionedInLine the SAME optional "Phase " label
-  // replaceQualifiedBracketReference already rewrites (W3), rather than a
+  // replaceQualifiedBracketReference already rewrites it, rather than a
   // second, independent label grammar.
   test('reports a dangling labeled mention of the removed identity by its persisted line number', () => {
     replaceSeed(
@@ -2359,13 +2359,13 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, [dependsLine]);
   });
 
-  // #4304 round 7 (B1): the read grammar (phase-id.cts's bracketAlt, compiled
+  // #4304: the read grammar (phase-id.cts's bracketAlt, compiled
   // with `i` at roadmap-parser.cts's BRACKET_PHASE_ENTRY_HEADING_RE) and this
   // PR's own `phase insert`/`phase add` (canonicalizeBracketPhaseArgument)
   // already accept a lowercase project code ("[ck.02] 02:"), a lowercase or
   // uppercase "Phase" label ("[CK.02] phase 02:" / "[CK.02] PHASE 02:"),
   // extra internal spacing, and no space at all between the bracket and the
-  // number ("[CK.02]02:") as real phases. Round 6's write-side regexes
+  // number ("[CK.02]02:") as real phases. The write-side regexes
   // (BRACKET_HEADING_LINE_RE et al, replaceQualifiedBracketReference,
   // bracketQualifiedMentionedInLine) were hand-composed case-sensitively
   // with `[ \t]+` instead of being derived from that same grammar, so
@@ -2503,7 +2503,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(roadmap.includes('- [ ] **[CK.02] 03:Next**'), false);
   });
 
-  // #4304 round 7 (W1): bracketMilestoneOwnTableEnd anchored ONLY at the
+  // #4304: bracketMilestoneOwnTableEnd anchored ONLY at the
   // milestone heading itself and stopped at the very NEXT heading of level
   // <= 2, regardless of what it was — so a "## Notes" aside sitting between
   // the phase headings and the milestone's own "### Progress" table closed
@@ -2559,9 +2559,9 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, []);
   });
 
-  // #4304 round 7 (W1): each milestone owning its OWN "## Progress" section
+  // #4304: each milestone owning its OWN "## Progress" section
   // — a shipped milestone's, sorting first in the document, and the active
-  // milestone's own, sorting second — is a shape the round-6 fix regressed
+  // milestone's own, sorting second — is a shape the deletion logic mishandled
   // on two ways at once: the document-first "## Progress" scope claimed the
   // SHIPPED section (never the active one it was meant to scope this
   // removal to), while bracketMilestoneOwnTableEnd closed the active
@@ -2640,7 +2640,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, []);
   });
 
-  // #4304 round 7 (W1): the same-code two-versions shape (a shipped v2.0 and
+  // #4304: the same-code two-versions shape (a shipped v2.0 and
   // an active v2.1 folding to the SAME `[CK.02]` bracket, each with its own
   // "## Progress") is the sharpest form of the bug: the document-first
   // "## Progress" scope silently deleted the SHIPPED milestone's own Complete
@@ -2711,7 +2711,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
 
     // The shipped v2.0 section (same bracket code) keeps BOTH Complete
-    // rows — round 6 silently deleted its phase-02 row instead of the
+    // rows — the previous deletion logic silently deleted its phase-02 row instead of the
     // active version's.
     assert.equal(roadmap.includes('| [CK.02] 01 | 1/1 | Complete |'), true);
     assert.equal(roadmap.includes('| [CK.02] 02 | 1/1 | Complete |'), true);
@@ -2723,7 +2723,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, []);
   });
 
-  // #4304 round 8 (B1): round 7 folded the CODE (foldBracketId) before
+  // #4304: folded the CODE (foldBracketId) before
   // parsePhaseId but passed the captured NUMBER through verbatim, so a
   // non-canonical ROADMAP spelling ("[CK.02] 2:", not the canonical
   // "[CK.02] 02:") threw parsePhaseId's own canonicality check and
@@ -2804,7 +2804,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, [dependsLine]);
   });
 
-  // #4304 round 8 (B1): an OVER-padded spelling ("[CK.02] 002:") has the
+  // #4304: an OVER-padded spelling ("[CK.02] 002:") has the
   // same defect — and confirms the rewrite always emits the canonical
   // 2-digit token on renumber, never preserving a 3-digit source spelling.
   test('removes and renumbers an over-padded phase number to the canonical width', () => {
@@ -2847,7 +2847,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, []);
   });
 
-  // #4304 round 8 (B1): the round-6 W2 sub-phase refusal scans
+  // #4304: the sub-phase refusal scans
   // classifyBracketOwnedLine's output for `phase === targetInt` rows — with
   // the number-canonicalization gap, a ROADMAP-only sub-phase spelled
   // unpadded ("[CK.02] 02.1:") was invisible to that scan, so `remove 02`
@@ -2894,7 +2894,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(snapshotTree(planning()), before);
   });
 
-  // #4304 round 8 (W1): round 7's ownership gate treated the document-first
+  // #4304: the ownership gate treated the document-first
   // "## Progress" as "owned elsewhere" whenever the ACTIVE milestone had its
   // own separate "Progress" heading, regardless of where the document-first
   // one actually sat — so a genuinely global table BEFORE any milestone
@@ -2967,9 +2967,9 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, []);
   });
 
-  // #4304 round 8 (W1): the OTHER shape the same over-claim broke — a
+  // #4304: the OTHER shape the same over-claim broke — a
   // genuinely global "## Progress" table sitting AFTER a LATER milestone's
-  // own heading, with nothing recognized following it. Round 7 treated it
+  // own heading, with nothing recognized following it. The ownership check treated it
   // as owned by that later milestone (or, before this fix, by whichever
   // milestone the active one's own separate Progress heading pushed it
   // toward), leaving the removed identity's row stale.
@@ -3035,9 +3035,9 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, []);
   });
 
-  // #4304 round 9 (B1, regression from round 8/de31ccac0): round 8's own
+  // #4304: the positional rewrite
   // positional rewrite of bracketProgressSectionOwnedByOtherMilestone dropped
-  // round 7's precondition that the ACTIVE milestone must own a Progress
+  // had dropped the precondition that the ACTIVE milestone must own a Progress
   // heading before a document-first "## Progress" can be treated as a
   // DIFFERENT milestone's — so a shared "## Progress" table (the ACTIVE
   // milestone has no dedicated Progress heading of its own) was declared
@@ -3111,7 +3111,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, []);
   });
 
-  // #4304 round 9 (W1, regression from round 8): `bracketRecognizedMilestoneMarkers`
+  // #4304: `bracketRecognizedMilestoneMarkers`
   // enumerated ONLY version-token milestone headings, narrower than the
   // window locator's OWN recognition grammar (`isBracketMilestoneBoundary` /
   // `bracketFallbackHeadingMatches`) — so a fully version-less, same-code
@@ -3190,7 +3190,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, []);
   });
 
-  // #4304 round 9 (W2, pre-existing since round 5): a non-closed heading
+  // #4304: a non-closed heading
   // carrying the ACTIVE version token sits BEFORE the real milestone
   // heading ("## Goals for v2.0"). The read side selects THAT heading as
   // the active one (`selectMilestoneHeading` picks the first non-closed
@@ -3250,7 +3250,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(snapshotTree(planning()), before);
   });
 
-  // #4304 round 9 (W2, round-4's own still-open W1 class): no milestone
+  // #4304: no milestone
   // heading exists in ROADMAP.md at all. The bracket-fallback selector
   // (`bracketFallbackHeadingMatches`) has no phase-tail exclusion, so it
   // picks the FIRST bracket phase heading ("### [CK.02] 01: One") as if it
@@ -3303,7 +3303,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(snapshotTree(planning()), before);
   });
 
-  // #4304 round 8 (W2): `isProgressHeading` required an EXACT "progress"
+  // #4304: `isProgressHeading` required an EXACT "progress"
   // match while `bracketProgressSectionRange` already matched "## Progress"
   // with any suffix (`\b`), so a shipped milestone's "## Progress (v2.0)"
   // and the active milestone's own "## Progress (v2.1)" (same bracket code,
@@ -3381,9 +3381,9 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, []);
   });
 
-  // #4304 round 8 (W2): a single-milestone shape whose OWN Progress heading
+  // #4304: a single-milestone shape whose OWN Progress heading
   // carries a version suffix ("### Progress (v2.0)"), reached only through
-  // a "## Notes" aside — round 7's exact-match predicate left the stale
+  // a "## Notes" aside — the exact-match predicate left the stale
   // target row behind (flagged, not deleted) because the suffixed heading
   // never registered as the milestone's own.
   test('deletes the target row from a suffixed own Progress heading reached through a Notes aside', () => {
@@ -3584,7 +3584,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, []);
   });
 
-  // #4304 round 11 (B1): shipped history can remain open rather than wrapped
+  // #4304: shipped history can remain open rather than wrapped
   // in <details>. A closed milestone heading owns history until the next
   // heading at the same or shallower level; qualified references inside that
   // section must remain byte-identical while the active point release with
@@ -3656,7 +3656,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, []);
   });
 
-  // #4304 round 12 (B1): the historical-section marker predicate recognizes
+  // #4304: the historical-section marker predicate recognizes
   // words such as FAILED and the check mark, but those words can also appear
   // in an ordinary phase title. A phase heading is never a milestone section
   // boundary, even when its title carries a closed-milestone marker.

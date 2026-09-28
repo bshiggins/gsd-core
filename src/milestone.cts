@@ -812,7 +812,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
   let totalTasks = 0;
   const accomplishments: string[] = [];
 
-  // #2761 (round-11 BLOCKER): resolved ONCE above, ambiently (no explicit `ws` —
+  // #2761: resolved ONCE above, ambiently (no explicit `ws` —
   // this function has none of its own and already resolves everything else
   // off `cwd` via planningPaths(cwd), matching the ambient-workstream
   // contract `resolvePhaseIdConvention`/`planningDir` share), and threaded

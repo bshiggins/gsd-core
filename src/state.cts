@@ -37,7 +37,7 @@ const {
 } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdDisplayMod = require('./phase-id-display.cjs');
-// #4304 review fix (Major): phaseDisplayFor below renders through this adapter
+// #4304: phaseDisplayFor below renders through this adapter
 // instead of re-deriving the bracket numeric grammar locally.
 const { renderBracketPhaseDisplay } = phaseIdDisplayMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports

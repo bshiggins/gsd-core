@@ -329,7 +329,7 @@ const PHASE_HEADING_BASELINE = Object.freeze({
  *
  * Pure: takes the resolved convention, never reads config.
  */
-// #4304 (B1): `bracketAlt`'s own alternation, factored out to a named
+// #4304: `bracketAlt`'s own alternation, factored out to a named
 // function so every write-side consumer that needs "this bracket, optionally
 // followed by the literal Phase label, then a digit" derives from the SAME
 // expression the read grammar compiles — never a hand-retyped `[ \t]+` /
@@ -349,7 +349,7 @@ function bracketAltIntroSrcFor(idSrc: string): string {
 }
 
 /**
- * #4304 (B1): the qualified-mention intro for ONE already-known
+ * #4304: the qualified-mention intro for ONE already-known
  * bracket identity — `[{PROJECT}.{MM}]` (both escaped literals, not a
  * class), optionally followed by the `Phase` label — built from
  * `bracketAltIntroSrcFor` so a rewriter or detector anchoring a specific
