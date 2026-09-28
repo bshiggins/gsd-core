@@ -753,7 +753,10 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
       assert.equal(result.success, false, result.output);
       if (legacyDirectory) assert.match(result.error, /CK-02-old-work/);
       if (legacyHeading) assert.match(result.error, /### Phase 2: Old work/);
-      assert.match(result.error, /roadmap upgrade --convention bracket/);
+      // The project is already on the bracket convention, where roadmap
+      // upgrade converts nothing, so the refusal names the conversion itself.
+      assert.match(result.error, /bracket spelling \[CK\.02\] 02/);
+      if (legacyDirectory) assert.match(result.error, /directory prefix "CK\.02-02-"/);
       assert.deepEqual(snapshotTree(planning()), before);
     });
   }

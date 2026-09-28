@@ -4747,10 +4747,16 @@ function cmdPhaseRemove(
         ...legacyOnly.directories.map((dir) => `directory ${JSON.stringify(dir)}`),
         ...legacyOnly.headings.map((heading) => `heading ${JSON.stringify(heading)}`),
       ].join('; ');
+      // roadmap upgrade converts nothing once config selects bracket (it
+      // refuses a partial migration and treats an all-bracket ROADMAP as
+      // done), so name the conversion itself.
+      const directoryPrefix = legacyOnly.directories.length > 0
+        ? ` (directory prefix ${JSON.stringify(bracketDirPrefix(targetId))})`
+        : '';
       error(
         `Cannot remove phase ${normalized} under the bracket convention: it resolves only to `
-        + `legacy-spelled artifacts (${evidence}). Run roadmap upgrade --convention bracket `
-        + 'before removing this phase.',
+        + `legacy-spelled artifacts (${evidence}). Convert them to the bracket spelling `
+        + `${renderPhaseId(targetId)}${directoryPrefix} before removing this phase.`,
       );
     }
   }
