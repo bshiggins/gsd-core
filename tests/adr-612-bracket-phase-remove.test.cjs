@@ -797,6 +797,69 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(roadmap.includes('**Goal:** preserve byte-for-byte'), true);
   });
 
+  // Removal renames only canonical bracket directories and rewrites only
+  // bracket-owned ROADMAP lines. A legacy spelling the reader resolves to a
+  // phase the removal deletes, renumbers, or renumbers onto would keep its old
+  // number: orphaned, or read as whichever phase lands on that number. Each
+  // shape below exited 0 with that mismatch before the refusal existed.
+  for (const { name, roadmap, dirs, target, expected } of [
+    {
+      name: 'an integer phase whose only directory is legacy-spelled',
+      roadmap: ['### [CK.02] 02: Core', '', '### [CK.02] 03: Next', '', '### [CK.02] 04: Four', ''],
+      dirs: [['CK.02-02-core', []], ['CK-03-next', ['03-01-PLAN.md']]],
+      target: '02',
+      expected: ['directory "CK-03-next" is [CK.02] 03', 'bracket prefix "CK.02-03-"'],
+    },
+    {
+      name: 'a legacy-spelled sub-phase directory under a renumbered parent',
+      roadmap: ['### [CK.02] 02: Core', '', '### [CK.02] 03: Next', '', '### [CK.02] 03.01: Child', ''],
+      dirs: [['CK.02-02-core', []], ['CK.02-03-next', []], ['CK-03.1-child', []]],
+      target: '02',
+      expected: ['directory "CK-03.1-child" is [CK.02] 03.01', 'bracket prefix "CK.02-03.01-"'],
+    },
+    {
+      name: 'a legacy-spelled sibling directory of the removed sub-phase',
+      roadmap: ['### [CK.02] 02: Core', '', '### [CK.02] 02.01: First', '', '### [CK.02] 02.02: Second', ''],
+      dirs: [['CK.02-02-core', []], ['CK.02-02.01-first', []], ['CK-02.2-second', []]],
+      target: '02.01',
+      expected: ['directory "CK-02.2-second" is [CK.02] 02.02', 'bracket prefix "CK.02-02.02-"'],
+    },
+    {
+      name: 'a legacy-spelled phase that a later bracket phase would renumber onto',
+      roadmap: [
+        '### [CK.02] 02: Core', '', '### [CK.02] 03: Three', '', '### Phase 4: Legacy', '', '### [CK.02] 05: Five', '',
+      ],
+      dirs: [['CK.02-02-core', []], ['CK.02-03-three', []], ['CK-04-legacy', []], ['CK.02-05-five', []]],
+      target: '02',
+      expected: ['directory "CK-04-legacy" is [CK.02] 04', 'heading "### Phase 4: Legacy" is [CK.02] 04'],
+    },
+    {
+      name: 'a legacy-spelled heading of a phase whose directory is canonical',
+      roadmap: ['### [CK.02] 02: Core', '', '### Phase 3: Next', ''],
+      dirs: [['CK.02-02-core', []], ['CK.02-03-next', []]],
+      target: '02',
+      expected: ['heading "### Phase 3: Next" is [CK.02] 03'],
+    },
+    {
+      name: 'a legacy-spelled directory of the removed phase itself',
+      roadmap: ['### [CK.02] 02: Core', '', '### [CK.02] 03: Next', ''],
+      dirs: [['CK-02-core', []]],
+      target: '02',
+      expected: ['directory "CK-02-core" is [CK.02] 02', 'bracket prefix "CK.02-02-"'],
+    },
+  ]) {
+    test(`refuses removal before mutation: ${name}`, () => {
+      replaceSeed(['# Roadmap', '', '## [CK.02] v2.0 — Current', '', ...roadmap], dirs);
+      const before = snapshotTree(planning());
+
+      const result = runGsdTools(['phase', 'remove', target, '--force'], tmpDir);
+
+      assert.equal(result.success, false, result.output);
+      for (const fragment of expected) assert.equal(result.error.includes(fragment), true, result.error);
+      assert.deepEqual(snapshotTree(planning()), before);
+    });
+  }
+
   test('legacy-convention removal retains its exact heading and directory behavior', () => {
     fs.writeFileSync(
       planning('config.json'),

@@ -1461,13 +1461,17 @@ function bracketArtifactToken(id: { project: string; milestone: string; phase: s
   return renderPhaseId(id).split('] ')[1];
 }
 
+/** The directory-name prefix `toDir` emits for this identity, ahead of the slug. */
+function bracketDirPrefix(id: { project: string; milestone: string; phase: string; subphase?: string }): string {
+  const probeSlug = 'phase-slug-probe';
+  return toDir(id, probeSlug).slice(0, -probeSlug.length);
+}
+
 function bracketDirSlug(
   dirName: string,
   id: { project: string; milestone: string; phase: string; subphase?: string },
 ): string | null {
-  const probeSlug = 'phase-slug-probe';
-  const probe = toDir(id, probeSlug);
-  const prefix = probe.slice(0, -probeSlug.length);
+  const prefix = bracketDirPrefix(id);
   return dirName.startsWith(prefix) ? dirName.slice(prefix.length) : null;
 }
 
@@ -3212,7 +3216,7 @@ type BracketRoadmapPhaseId = ReturnType<typeof parsePhaseId>;
 type BracketRenumberMapping = { oldId: BracketRoadmapPhaseId; newId: BracketRoadmapPhaseId };
 
 /**
- * #4304 (B2): the ONE identity mapping shared by the disk rename
+ * #4304: the ONE identity mapping shared by the disk rename
  * (renameBracketPhases, below) and the ROADMAP rewrite
  * (updateRoadmapAfterBracketPhaseRemoval) — disk and ROADMAP can never
  * disagree because both consume this same computation instead of each
@@ -3221,7 +3225,10 @@ type BracketRenumberMapping = { oldId: BracketRoadmapPhaseId; newId: BracketRoad
  * heading/checklist/progress line inside the active milestone's own ranges
  * (primary + Phase Details): a phase can exist in ROADMAP with no directory
  * yet, or on disk with no matching ROADMAP line, and either source alone
- * can miss a decimal sub-phase identity. Integer removal maps every phase
+ * can miss a decimal sub-phase identity. Both sources are canonical bracket
+ * spellings only; cmdPhaseRemove refuses before any mutation while a legacy
+ * spelling resolves to an identity this mapping deletes, moves, or lands on
+ * (legacySpellingsEntangledWithBracketRemoval). Integer removal maps every phase
  * N > removed to N-1 (a sub-phase's own number is unchanged); sub-phase
  * removal maps every sub-phase S > removed within the target phase to S-1.
  * The result is sorted with decimal (sub-phase-bearing) identities before
@@ -3365,7 +3372,7 @@ function trackRoadmapDetails(content: string): {
 }
 
 /**
- * #4304 (W2): does the bracket phase about to be removed (an
+ * #4304: does the bracket phase about to be removed (an
  * INTEGER phase, never a subphase itself — `phase remove NN.SS` is a
  * different, unaffected path) still have its own sub-phases?
  * `computeBracketRenumberMapping`'s own filter only ever maps
@@ -3373,11 +3380,14 @@ function trackRoadmapDetails(content: string): {
  * removedInt`) are never mapped, deleted, or reported — so removing an
  * integer phase that still has sub-phases left them orphaned on disk and
  * in ROADMAP while the NEXT phase's sub-phases renumbered onto the SAME
- * identities, manufacturing duplicates. Scans the SAME two sources
- * computeBracketRenumberMapping unions (the directory scan, and every
- * heading/checklist/progress line outside CommonMark fences and inside the
- * active milestone's own ranges) so this refusal can never see a different
- * phase inventory than the rename/rewrite that would otherwise follow it.
+ * identities, manufacturing duplicates. Scans the two sources
+ * computeBracketRenumberMapping unions (the canonical directory scan, and
+ * every heading/checklist/progress line outside CommonMark fences and inside
+ * the active milestone's own ranges), plus the legacy-spelled child
+ * directories the active reader resolves, which the mapping never
+ * inventories. A child spelled either way refuses here; a legacy spelling of
+ * any other identity the removal moves is refused by
+ * legacySpellingsEntangledWithBracketRemoval.
  */
 function bracketPhaseOwnSubphases(
   phasesDir: string,
@@ -3395,7 +3405,7 @@ function bracketPhaseOwnSubphases(
   for (const { id } of bracketIdsInContext(phasesDir, context)) {
     record(Number(id.phase), id.subphase === undefined ? undefined : Number(id.subphase));
   }
-  // #4304 re-review Major 3: bracketIdsInContext skips names outside the
+  // #4304: bracketIdsInContext skips names outside the
   // canonical bracket grammar, but the reader also resolves migration-window
   // legacy children such as `CK-02.1-child`, and the allocator already
   // reserves them (readerResolvableBracketDirectoryPhaseNumber). Inventory
@@ -3786,8 +3796,10 @@ type LegacyRemovalTargetEvidence = {
 /**
  * A bracket removal may share the live tree with migration-window legacy
  * spellings, but it must never mutate that legacy identity indirectly by
- * renumbering later bracket phases onto it. Resolve both directory and heading
- * evidence before any write. `matchPhaseDirs` owns legacy directory selection;
+ * renumbering later bracket phases onto it. This check covers a target that
+ * resolves only to legacy spellings; legacySpellingsEntangledWithBracketRemoval
+ * covers a legacy spelling of any other identity the removal moves. Resolve both
+ * directory and heading evidence before any write. `matchPhaseDirs` owns legacy directory selection;
  * `BRACKET_HEADING_LINE_RE` owns the reader-tolerant heading grammar and its
  * legacy `Phase N:` alternative. A real, non-historical bracket heading for the
  * target makes this an ordinary bracket removal even when legacy siblings are
@@ -3836,6 +3848,100 @@ function legacyOnlyBracketRemovalTarget(
   if (hasBracketDirectory || hasBracketHeading) return null;
   if (legacyDirectories.length === 0 && legacyHeadings.length === 0) return null;
   return { directories: legacyDirectories, headings: legacyHeadings };
+}
+
+type EntangledLegacySpelling = {
+  kind: 'directory' | 'heading';
+  spelling: string;
+  id: BracketRoadmapPhaseId;
+};
+
+/**
+ * #4304: legacy spellings the active bracket reader resolves to an identity
+ * this removal deletes, renumbers, or renumbers onto. The removal renames only
+ * canonical bracket directories and rewrites only bracket-owned ROADMAP lines
+ * (the inventory computeBracketRenumberMapping unions), so such a spelling
+ * would keep its old number: orphaned, or read as whichever phase lands on
+ * that number. Integer removal moves whole phases, so a spelling counts when
+ * its phase number is the target's or any mapped phase's, old or new, which
+ * also covers a legacy sub-phase under a moving parent. Sub-phase removal
+ * compares full identities. A legacy phase outside that set keeps a number
+ * nothing claims after the removal, so it does not block it.
+ *
+ * Directories are inventoried the way the allocator and the removal guard for
+ * the target's own sub-phases do: each non-canonical directory's
+ * `phaseKeyFromDir` key, kept only when `matchPhaseDirs` resolves the directory
+ * for that key. Headings use legacyOnlyBracketRemovalTarget's recognition,
+ * limited to the active milestone's own non-historical lines.
+ */
+function legacySpellingsEntangledWithBracketRemoval(
+  phasesDir: string,
+  roadmapContent: string,
+  ranges: ReturnType<typeof currentMilestoneRawRanges>,
+  context: BracketWriteContext,
+  removedInt: number,
+  removedSubphase: number | undefined,
+  mapping: BracketRenumberMapping[],
+): EntangledLegacySpelling[] {
+  const identityKey = (phase: number, subphase?: number): string => `${phase}.${subphase ?? ''}`;
+  const movingPhases = new Set<number>([removedInt]);
+  const movingIdentities = new Set<string>([identityKey(removedInt, removedSubphase)]);
+  for (const { oldId, newId } of mapping) {
+    for (const id of [oldId, newId]) {
+      const subphase = id.subphase === undefined ? undefined : Number(id.subphase);
+      movingPhases.add(Number(id.phase));
+      movingIdentities.add(identityKey(Number(id.phase), subphase));
+    }
+  }
+  const entangled = (phase: number, subphase: number | undefined): boolean => (
+    removedSubphase === undefined
+      ? movingPhases.has(phase)
+      : subphase !== undefined && movingIdentities.has(identityKey(phase, subphase))
+  );
+  const numericIdentity = (token: string): { phase: number; subphase?: number } | null => {
+    const [phasePart, subphasePart, ...rest] = token.split('.');
+    if (rest.length > 0 || !/^\d+$/.test(phasePart)) return null;
+    if (subphasePart !== undefined && !/^\d+$/.test(subphasePart)) return null;
+    const phase = Number(phasePart);
+    if (isSentinelPhaseId(phase)) return null;
+    return subphasePart === undefined ? { phase } : { phase, subphase: Number(subphasePart) };
+  };
+
+  const found: EntangledLegacySpelling[] = [];
+  for (const dir of readSubdirectories(phasesDir, true)) {
+    try {
+      parsePhaseId(dir);
+      continue;
+    } catch {
+      // Not canonical bracket grammar: a migration-window legacy spelling.
+    }
+    const key = phaseKeyFromDir(dir, 'bracket');
+    const identity = numericIdentity(key);
+    if (!identity || !entangled(identity.phase, identity.subphase)) continue;
+    if (!matchPhaseDirs([dir], key, 'bracket', context).matches.includes(dir)) continue;
+    found.push({ kind: 'directory', spelling: dir, id: bracketPhaseId(context, identity.phase, identity.subphase) });
+  }
+
+  const historicalLineStarts = archivedOrClosedMilestoneLineStarts(roadmapContent);
+  for (const heading of tokenizeHeadings(roadmapContent)) {
+    if (heading.level < 2 || heading.level > 4) continue;
+    if (!lineStartsInActiveMilestone(heading.offset, ranges) || historicalLineStarts.has(heading.offset)) continue;
+    const headingLine = '#'.repeat(heading.level) + ' ' + heading.text;
+    if (classifyBracketOwnedLine(headingLine).id) continue;
+    const legacyMatch = BRACKET_HEADING_LINE_RE.exec(headingLine);
+    const canonicalNumber = legacyMatch?.[2] ? phaseToken(legacyMatch[2]) : null;
+    const identity = canonicalNumber ? numericIdentity(canonicalNumber) : null;
+    if (!identity || !entangled(identity.phase, identity.subphase)) continue;
+    found.push({ kind: 'heading', spelling: headingLine, id: bracketPhaseId(context, identity.phase, identity.subphase) });
+  }
+  return found;
+}
+
+/** Name a legacy spelling, the bracket identity it resolves to, and its bracket form. */
+function describeEntangledLegacySpelling({ kind, spelling, id }: EntangledLegacySpelling): string {
+  return kind === 'directory'
+    ? `directory ${JSON.stringify(spelling)} is ${renderPhaseId(id)} (bracket prefix ${JSON.stringify(bracketDirPrefix(id))})`
+    : `heading ${JSON.stringify(spelling)} is ${renderPhaseId(id)}`;
 }
 
 /**
@@ -4750,6 +4856,30 @@ function cmdPhaseRemove(
       removedSubphase,
     )
     : [];
+
+  // #4304: the mapping inventories only canonical bracket spellings. Refuse
+  // before any mutation while a legacy spelling resolves to an identity it
+  // deletes, renumbers, or renumbers onto; renumbering around it would leave
+  // that spelling on its old number for the reader to misattribute.
+  if (removeContext) {
+    const entangled = legacySpellingsEntangledWithBracketRemoval(
+      phasesDir,
+      roadmapContentBeforeRemoval!,
+      preRemovalRanges,
+      removeContext,
+      removedInt,
+      removedSubphase,
+      bracketMapping,
+    );
+    if (entangled.length > 0) {
+      error(
+        `Cannot remove phase ${normalized}: phase remove renumbers only bracket spellings, and `
+        + `${entangled.length === 1 ? 'this legacy spelling resolves' : 'these legacy spellings resolve'} `
+        + `to a phase it would delete or renumber: ${entangled.map(describeEntangledLegacySpelling).join('; ')}. `
+        + 'Convert each to its bracket spelling, then retry.',
+      );
+    }
+  }
 
   // Validate every bracket rename destination before deleting the target or
   // changing ROADMAP/STATE, so a planted symlink produces a clean refusal
