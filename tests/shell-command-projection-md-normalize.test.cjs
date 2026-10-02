@@ -395,3 +395,6 @@ describe('#5105: write normalization leaves the frontmatter block untouched', ()
         },
       ),
       { seed: 5105, numRuns: 500, endOnFailure: true },
+    );
+  });
+});
