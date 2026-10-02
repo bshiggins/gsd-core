@@ -1817,7 +1817,7 @@ describe('#4764 dep_phases extracts only Phase-prefixed references', () => {
     }
   });
 
-  test('keeps upstream/next greedy checklist selection under every non-bracket convention', () => {
+  test('uses upstream/next anchored checklist selection under every non-bracket convention (#4982)', () => {
     for (const convention of [null, 'sequential', 'milestone-prefixed']) {
       fs.writeFileSync(
         path.join(tmpDir, '.planning', 'config.json'),
@@ -1847,7 +1847,7 @@ describe('#4764 dep_phases extracts only Phase-prefixed references', () => {
       const output = JSON.parse(runGsdTools('init manager', tmpDir).output);
       assert.deepStrictEqual(
         output.phases.map((phase) => [phase.number, phase.roadmap_complete]),
-        [['1', false], ['2', true]],
+        [['1', true], ['2', false]],
         String(convention),
       );
     }
