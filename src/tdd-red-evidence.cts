@@ -46,7 +46,7 @@ export interface RedEvidenceInput {
   command: unknown;
   /** The command's exit code. */
   exitCode: unknown;
-  /** The command's combined stdout (TAP for node --test; Surefire/Failsafe XML for Maven). */
+  /** The command's combined stdout (TAP for node --test; Surefire/Failsafe XML for Maven; swift-testing console summary for `swift test`, #4957). */
   output: unknown;
   /**
    * Identity of the target the plan named: the `test('...')` name for
@@ -146,6 +146,121 @@ function parseSurefireSummary(output: string): {
   return { tests, pass: tests - fail, fail, failing_tests };
 }
 
+/**
+ * #4957 — swift-testing console summary. Detection requires the anchored
+ * aggregate marker `Test run with N tests in M suites (passed|failed)` —
+ * this is the ONLY structurally reliable signal that the output is
+ * swift-testing at all (a TAP or Surefire report does not spontaneously
+ * contain this exact phrase). The `tests` count comes from THIS aggregate
+ * line, never inferred from per-test lines, so a report with the aggregate
+ * line but NO per-test lines (e.g. a truncated capture) still reports the
+ * real test count instead of lying that zero tests ran.
+ *
+ * `fail`/`pass` and `failing_tests` come ONLY from observed per-test lines
+ * (`Test "name" failed/passed after ...`) — an "issues" count on the
+ * aggregate line is NOT 1:1 with a failing-test count (one test can record
+ * multiple issues), so it is never used to fabricate a fail count. When no
+ * per-test lines are present, `fail` stays 0 and `failing_tests` stays
+ * empty — an honest "no named failing test observed", which the caller
+ * (classifyRedEvidence) already routes to `nonzero_exit_without_test_failure`
+ * rather than a false `zero_tests_discovered`.
+ *
+ * Anchoring (review finding, round 1): requires the line to START with
+ * (only leading whitespace, then) the swift-testing checkmark glyph
+ * (✘/✔) immediately before "Test run with" — mirrors the Surefire
+ * detector's "require BOTH `<testsuite` and `<testcase`" defense against
+ * a DIFFERENT format's diagnostic merely quoting the phrase (e.g. a TAP
+ * `actual:` block asserting on rendered CLI text). `tests` sums EVERY
+ * aggregate-line match found, not just the first, so concatenated
+ * multi-block output (multiple targets/suites in one combined stdout)
+ * reports an honest total instead of an internally inconsistent record
+ * where `pass + fail` could exceed `tests`.
+ */
+function isSwiftTestingSummary(output: string): boolean {
+  return /^[ \t]*[✘✔][ \t]*Test run with \d+ tests? in \d+ suites?\s+(?:passed|failed)/m.test(output);
+}
+
+function parseSwiftTestingSummary(output: string): {
+  tests: number;
+  pass: number;
+  fail: number;
+  failing_tests: string[];
+} {
+  const aggregateRe = /^[ \t]*[✘✔][ \t]*Test run with (\d+) tests? in \d+ suites?\s+(?:passed|failed)/gm;
+  let tests = 0;
+  let am: RegExpExecArray | null;
+  while ((am = aggregateRe.exec(output)) !== null) {
+    tests += Number(am[1]);
+  }
+  const failing_tests: string[] = [];
+  const passing_tests: string[] = [];
+  const lineRe = /^[ \t]*[✘✔][ \t]*Test "([^"]+)" (failed|passed) after [\d.]+ seconds?(?: with \d+ issues?)?\.?$/gm;
+  let m: RegExpExecArray | null;
+  while ((m = lineRe.exec(output)) !== null) {
+    if (m[2] === 'failed') failing_tests.push(m[1]);
+    else passing_tests.push(m[1]);
+  }
+  return { tests, pass: passing_tests.length, fail: failing_tests.length, failing_tests };
+}
+
+/**
+ * #4970 — Python stdlib `unittest`'s text reporter emits neither TAP nor
+ * JUnit XML: a verbose run ends with a blank line, `Ran N tests in T s`,
+ * another blank line, then `OK` or `FAILED (failures=F[, errors=E][, skipped=S])`.
+ * Individual failures are headed `FAIL: <name> (<id>)` or `ERROR: <name> (<id>)`
+ * — the traceback body between the header and the `---` separator is never
+ * parsed; only the header line's plain test name is needed to match the
+ * plan's target. Detection requires BOTH the "Ran N tests" line AND a
+ * following OK/FAILED( line, so an incidental substring inside TAP or XML
+ * output can never misfire into this path.
+ */
+function isUnittestSummary(output: string): boolean {
+  const ran = /Ran \d+ tests? in [\d.]+s/.exec(output);
+  if (!ran) return false;
+  const after = output.slice(ran.index + ran[0].length);
+  return /^[ \t]*(OK\b|FAILED \()/m.test(after);
+}
+
+/**
+ * #4970 — `tests` is read ONLY from the "Ran N tests" aggregate line, never
+ * fabricated by counting FAIL/ERROR headers, so a report with the aggregate
+ * but no individual failure headers still reports the true count (never 0).
+ * `fail`/`failing_tests` come ONLY from observed `FAIL:`/`ERROR:` headers —
+ * an absent header means fail:0, which correctly falls through to the
+ * existing `nonzero_exit_without_test_failure` reason rather than fabricating
+ * a match (same fail-closed posture as `parseSurefireSummary`, which also
+ * counts an `<error>` child as failing — here an `ERROR:` header counts the
+ * same as a `FAIL:` header).
+ *
+ * `unittest.loader._FailedTest` entries (the issue's explicit carve-out) are
+ * excluded from `failing_tests`: unittest synthesizes one when a module fails
+ * to IMPORT or COLLECT, giving it whatever method name the loader happened to
+ * be looking for — which can coincidentally equal the plan's target test name
+ * and would otherwise fabricate a target match for a load/collection crash
+ * rather than a real assertion failure. Excluding it drops `fail` for that
+ * entry, correctly falling through to the existing
+ * `nonzero_exit_without_test_failure` reason instead.
+ */
+function parseUnittestSummary(output: string): {
+  tests: number;
+  pass: number;
+  fail: number;
+  failing_tests: string[];
+} {
+  const ranMatch = /Ran (\d+) tests? in [\d.]+s/.exec(output);
+  const tests = ranMatch ? Number(ranMatch[1]) : 0;
+  const failing_tests: string[] = [];
+  const failRe = /^(?:FAIL|ERROR): (\S+)(?:\s+\(([^)]*)\))?/gm;
+  let m: RegExpExecArray | null;
+  while ((m = failRe.exec(output)) !== null) {
+    const id = m[2] ?? '';
+    if (id.includes('_FailedTest')) continue;
+    failing_tests.push(m[1]);
+  }
+  const fail = failing_tests.length;
+  return { tests, pass: Math.max(tests - fail, 0), fail, failing_tests };
+}
+
 /** Coerce and validate the raw record's scalar fields. Returns null exit_code only when absent/non-numeric. */
 function readInput(input: RedEvidenceInput): {
   command: string;
@@ -196,12 +311,29 @@ export function classifyRedEvidence(input: RedEvidenceInput): RedEvidenceResult 
   // merely quotes "<testsuite>" (e.g. "expected <testsuite> was 2") must not
   // flip a genuine TAP red into the XML path.
   const isSurefireXml = output.includes('<testsuite') && output.includes('<testcase');
+  const isSwiftTesting = !isSurefireXml && isSwiftTestingSummary(output);
+  // #4970: Python stdlib unittest emits neither TAP nor Surefire/Failsafe XML
+  // nor swift-testing's console summary — checked only once none of those
+  // matched, so a report that happens to also contain "Ran N tests" text
+  // stays on whichever earlier format it actually is. The `!isSwiftTesting`
+  // term is redundant with the if/else-if chain below (each arm is already
+  // reached only when every earlier condition is false) but is kept here so
+  // this line documents precedence on its own, without relying on chain order.
+  const isUnittest = !isSurefireXml && !isSwiftTesting && isUnittestSummary(output);
   let summary: { tests: number; pass: number; fail: number };
   let failing: string[];
   if (isSurefireXml) {
     const sf = parseSurefireSummary(output);
     summary = { tests: sf.tests, pass: sf.pass, fail: sf.fail };
     failing = sf.failing_tests;
+  } else if (isSwiftTesting) {
+    const st = parseSwiftTestingSummary(output);
+    summary = { tests: st.tests, pass: st.pass, fail: st.fail };
+    failing = st.failing_tests;
+  } else if (isUnittest) {
+    const ut = parseUnittestSummary(output);
+    summary = { tests: ut.tests, pass: ut.pass, fail: ut.fail };
+    failing = ut.failing_tests;
   } else {
     summary = parseNodeTestSummary(output);
     failing = tapFailedTestNames(output);

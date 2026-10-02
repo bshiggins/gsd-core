@@ -37,11 +37,15 @@ RESPONSE_LANGUAGE=$(gsd_run query config-get response_language --raw --default "
 
 **If `response_language` is set:** all user-facing questions/prompts/explanations MUST be presented in `{response_language}`. Technical terms, code, file paths, and subagent prompts stay in English.
 
-Validate `$ARGUMENTS` through the CLI's own grammar — never re-derive it inline (single source of truth: `parseQuickBatchArgs`, `src/quick-batch-dispatch.cts`). `$ARGUMENTS` is raw, attacker-influenced task text — pass it as ONE quoted argument via `--text` so the shell never word-splits or glob-expands it; `quick-batch parse-args` does the whitespace split itself, in Node, after the shell is done:
+Validate the command's `<arguments>` block through the CLI's own grammar — never re-derive it inline (single source of truth: `parseQuickBatchArgs`, `src/quick-batch-dispatch.cts`). The block is raw, attacker-influenced task text — feed it on STDIN through a QUOTED heredoc (`--stdin`), never as a shell argument, so the shell never parses, expands or word-splits it; `quick-batch parse-args` does the whitespace split itself, in Node, after the shell is done. Paste the block's exact contents between the markers:
 
 ```bash
-QB_PARSE_JSON=$(gsd_run quick-batch parse-args --raw --text "$ARGUMENTS")
+QB_PARSE_FILE=$(mktemp)
+gsd_run quick-batch parse-args --raw --stdin > "$QB_PARSE_FILE" 2>&1 <<'GSD_QUICK_BATCH_ARGS_END'
+<the exact contents of the `<arguments>` block, verbatim>
+GSD_QUICK_BATCH_ARGS_END
 QB_PARSE_RC=$?
+QB_PARSE_JSON=$(cat "$QB_PARSE_FILE"); rm -f "$QB_PARSE_FILE"
 if [ $QB_PARSE_RC -ne 0 ]; then
   echo "$QB_PARSE_JSON" >&2
   exit 1
@@ -51,18 +55,19 @@ if [[ "$QB_PARSE_JSON" == @file:* ]]; then QB_PARSE_JSON=$(cat "${QB_PARSE_JSON#
 
 Parse `$QB_PARSE_JSON` for `jobs` (`"auto"` or an integer), `validate` (bool), `research` (bool), `resume` (batch id or null). Store as `$JOBS`, `$VALIDATE_MODE`, `$RESEARCH_MODE`, `$RESUME_BATCH_ID`.
 
-Extract the raw task-list text / `--file <path>` from `$ARGUMENTS` (everything that is not `--jobs <v>`, `--validate`, `--research`, `--resume <id>`, or `--file <path>`'s own flag pair).
+Extract the raw task-list text / `--file <path>` from the `<arguments>` block (everything that is not `--jobs <v>`, `--validate`, `--research`, `--resume <id>`, or `--file <path>`'s own flag pair).
 
 ```bash
 VALIDATE_PARAM=""; if [ "$VALIDATE_MODE" = true ]; then VALIDATE_PARAM="--validate"; fi
 RESEARCH_PARAM=""; if [ "$RESEARCH_MODE" = true ]; then RESEARCH_PARAM="--research"; fi
-INIT=$(gsd_run query init.quick-batch $VALIDATE_PARAM $RESEARCH_PARAM)
+GSD_WS=$(echo " $ARGUMENTS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+INIT=$(gsd_run query init.quick-batch ${GSD_WS:+--ws=${GSD_WS##* }} $VALIDATE_PARAM $RESEARCH_PARAM)
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
-AGENT_SKILLS_PLANNER=$(gsd_run query agent-skills gsd-planner)
-AGENT_SKILLS_EXECUTOR=$(gsd_run query agent-skills gsd-executor)
-AGENT_SKILLS_CHECKER=$(gsd_run query agent-skills gsd-plan-checker)
-AGENT_SKILLS_VERIFIER=$(gsd_run query agent-skills gsd-verifier)
-AGENT_SKILLS_RESEARCHER=$(gsd_run query agent-skills gsd-phase-researcher)
+AGENT_SKILLS_PLANNER=$(gsd_run query agent-skills gsd-planner ${GSD_WS:+--ws=${GSD_WS##* }})
+AGENT_SKILLS_EXECUTOR=$(gsd_run query agent-skills gsd-executor ${GSD_WS:+--ws=${GSD_WS##* }})
+AGENT_SKILLS_CHECKER=$(gsd_run query agent-skills gsd-plan-checker ${GSD_WS:+--ws=${GSD_WS##* }})
+AGENT_SKILLS_VERIFIER=$(gsd_run query agent-skills gsd-verifier ${GSD_WS:+--ws=${GSD_WS##* }})
+AGENT_SKILLS_RESEARCHER=$(gsd_run query agent-skills gsd-phase-researcher ${GSD_WS:+--ws=${GSD_WS##* }})
 ```
 
 Parse `$INIT` for: `planner_model`, `executor_model`, `checker_model`, `verifier_model`, `researcher_model`, `commit_docs`, `quick_dir`, `quick_batches_dir`, `roadmap_exists`, `planning_exists`.

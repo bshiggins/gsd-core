@@ -109,18 +109,9 @@ GSD stores project settings in `.planning/config.json`. Created during `/gsd-new
     "quick_branch_template": null
   },
   "gates": {
-    "confirm_project": true,
-    "confirm_phases": true,
-    "confirm_roadmap": true,
-    "confirm_breakdown": true,
-    "confirm_plan": true,
     "execute_next_plan": true,
-    "issues_review": true,
-    "confirm_transition": true
-  },
-  "safety": {
-    "always_confirm_destructive": true,
-    "always_confirm_external_services": true
+    "confirm_transition": true,
+    "confirm_milestone_scope": true
   },
   "security": {
     "injection_blocking": false
@@ -552,7 +543,7 @@ All workflow toggles follow the **absent = enabled** pattern. If a key is missin
 | `planner.stall_detect_interval_minutes` | number | `5` | Minutes between planner/plan-checker stall checks while a planner or plan-checker agent is active. The plan-phase orchestrator uses this cadence to inspect on-disk `*-PLAN.md` activity and avoid waiting forever on a silent agent (#2650). |
 | `planner.stall_threshold_minutes` | number | `10` | Minutes without a completion marker or fresh on-disk plan activity before plan-phase automatically surfaces the accept-plans/retry/stop recovery choice for a possible stalled planner or plan-checker (#2650). |
 | `workflow.inline_plan_threshold` | number | `3` | Maximum number of tasks in a phase before the planner generates a separate PLAN.md file instead of inlining tasks in the prompt |
-| `workflow.drift_threshold` | number | `3` | Minimum number of new structural elements (new directories, barrel exports, migrations, route modules) before the codebase-drift gate takes action. The gate runs at two points: `plan:pre` (before `/gsd-plan-phase` plans — **non-blocking, warn-only**, so plans are authored against a fresh STRUCTURE.md) and `execute:wave:post` (after `/gsd-execute-phase` — honors `workflow.drift_action`). See [#2003](https://github.com/open-gsd/gsd-core/issues/2003). Added in v1.39 |
+| `workflow.drift_threshold` | number | `3` | Minimum number of drift elements before the codebase-drift gate takes action: new structural elements (new directories, barrel exports, migrations, route modules) plus modified and deleted files inside directories the codebase map already describes. The gate runs at two points: `plan:pre` (before `/gsd-plan-phase` plans — **non-blocking, warn-only**, so plans are authored against a fresh STRUCTURE.md) and `execute:wave:post` (after `/gsd-execute-phase` — honors `workflow.drift_action`). See [#2003](https://github.com/open-gsd/gsd-core/issues/2003). Added in v1.39 |
 | `workflow.drift_action` | string | `warn` | What to do when `workflow.drift_threshold` is exceeded **at `execute:wave:post`** (after `/gsd-execute-phase`). `warn` prints a message suggesting `/gsd-map-codebase --paths …`; `auto-remap` spawns `gsd-codebase-mapper` scoped to the affected paths. The `plan:pre` pre-check is always warn-only regardless of this setting — it never auto-spawns the mapper at plan entry. Added in v1.39 |
 | `workflow.plan_drift_precheck` | boolean | `true` | Enable the non-blocking codebase-drift pre-check at `plan:pre`, before `/gsd-plan-phase` spawns the planner. Surfaces a stale STRUCTURE.md (drift over `workflow.drift_threshold`) as a warn-only advisory pointing to `/gsd-map-codebase`; never blocks planning, never spawns the mapper. Separate from the `execute:wave:post` gates so autonomous/CI runs can silence the plan-time advisory while keeping execute-time drift detection on. Added in v1.6.0. See [#1592](https://github.com/open-gsd/gsd-core/issues/1592). |
 | `workflow.context_drift_precheck` | boolean | `true` | Enable the non-blocking context-drift pre-check at `plan:pre`, before `/gsd-plan-phase` reuses an existing RESEARCH.md/PATTERNS.md/VALIDATION.md/SPEC.md. Compares each artifact's effective last-changed time (git commit time, falling back to mtime for uncommitted edits) against CONTEXT.md's own; an artifact that predates CONTEXT.md's newest decision was derived from a premise that has since changed. Warn-only by default (see `workflow.context_drift_action`); never blocks planning on its own. See [#3348](https://github.com/open-gsd/gsd-core/issues/3348). |
@@ -1356,27 +1347,16 @@ Example quick-task branching:
 
 ## Gate Settings
 
-Control confirmation prompts during workflows.
+Control confirmation prompts during workflows. Each gate only applies under
+`mode: "interactive"` — `"yolo"` always auto-approves regardless of these
+settings (there is no third `"custom"` mode). Set a gate to `false` to skip
+that one confirmation while staying in interactive mode for everything else.
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `gates.confirm_project` | boolean | `true` | Confirm project details before finalizing |
-| `gates.confirm_phases` | boolean | `true` | Confirm phase breakdown |
-| `gates.confirm_roadmap` | boolean | `true` | Confirm roadmap before proceeding |
-| `gates.confirm_breakdown` | boolean | `true` | Confirm task breakdown |
-| `gates.confirm_plan` | boolean | `true` | Confirm each plan before execution |
-| `gates.execute_next_plan` | boolean | `true` | Confirm before executing next plan |
-| `gates.issues_review` | boolean | `true` | Review issues before creating fix plans |
-| `gates.confirm_transition` | boolean | `true` | Confirm phase transition |
-
----
-
-## Safety Settings
-
-| Setting | Type | Default | Description |
-|---------|------|---------|-------------|
-| `safety.always_confirm_destructive` | boolean | `true` | Confirm destructive operations (deletes, overwrites) |
-| `safety.always_confirm_external_services` | boolean | `true` | Confirm external service interactions |
+| `gates.execute_next_plan` | boolean | `true` | Confirm before executing next plan (`execute-plan.md`) |
+| `gates.confirm_transition` | boolean | `true` | Confirm phase transition (`transition.md`) |
+| `gates.confirm_milestone_scope` | boolean | `true` | Confirm milestone scope before shipping (`complete-milestone.md`) |
 
 ---
 
@@ -1410,7 +1390,7 @@ plans and shipped code (issue #2492).
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `workflow.context_coverage_gate` | boolean | `true` | Toggle for both decision-coverage gates. When `false`, both the plan-phase translation gate and the verify-phase validation gate skip silently. |
+| `workflow.context_coverage_gate` | boolean | `true` | Toggle for both decision-coverage gates. When `false`, both the plan-phase translation gate and the verify-phase validation gate skip silently. Only the nested key under `workflow` is read, exactly as `config-get workflow.context_coverage_gate` answers; a top-level `context_coverage_gate` is ignored (the config loader warns about it) and the gates stay enabled. The gates read the active workstream's `config.json` when `GSD_WORKSTREAM` is set. |
 
 ### What the gates do
 
@@ -2360,7 +2340,7 @@ When a dispatch fails, one JSON line is emitted to stderr:
 { "kind": "HandlerFailure", "traceId": "...", "command": "plan", "timestamp": "...", "message": "..." }
 ```
 
-The `kind` field matches one of the Hub's error variants: `UnknownCommand`, `InvalidArgs`, `HandlerRefusal`, or `HandlerFailure`. Args are omitted by default (privacy); see `GSD_AUDIT_ARGS` below.
+The `kind` field matches one of the Hub's error variants: `UnknownCommand`, `InvalidArgs`, `HandlerRefusal`, `HandlerFailure`, or `VerificationStatusInvalid` (a verification report whose `status` is outside the closed set). Args are omitted by default (privacy); see `GSD_AUDIT_ARGS` below.
 
 ### Audit trail (opt-in)
 

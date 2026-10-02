@@ -44,10 +44,10 @@ GSD_WS=""
 echo "$ARGUMENTS" | grep -qE -- '--ws[[:space:]]+[A-Za-z0-9._-]+' && GSD_WS=$(echo "$ARGUMENTS" | grep -oE -- '--ws[[:space:]]+[A-Za-z0-9._-]+')
 PHASE_ARG=$(echo "$ARGUMENTS" | sed -E 's/--ws[[:space:]]+[A-Za-z0-9._-]+//g' | xargs)
 
-INIT=$(gsd_run query init.verify-work "${PHASE_ARG}" ${GSD_WS})
+INIT=$(gsd_run query init.verify-work "${PHASE_ARG}" ${GSD_WS:+--ws=${GSD_WS##* }})
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
-AGENT_SKILLS_PLANNER=$(gsd_run query agent-skills gsd-planner)
-AGENT_SKILLS_CHECKER=$(gsd_run query agent-skills gsd-plan-checker)
+AGENT_SKILLS_PLANNER=$(gsd_run query agent-skills gsd-planner ${GSD_WS:+--ws=${GSD_WS##* }})
+AGENT_SKILLS_CHECKER=$(gsd_run query agent-skills gsd-plan-checker ${GSD_WS:+--ws=${GSD_WS##* }})
 ```
 
 Parse JSON for: `planner_model`, `checker_model`, `commit_docs`, `phase_found`, `phase_dir`, `phase_number`, `phase_name`, `has_verification`, `uat_path`, `state_path`, `roadmap_path`, `response_language`.
@@ -58,7 +58,7 @@ Parse JSON for: `planner_model`, `checker_model`, `commit_docs`, `phase_found`, 
 # MVP mode detection via the centralized phase.mvp-mode resolver.
 # verify-work has no --mvp CLI flag (mode is inherited from the planned phase),
 # so we omit --cli-flag — the verb falls through roadmap → config → false.
-MVP_MODE=$(gsd_run query phase.mvp-mode "${phase_number}" ${GSD_WS} --pick active)
+MVP_MODE=$(gsd_run query phase.mvp-mode "${phase_number}" ${GSD_WS:+--ws=${GSD_WS##* }} --pick active)
 ```
 </step>
 
@@ -521,39 +521,23 @@ Exact resume-announcement wording: `gsd-core/workflows/verify-work/detail/elabor
 </step>
 
 <step name="complete_session">
-**Complete testing and commit:**
+**Complete testing:**
 
-**Determine final status:**
-
-Count results:
+**Count results** (for routing below — the completion verb computes the persisted `status` itself, #5105 R1):
 - `pending_count`: tests with `result: [pending]`
 - `blocked_count`: tests with `result: blocked`
 - `skipped_no_reason`: tests with `result: skipped` and no `reason` field
+- `unresolved_issues`: tests with `result: issue` that are NOT a verified gap resolution (#4983) —
+  same criterion `phase uat-passed` uses (`src/uat-predicate.cts`). Exact definition:
+  `gsd-core/workflows/verify-work/detail/elaboration.md` § 4.
 
-```
-if pending_count > 0 OR blocked_count > 0 OR skipped_no_reason > 0:
-  status: partial
-  # Session ended but not all tests resolved
-else:
-  status: complete
-  # All tests have a definitive result (pass, issue, or skipped-with-reason)
-```
+Run the completion verb — it independently computes the final status (`complete`/`partial`) from the same rows, clears `## Current Test`, and writes + commits ONLY when something material changed (a session whose UAT was already complete and covered must leave the report fresh, #4981):
 
-Update frontmatter:
-- status: {computed status}
-- updated: [now]
-
-Clear Current Test section:
-```
-## Current Test
-
-[testing complete]
-```
-
-Commit the UAT file:
 ```bash
-gsd_run query commit "test({phase_num}): complete UAT - {passed} passed, {issues} issues" --files ".planning/phases/XX-name/{phase_num}-UAT.md"
+gsd_run query uat.complete-session "$uat_path" --message "test({phase_num}): complete UAT - {passed} passed, {issues} issues"
 ```
+
+`changed: false` → announce that the session was already complete and nothing was written or committed. `changed: true` → the UAT file (frontmatter `status`, `updated`, `## Current Test`) was written and committed in one step.
 
 **If the UAT file has a non-empty `## Deferred Follow-Ups` section,** those items are currently visible only inside this phase's `*-UAT.md` — offer to promote them to the roadmap backlog so they stay visible at the project level (#4546; reuses the exact entry mechanism `next.md`'s `prior_phase_completeness` step uses for plans-without-summaries):
 
@@ -601,26 +585,28 @@ Present summary:
 | Issues | {N}   |
 | Skipped| {N}   |
 
-[If issues > 0:]
+[If unresolved_issues > 0:]
 ### Issues Found
 
 [List from Issues section]
 ```
 
-**If issues > 0:** Proceed to `diagnose_issues`
+**If issues > 0:** (reads `unresolved_issues` from "Count results" above, #4983 — not the raw
+`issues` count) Proceed to `diagnose_issues`
 
-**If issues == 0:**
+**If issues == 0:** (again `unresolved_issues == 0` — including when the raw `issues` count is
+nonzero but every one is a verified gap resolution, #4983)
 
 ```bash
-VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --raw)
+VERIFY_POST_HOOKS_JSON=$(gsd_run loop render-hooks verify:post --after-fingerprint "$PHASE_DIR" --raw)
 SECURITY_FILE=$(ls "${PHASE_DIR}"/*-SECURITY.md 2>/dev/null | head -1)
 ```
 
-**Generic step dispatch:** dispatch every `kind == "step"` hook from `VERIFY_POST_HOOKS_JSON` per @gsd-core/references/loop-hook-dispatch.md (skip silently when none). Each step is advisory and best-effort — honor `onError` and continue. The secure-phase handling below is an additional specialization of one such hook, not a replacement for the generic dispatch.
+**Generic step dispatch:** dispatch every `kind == "step"` hook from `VERIFY_POST_HOOKS_JSON` per @gsd-core/references/loop-hook-dispatch.md (skip silently when none). Each step is advisory and best-effort — honor `onError` and continue. The secure-phase handling below is an additional specialization of one such hook, not a replacement for the generic dispatch. `--after-fingerprint "$PHASE_DIR"` (#5105) moves a step whose declared artifact already exists in `$PHASE_DIR` into `skippedHooks` instead of `activeHooks` — execute-phase already dispatched it before its own fingerprint (`execute-phase.md:1202`), so this re-dispatch is a no-op for that step and is not repeated here.
 
-Resolve active step hooks from `VERIFY_POST_HOOKS_JSON` where `kind == "step"` and `ref.skill == "secure-phase"`.
+Resolve whether the secure-phase step hook is enabled: an entry with `kind == "step"` and `ref.skill == "secure-phase"` present in `activeHooks` OR `skippedHooks` of `VERIFY_POST_HOOKS_JSON` both count as enabled. `--after-fingerprint` moves this hook into `skippedHooks` once its declared artifact (`SECURITY.md`) already exists in `$PHASE_DIR` (#5105) — the hook is still enabled, only its re-dispatch is skipped. Each `skippedHooks` entry carries `capId`, `kind`, and `ref.skill` for exactly this resolution.
 
-If an active secure-phase step hook exists AND `SECURITY_FILE` is empty, dispatch the registry-provided skill stem:
+If the secure-phase step hook is enabled AND `SECURITY_FILE` is empty, dispatch the registry-provided skill stem:
 
 ```
 Skill(skill="gsd-${ref.skill}", args="{phase}")
@@ -644,24 +630,28 @@ All tests passed, but phase advancement is blocked until security review produce
 - `/gsd:ui-review {phase}` — visual quality audit (if frontend files were modified)
 ```
 
-If an active secure-phase step hook exists AND `SECURITY_FILE` exists: check frontmatter `threats_open`. If > 0:
+If `SECURITY_FILE` exists — regardless of whether the secure-phase step hook shows up in `activeHooks` or `skippedHooks` — always check frontmatter `threats_open`. If > 0:
 ```
 ⚠ Security gate: {threats_open} threats open
   /gsd:secure-phase {phase} — resolve before advancing
 ```
 
-If no active secure-phase step hook exists OR (`SECURITY_FILE` exists AND `threats_open` is `0`):
+If the secure-phase step hook is not enabled (absent from both `activeHooks` and `skippedHooks`) OR (`SECURITY_FILE` exists AND `threats_open` is `0`):
 
 If execution verification is waiting only on human UAT and this session recorded zero issues, canonicalize the report before the shared completion predicate. (#4663) Zero issues is NOT pass evidence on its own — blocked rows are not issues by this workflow's own rule, so a session that observed nothing (0 passed / 0 issues / N blocked) must NOT flip the report. The flip runs the SAME UAT-row predicate the phase-close uses, in its `--uat-only` form: it skips the verification-status blockers (the report still reads `human_needed` at this point — the full predicate could never pass here), and `passed` means at least one UAT check passed with no row pending/blocked/failed or skipped without a reason. The flagged transition-gate call below stays the final say on canonical verification:
 
 ```bash
 PHASE_DIR=$(printf '%s' "$INIT" | jq -r '.phase_dir // empty')
 VERIFICATION_FILE=$(gsd_run query verification.resolve-file "$PHASE_DIR" --raw 2>/dev/null)
-VERIFICATION_STATUS=$(gsd_run query verification.status "$PHASE_DIR" 2>/dev/null)
-VERIFICATION_STATUS_VALUE=$(printf '%s' "$VERIFICATION_STATUS" | jq -r '.status // empty' 2>/dev/null || echo "")
+# #5118: stderr kept; an out-of-set report status is a hard error, never "no result".
+VERIFICATION_STATUS=$(gsd_run query verification.status "$PHASE_DIR") || { echo "verification.status refused this phase's report — see the error above; fix the report before re-running /gsd:verify-work {phase}." >&2; exit 1; }
+VERIFICATION_STATUS_VALUE=$(printf '%s' "$VERIFICATION_STATUS" | jq -r '.status')
+VERIFICATION_ROUTE=$(printf '%s' "$VERIFICATION_STATUS" | jq -r '.route')
+NEXT_COMMAND=$(printf '%s' "$VERIFICATION_STATUS" | jq -r '.next_command')
+IMPLEMENTATION_COMPLETE=$(printf '%s' "$INIT" | jq -r '.phase_completion.implementation_complete // false')
 PHASE_VERIFICATION_STATUS="$VERIFICATION_STATUS_VALUE"
 if [ "$VERIFICATION_STATUS_VALUE" = "human_needed" ]; then
-  UAT_PRECHECK=$(gsd_run phase uat-passed "{phase}" --uat-only 2>/dev/null)
+  UAT_PRECHECK=$(gsd_run phase uat-passed "{phase}" --uat-only) || { echo "phase uat-passed failed — see the error above." >&2; exit 1; }
   UAT_PRECHECK_PASSED=$(printf '%s' "$UAT_PRECHECK" | jq -r '.passed // false' 2>/dev/null || echo "false")
   if [ "$UAT_PRECHECK_PASSED" = "true" ]; then
     gsd_run query frontmatter.set "$VERIFICATION_FILE" --field status --value passed
@@ -673,29 +663,42 @@ if [ "$VERIFICATION_STATUS_VALUE" = "human_needed" ]; then
 fi
 ```
 
-If `PHASE_VERIFICATION_STATUS` is `stale`, the covered source files changed after the verifier
-last ran — re-run the VERIFIER, not this workflow (`/gsd:verify-work` never rewrites
-VERIFICATION.md; its only write is the human_needed canonicalization, #4663). Spawn the
-verifier for this phase exactly as execute-phase's `verify_phase_goal` step does (subagent
-`gsd-verifier`; phase directory, goal, requirement IDs, and all SUMMARYs in
-`<required_reading>`), then re-read `verification.status` and continue at the fresh/passed
-case below. (#4682)
+Run the owner's route — the ONE verification action — here when `VERIFICATION_ROUTE` is
+`execute-phase` AND the report can actually be regenerated: `PHASE_VERIFICATION_STATUS` is `stale`
+(#4682/#5118), or it is `missing` and `IMPLEMENTATION_COMPLETE` is `true` (every plan has a
+SUMMARY.md, so execute-phase would resume straight at the verification gates — the verify step
+never ran on an executed phase). A `missing` report on a phase that is NOT fully executed does NOT
+dispatch the step: the code review, regression gate and verifier have nothing complete to verify
+there, so fall through to the completion predicate below, which blocks with the owner's own
+`NEXT_COMMAND` (execute-phase) exactly as before #5118. This workflow never rewrites VERIFICATION.md
+itself (its only write is the canonicalization, #4663).
+Load the step's inputs through the SAME bundle execute-phase loads, then include the step:
 
+```bash
+GSD_WS=$(echo " $ARGUMENTS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+EXECUTE_INIT=$(gsd_run query init.execute-phase "{phase}" ${GSD_WS:+--ws=${GSD_WS##* }})
+if [[ "$EXECUTE_INIT" == @file:* ]]; then EXECUTE_INIT=$(cat "${EXECUTE_INIT#@file:}"); fi
+for _k in phase_dir phase_number verifier_model phase_req_ids requirements_path section_manifest response_language; do
+  printf '%s=%s\n' "$_k" "$(printf '%s' "$EXECUTE_INIT" | jq -c ".${_k}")"
+done
+PHASE_NUMBER=$(printf '%s' "$EXECUTE_INIT" | jq -r '.phase_number')
 ```
-Verification is stale: covered source files changed after the verifier last ran.
 
-Blocking completion:
-verification is stale
+Read and execute `gsd-core/workflows/execute-phase/steps/verify-phase-goal.md`. If it stopped,
+stop and present its reason; otherwise re-check `verification.status` afterwards — the regenerated
+report is the only authority for the transition — before the completion predicate below:
 
-- Re-run the verifier for phase {phase} (dispatch `gsd-verifier` as in execute-phase's
-  verify_phase_goal step) to regenerate VERIFICATION.md with a fresh digest, then re-run
-  `/gsd:verify-work {phase}`
+```bash
+VERIFICATION_STATUS=$(gsd_run query verification.status "$PHASE_DIR") || { echo "verification.status refused the regenerated report — see the error above." >&2; exit 1; }
+PHASE_VERIFICATION_STATUS=$(printf '%s' "$VERIFICATION_STATUS" | jq -r '.status')
+VERIFICATION_ROUTE=$(printf '%s' "$VERIFICATION_STATUS" | jq -r '.route')
+NEXT_COMMAND=$(printf '%s' "$VERIFICATION_STATUS" | jq -r '.next_command')
 ```
 
 Otherwise, check the shared UAT-plus-verification completion predicate before transition:
 
 ```bash
-PHASE_COMPLETE=$(gsd_run phase uat-passed "{phase}" --require-verification)
+PHASE_COMPLETE=$(gsd_run phase uat-passed "{phase}" --require-verification) || { echo "phase uat-passed failed — see the error above." >&2; exit 1; }
 PHASE_COMPLETE_PASSED=$(printf '%s' "$PHASE_COMPLETE" | jq -r '.passed' 2>/dev/null || echo "false")
 PHASE_COMPLETE_BLOCKERS=$(printf '%s' "$PHASE_COMPLETE" | jq -r '.blockers[]?' 2>/dev/null || true)
 ```
@@ -708,7 +711,7 @@ All UAT tests passed, but phase advancement is blocked until canonical verificat
 Blocking completion:
 {PHASE_COMPLETE_BLOCKERS}
 
-- `/gsd:execute-phase {phase}` — regenerate execution verification
+- `$NEXT_COMMAND` — the verification owner's next command (when non-empty)
 - `/gsd:verify-work {phase}` — resume UAT if blockers remain
 ```
 

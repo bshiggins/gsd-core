@@ -121,13 +121,14 @@ DISCUSS_PARAM=""; if [[ "$ARGUMENTS" =~ (^|[[:space:]])--discuss([[:space:]]|$) 
 RESEARCH_PARAM=""; if [[ "$ARGUMENTS" =~ (^|[[:space:]])--research([[:space:]]|$) ]]; then RESEARCH_PARAM="--research"; fi
 VALIDATE_PARAM=""; if [[ "$ARGUMENTS" =~ (^|[[:space:]])--validate([[:space:]]|$) ]]; then VALIDATE_PARAM="--validate"; fi
 FULL_PARAM=""; if [[ "$ARGUMENTS" =~ (^|[[:space:]])--full([[:space:]]|$) ]]; then FULL_PARAM="--full"; fi
-INIT=$(gsd_run query init.quick "$DESCRIPTION" $DISCUSS_PARAM $RESEARCH_PARAM $VALIDATE_PARAM $FULL_PARAM)
+GSD_WS=$(echo " $ARGUMENTS" | sed -nE 's/.* --ws +([A-Za-z0-9][A-Za-z0-9._-]*).*/--ws \1/p' | head -n 1)
+INIT=$(gsd_run query init.quick ${GSD_WS:+--ws=${GSD_WS##* }} "$DESCRIPTION" $DISCUSS_PARAM $RESEARCH_PARAM $VALIDATE_PARAM $FULL_PARAM)
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
-AGENT_SKILLS_PLANNER=$(gsd_run query agent-skills gsd-planner)
-AGENT_SKILLS_EXECUTOR=$(gsd_run query agent-skills gsd-executor)
-AGENT_SKILLS_CHECKER=$(gsd_run query agent-skills gsd-plan-checker)
-AGENT_SKILLS_VERIFIER=$(gsd_run query agent-skills gsd-verifier)
-AGENT_SKILLS_RESEARCHER=$(gsd_run query agent-skills gsd-phase-researcher)
+AGENT_SKILLS_PLANNER=$(gsd_run query agent-skills gsd-planner ${GSD_WS:+--ws=${GSD_WS##* }})
+AGENT_SKILLS_EXECUTOR=$(gsd_run query agent-skills gsd-executor ${GSD_WS:+--ws=${GSD_WS##* }})
+AGENT_SKILLS_CHECKER=$(gsd_run query agent-skills gsd-plan-checker ${GSD_WS:+--ws=${GSD_WS##* }})
+AGENT_SKILLS_VERIFIER=$(gsd_run query agent-skills gsd-verifier ${GSD_WS:+--ws=${GSD_WS##* }})
+AGENT_SKILLS_RESEARCHER=$(gsd_run query agent-skills gsd-phase-researcher ${GSD_WS:+--ws=${GSD_WS##* }})
 ```
 
 Parse JSON for: `planner_model`, `executor_model`, `checker_model`, `verifier_model`, `reviewer_model`, `researcher_model`, `commit_docs`, `branch_name`, `quick_id`, `slug`, `date`, `timestamp`, `quick_dir`, `task_dir`, `roadmap_exists`, `planning_exists`, `response_language`.
@@ -443,11 +444,29 @@ if [ ! -f "$QUICK_PLAN_PATH" ]; then
     exit 42
   }
 fi
-\`\`\`
+${DISCUSS_MODE ? `QUICK_CONTEXT_PATH="${QUICK_DIR}/${quick_id}-CONTEXT.md"
+if [ ! -f "$QUICK_CONTEXT_PATH" ] && git cat-file -e "${QUICK_PLAN_COMMIT}:$QUICK_CONTEXT_PATH" 2>/dev/null; then
+  mkdir -p "$(dirname "$QUICK_CONTEXT_PATH")"
+  git show "${QUICK_PLAN_COMMIT}:$QUICK_CONTEXT_PATH" > "$QUICK_CONTEXT_PATH" || {
+    echo "FATAL: unable to materialize quick context from ${QUICK_PLAN_COMMIT}:$QUICK_CONTEXT_PATH; refusing to continue." >&2
+    exit 42
+  }
+fi
+` : ''}${RESEARCH_MODE ? `QUICK_RESEARCH_PATH="${QUICK_DIR}/${quick_id}-RESEARCH.md"
+if [ ! -f "$QUICK_RESEARCH_PATH" ] && git cat-file -e "${QUICK_PLAN_COMMIT}:$QUICK_RESEARCH_PATH" 2>/dev/null; then
+  mkdir -p "$(dirname "$QUICK_RESEARCH_PATH")"
+  git show "${QUICK_PLAN_COMMIT}:$QUICK_RESEARCH_PATH" > "$QUICK_RESEARCH_PATH" || {
+    echo "FATAL: unable to materialize quick research from ${QUICK_PLAN_COMMIT}:$QUICK_RESEARCH_PATH; refusing to continue." >&2
+    exit 42
+  }
+fi
+` : ''}\`\`\`
 ` : ''}
 
 <required_reading>
 - ${QUICK_DIR}/${quick_id}-PLAN.md (Plan)
+${DISCUSS_MODE ? '- ' + QUICK_DIR + '/' + quick_id + '-CONTEXT.md (User decisions — locked, do not revisit)' : ''}
+${RESEARCH_MODE ? '- ' + QUICK_DIR + '/' + quick_id + '-RESEARCH.md (Research findings — use to inform implementation choices)' : ''}
 - ${STATE_PATH} (Project state)
 - ./CLAUDE.md or ./.claude/CLAUDE.md (Project instructions, if exists)
 - .claude/skills/ or .agents/skills/ (Project skills, if either exists — list skills, read SKILL.md for each, follow relevant rules during implementation)
@@ -557,29 +576,17 @@ If no active code-review step hook exists, skip with message "Code review skippe
 
 **Scope files from executor's commits:**
 ```bash
-# Find the diff base: last commit before quick task started
-# Use git log to find commits referencing the quick task id, then take the parent of the oldest
-QUICK_COMMITS=$(git log --oneline --format="%H" --grep="${quick_id}" 2>/dev/null)
-if [ -n "$QUICK_COMMITS" ]; then
-  DIFF_BASE=$(echo "$QUICK_COMMITS" | tail -1)^
-  # Verify parent exists (guard against first commit in repo)
-  git rev-parse "${DIFF_BASE}" >/dev/null 2>&1 || DIFF_BASE=$(echo "$QUICK_COMMITS" | tail -1)
-else
-  # No commits found for this quick task — skip review
-  DIFF_BASE=""
-fi
-
-if [ -n "$DIFF_BASE" ]; then
-  # #4466: bound the tip at the quick task's own last commit, not HEAD --
-  # QUICK_COMMITS is already the complete, newest-first list of this task's
-  # commits, so its first line is the correct tip. An unbounded `..HEAD`
-  # picks up any later commit landed on the same tree in the window between
-  # this task's commits and this review step (worktree merge-back, a shared
-  # tree, another session) and folds it into this task's own review scope.
-  QUICK_TIP=$(echo "$QUICK_COMMITS" | head -1)
-  CHANGED_FILES=$(git diff --name-only "${DIFF_BASE}..${QUICK_TIP}" -- . ':!.planning' 2>/dev/null | tr '\n' ' ')
-else
-  CHANGED_FILES=""
+# #5164: the quick task's files come from the evaluation-scope resolver (ADR-5057 §4): the
+# UNION of the commits naming the quick task id, on THIS branch only, planning artifacts and
+# lockfiles excluded. A `base..tip` range (the #4466 bound) still folds in every unrelated
+# commit interleaved inside the task's window (worktree merge-back, a shared tree, another
+# session); the union cannot. No commits for this task => empty scope => skip review.
+QUICK_SCOPE_JSON=$(gsd_run check evaluation-scope --quick "${quick_id}" --include-files --raw 2>/dev/null)
+CHANGED_FILES=$(printf '%s' "$QUICK_SCOPE_JSON" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{process.stdout.write(JSON.parse(s).files.join(' '))}catch{}})")
+if [ -z "$CHANGED_FILES" ]; then
+  # Say WHY the scope is empty (no commits for this task, only excluded paths, or git could not be read).
+  QUICK_SCOPE_WHY=$(printf '%s' "$QUICK_SCOPE_JSON" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const v=JSON.parse(s);process.stdout.write(v.status+(v.reason?': '+v.reason:''))}catch{process.stdout.write('unresolvable: no resolver output')}})")
+  echo "Quick-task review scope is empty (${QUICK_SCOPE_WHY})."
 fi
 ```
 

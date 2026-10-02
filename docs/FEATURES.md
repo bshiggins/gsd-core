@@ -990,6 +990,12 @@ only the subtrees the phase actually changed. Each produced document carries
 `last_mapped_commit` in its YAML frontmatter so drift can be measured
 against the mapping point, not HEAD.
 
+**Staleness is measured against all seven documents (#5134):** the drift gate
+treats a directory as mapped when its path appears in any of the seven
+documents, flags modified and deleted files inside mapped directories as well
+as new structure outside them, and withholds paths that are unsafe to pass to
+the mapper. See [Post-Execute Codebase Drift Detection](post-execute-codebase-drift-detection.md).
+
 ---
 
 ### 27b. Existing Codebase Onboarding
@@ -1026,18 +1032,46 @@ against the mapping point, not HEAD.
   warn-only or spawn `gsd-codebase-mapper` with `--paths` scoped to
   affected subtrees.
 
-**What counts as drift:**
-- New directory outside mapped paths
-- New barrel export at `(packages|apps)/*/src/index.*`
-- New migration file (supabase/prisma/drizzle/src/migrations/…)
-- New route module under `routes/` or `api/`
+**What counts as drift:** additions are drift outside mapped territory;
+modifications and deletions are drift inside it.
+- New directory outside mapped paths (`new_dir`)
+- New barrel export at `(packages|apps)/*/src/index.*` (`barrel`)
+- New migration file (supabase/prisma/drizzle/src/migrations/…) (`migration`)
+- New route module under `routes/` or `api/` (`route`)
+- Modified file inside a mapped directory (`modified`; a typechange counts here)
+- Deleted file inside a mapped directory (`deleted`; a rename's old path counts here, its new path as an addition)
+
+**Why the rule is inverted.** A new directory is by definition outside what
+the map describes, so an addition is drift where the map is silent. An edit or
+deletion can only matter where the map does speak: a map that names a
+directory describes its contents, and changing or removing them makes the
+description stale. Counting modifications outside mapped territory would flag
+every ordinary edit; counting only additions, as the gate did before #5134,
+never flagged a map that went stale through edits or deletions.
+
+**Mapped territory is the whole map.** The gate reads all seven
+`.planning/codebase/*.md` documents, not only `STRUCTURE.md`. A directory is
+mapped when its path appears, at a path-component boundary, in any of them.
+`STRUCTURE.md` remains required. A document that is not a regular file or is
+larger than 1 MiB is unreadable and is reported in `documents_unreadable`
+(for `STRUCTURE.md`, the gate skips with `cannot-read-structure-md`).
+
+**Unsafe paths are withheld, not printed.** `affected_paths`, the `--paths`
+argument and the paths listed in the message pass only through the path
+allowlist (ASCII letters, digits, `_ . -`, `/`-separated, no `..`, not
+absolute). A path that fails is never interpolated into the message or the
+mapper prompt; the message states how many were withheld and
+`withheld_paths` / `withheld_count` carry them for inspection. A directory with
+a non-ASCII or space-containing name is withheld and counted rather than
+dropped silently. If no safe path remains, `auto-remap` does not spawn the
+mapper. See [`verify codebase-drift`](../CLI-TOOLS.md#verify-codebase-drift-structural-drift-of-the-codebase-map-2003-5134).
 
 **Non-blocking guarantee:** any internal failure (missing STRUCTURE.md,
 git errors, mapper spawn failure) logs a single line and the phase
 continues. Drift detection cannot fail verification.
 
 **Requirements:**
-- REQ-DRIFT-01: System MUST detect the four drift categories from `git diff
+- REQ-DRIFT-01: System MUST detect the six drift categories from `git diff
   --name-status last_mapped_commit..HEAD`
 - REQ-DRIFT-02: Action fires only when element count ≥ `workflow.drift_threshold`
 - REQ-DRIFT-03: `warn` action MUST NOT spawn any agent
@@ -3911,7 +3945,7 @@ See [Resolve verify-command path findings](how-to/resolve-verify-command-path-fi
 
 **It costs up to three bounded git calls per boundary.** Deriving `next` from the smart-entry classifier means inheriting its git signals — `git status --porcelain`, and `git log @{u}..HEAD`. Each is timeout-bounded and swallows every error, so nothing can hang or fail because of it, but a command like `phase add` did not previously touch git at all. "Invisible to the parent command" is exact about exit code and output; it is not a claim about latency.
 
-**Known limits:** an empty `phases: []` cannot be told apart from "no `ROADMAP.md`" or "roadmap unreadable" — the `1.0` schema carries no diagnostic channel, and `planning inspect` is the surface that does. A roadmap phase marked `Deferred` is reported as `pending`, because the roadmap vocabulary has four values and this contract has three; inventing a fourth wire value would break every existing reader. `phases[]` is not milestone-scoped, so a long-running project lists every phase it has ever had.
+**Known limits:** an empty `phases: []` cannot be told apart from "no `ROADMAP.md`" or "roadmap unreadable" — the `1.0` schema carries no diagnostic channel, and `planning inspect` is the surface that does. `status` is read from the roadmap's Progress-table Status cell by its leading word (prose after it is ignored): `Complete` → `complete`, `In Progress` / `Planned` → `in_progress`, and `Not started`, `Deferred` or no recognized word → `pending`. A roadmap phase marked `Deferred` is reported as `pending`, because the roadmap vocabulary has five words and this contract has three values; inventing a fourth wire value would break every existing reader. `phases[]` is not milestone-scoped, so a long-running project lists every phase it has ever had.
 
 **Reference:** [Consume the state contract](how-to/consume-the-state-contract.md) · [Consume the planning snapshot](how-to/consume-the-planning-snapshot.md)
 
