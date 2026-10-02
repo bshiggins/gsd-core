@@ -84,19 +84,19 @@ describe('bracket grammar: dependency references preserve qualified identity', (
   });
 });
 
-describe('phase checklist grammar preserves the legacy greedy match outside bracket mode', () => {
+describe('phase checklist grammar is anchored across conventions (#4982)', () => {
   const line = '- [x] Phase 1: Prepare Phase 2: handoff';
 
   function upstreamNextParse(checklistLine) {
-    const match = /-\s*\[([xX ])\]\s*.*Phase\s+(\d+(?:\.\d+)?)(?=[:\s])/i.exec(checklistLine);
+    const match = /^[ \t]*-[ \t]*\[([xX ])\][ \t]*(?:\*\*)?Phase\s+(\d+(?:\.\d+)?)(?=[:\s])/i.exec(checklistLine);
     return match
       ? { checked: match[1].toLowerCase() === 'x', bracketId: undefined, phaseToken: match[2] }
       : null;
   }
 
-  test('null, sequential, and milestone-prefixed return upstream/next phase 2', () => {
+  test('null, sequential, and milestone-prefixed return the first anchored phase 1', () => {
     const expected = upstreamNextParse(line);
-    assert.deepStrictEqual(expected, { checked: true, bracketId: undefined, phaseToken: '2' });
+    assert.deepStrictEqual(expected, { checked: true, bracketId: undefined, phaseToken: '1' });
     for (const convention of [null, 'sequential', 'milestone-prefixed']) {
       assert.deepStrictEqual(core.parsePhaseChecklistLine(line, convention), expected, String(convention));
     }
@@ -107,6 +107,16 @@ describe('phase checklist grammar preserves the legacy greedy match outside brac
       core.parsePhaseChecklistLine('- [x] [CK.02] 01: Prepare Phase 02: handoff', 'bracket'),
       { checked: true, bracketId: 'CK.02', phaseToken: '01' },
     );
+  });
+
+  test('a mid-line checkbox is rejected for every convention', () => {
+    for (const convention of [null, 'sequential', 'milestone-prefixed', 'bracket']) {
+      assert.strictEqual(core.parsePhaseChecklistLine('See - [x] Phase 1: x', convention), null, String(convention));
+    }
+  });
+
+  test('bracket identity preceded by prose is rejected', () => {
+    assert.strictEqual(core.parsePhaseChecklistLine('- [x] Done: [CK.02] 01: x', 'bracket'), null);
   });
 });
 

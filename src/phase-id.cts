@@ -397,12 +397,10 @@ type PhaseChecklistLine = {
 };
 
 /**
- * Parse one roadmap phase-checkbox row through the same grammar used by the
- * manager and destructive writers. The historical manager spelling permits
- * arbitrary presentation text (including bold markers) between the checkbox
- * and phase intro and greedily selects the last Phase-shaped intro on the row.
- * Bracket mode uses the lazy identity-aware match so title prose cannot replace
- * the leading `[CODE.MM] PP` identity. Both paths treat whitespace or a colon
+ * Parse one roadmap phase-checkbox row through the same anchored grammar used
+ * by readers and writers (#4982). The identity must be the first thing after
+ * the checkbox, tolerating only an optional `**`. Bracket mode captures the
+ * leading `[CODE.MM] PP` identity. Both paths treat whitespace or a colon
  * immediately after the phase token as the boundary. Returning semantic fields
  * keeps consumers from depending on capture-group offsets.
  */
@@ -416,9 +414,8 @@ function parsePhaseChecklistLine(
     convention,
     capturesBracketId,
   );
-  const presentation = capturesBracketId ? '.*?' : '.*';
   const pattern = new RegExp(
-    `-\\s*\\[([xX ])\\]\\s*${presentation}${intro}(${PHASE_NUMBER_TOKEN_SOURCE})`
+    `^[ \\t]*-[ \\t]*\\[([xX ])\\][ \\t]*(?:\\*\\*)?${intro}(${PHASE_NUMBER_TOKEN_SOURCE})`
       + `${OPTIONAL_PHASE_TAG_SOURCE}(?=[:\\s])`,
     'i',
   );
