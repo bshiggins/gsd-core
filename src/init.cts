@@ -2941,20 +2941,19 @@ function cmdInitManager(cwd: string, raw: boolean): void {
   // getMilestonePhaseFilter window check (which also never excluded
   // sentinels, unlike the owner).
   const _checkboxStates = new Map<string, boolean>();
+  // #4982: parsePhaseChecklistLine is line-anchored, so the phase label must
+  // be the FIRST thing after the checkbox (tolerating only an optional `**`
+  // bold marker), and a later "Phase N" in the line's prose cannot bind the
+  // checkbox. First-match-wins (`if (!_checkboxStates.has(...))` below)
+  // additionally guards against a later anchored line (e.g. a per-plan
+  // sub-entry self-titled "Phase N ...") overwriting an already-recorded
+  // phase's own (first) checkbox; anchoring alone does not fully close that
+  // "last-match-wins" composition defect.
   for (const line of content.split(/\r?\n/)) {
     const checkbox = parsePhaseChecklistLine(line, phaseIdConvention);
     if (checkbox && !_checkboxStates.has(checkbox.phaseToken)) {
       _checkboxStates.set(checkbox.phaseToken, checkbox.checked);
     }
-  // #4982: anchored (`^`, `m`) so the phase label must be the FIRST thing
-  // after the checkbox (tolerating only an optional `**` bold marker) —
-  // the prior unanchored `\s*.*` let the greedy `.*` bind to the LAST
-  // "Phase N" mentioned anywhere in the line's prose instead of the line's
-  // own phase. First-match-wins (`if (!_checkboxStates.has(...))` below)
-  // additionally guards against a later anchored line (e.g. a per-plan
-  // sub-entry self-titled "Phase N ...") overwriting an already-recorded
-  // phase's own (first) checkbox — anchoring alone does not fully close
-  // that "last-match-wins" composition defect.
   }
 
   // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
