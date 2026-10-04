@@ -20,6 +20,7 @@ import childProcess from 'node:child_process';
 import { escapeRegex } from './pattern.cjs';
 import { scanFencedBlocks } from './markdown-sectionizer.cjs';
 import { locateFrontmatterFence } from './frontmatter-fence.cjs';
+import { hostBehaviorsFor } from './runtime-name-policy.cjs';
 
 /**
  * Convert a filesystem path to POSIX form (forward slashes) by translating the
@@ -109,7 +110,10 @@ export function formatHookCommandForRuntime(command: string, opts: { platform?: 
 // path missed this guard and reintroduced the #166/#377 failure (#580).
 export function shellHookOmitsBashRunner({ platform, runtime = 'generic', isShellHook = false }: { platform?: string; runtime?: string; isShellHook?: boolean } = {}): boolean {
   const p = platform ?? process.platform;
-  return p === 'win32' && runtime === 'claude' && isShellHook;
+  // #5169: descriptor-declared (`hostBehaviors.omitBashRunnerOnWindows`). The
+  // `'generic'` default and any other non-registered label declares nothing, so
+  // it never omits the runner, exactly as before.
+  return p === 'win32' && isShellHook && hostBehaviorsFor(runtime).omitBashRunnerOnWindows === true;
 }
 
 // Builds the command string for a local-install managed `.sh` hook. Mirrors the
