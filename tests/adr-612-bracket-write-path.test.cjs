@@ -421,8 +421,11 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     const updated = run(['roadmap', 'update-plan-progress', '02'], dir);
     assert.equal(updated.plan_count, 1);
 
+    // The active directory has CONTEXT.md and no upstream artifacts; the prior
+    // milestone's decoy sorts first and has no CONTEXT.md, so a wrong pick reads
+    // no-context-md. Both drift gates share this resolver.
     const drift = run(['verify', 'context-drift', '02'], dir);
-    assert.notEqual(drift.reason, 'phase-not-found');
+    assert.equal(drift.reason, 'no-upstream-artifacts');
 
     const manager = run(['init', 'manager'], dir);
     const managed = manager.phases.find((phase) => phase.number === '02');
