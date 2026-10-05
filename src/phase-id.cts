@@ -1677,7 +1677,7 @@ const unpad = (digits: string): string => digits.replace(/^0+(?=\d)/, '');
  *   candidates (#2237).
  *
  *   TAKE `matches[0]` — `cmdPhasesList`, `cmdInitManager`, `cmdRoadmapAnalyze`,
- *   `cmdVerifySchemaDrift`, `detectVerifyFailed`. Each read a directory to
+ *   the schema-drift gate (`resolvePhaseDirByToken`), `detectVerifyFailed`. Each read a directory to
  *   DECORATE a row they are already emitting. In bracket mode those current-
  *   checkout callers pass the active project+milestone context: an exact
  *   qualified match wins, and bracket directories from other milestones are
