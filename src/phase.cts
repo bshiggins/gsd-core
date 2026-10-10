@@ -3343,10 +3343,13 @@ type BracketRenumberMapping = { oldId: BracketRoadmapPhaseId; newId: BracketRoad
  * (legacySpellingsEntangledWithBracketRemoval). Integer removal maps every phase
  * N > removed to N-1 (a sub-phase's own number is unchanged); sub-phase
  * removal maps every sub-phase S > removed within the target phase to S-1.
- * The result is sorted with decimal (sub-phase-bearing) identities before
- * bare ones, then ascending by phase/subphase, so applying every entry to
- * the same line in sequence never re-matches a value an earlier entry just
- * wrote (a lower phase's new value is never a later entry's old value).
+ * The result is sorted ascending by phase, then subphase (a bare phase before
+ * its own sub-phases), so applying every entry to the same line in sequence
+ * never re-matches a value an earlier entry just wrote: each entry's new
+ * value is one below its old value, and every entry that could still hold
+ * that value as its old value has already run. Bare and sub-phase entries
+ * are independent of each other because the rewriters never match a bare
+ * id inside a longer sub-phase id (`03` inside `03.01`).
  */
 function computeBracketRenumberMapping(
   phasesDir: string,
@@ -3381,13 +3384,7 @@ function computeBracketRenumberMapping(
     return phase > removedInt && !isSentinelPhaseId(phase);
   });
 
-  filtered.sort((a, b) => {
-    const aHasSub = a.subphase === undefined ? 0 : 1;
-    const bHasSub = b.subphase === undefined ? 0 : 1;
-    if (aHasSub !== bHasSub) return bHasSub - aHasSub;
-    if (a.phase !== b.phase) return a.phase - b.phase;
-    return (a.subphase ?? 0) - (b.subphase ?? 0);
-  });
+  filtered.sort((a, b) => (a.phase - b.phase) || ((a.subphase ?? 0) - (b.subphase ?? 0)));
 
   return filtered.map(({ phase, subphase }) => ({
     oldId: bracketPhaseId(context, phase, subphase),
@@ -7818,4 +7815,8 @@ export = {
   // bijection whose order must keep every rename destination free; exposed
   // so a property test can drive it over generated identity sets.
   _computeBracketRenumberMapping: computeBracketRenumberMapping,
+  // Test seam (#4304): the qualified-reference rewriter the ROADMAP rewrite
+  // applies once per mapping entry, so the same property can rewrite a line
+  // in mapping order.
+  _replaceQualifiedBracketReference: replaceQualifiedBracketReference,
 };

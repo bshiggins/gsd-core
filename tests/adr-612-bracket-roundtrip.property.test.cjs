@@ -48,7 +48,7 @@ const {
   parsePhaseChecklistLine,
   extractPhaseDependencyTokens,
 } = require('../gsd-core/bin/lib/phase-id.cjs');
-const { _computeBracketRenumberMapping } = require('../gsd-core/bin/lib/phase.cjs');
+const { _computeBracketRenumberMapping, _replaceQualifiedBracketReference } = require('../gsd-core/bin/lib/phase.cjs');
 
 // ─── Generators ──────────────────────────────────────────────────────────────
 
@@ -514,8 +514,10 @@ describe('#4304 bracket write-path parsers', () => {
 
   // (l) Removing one identity from a generated milestone: the mapping moves
   // exactly the later identities (later top-level phases, or later siblings
-  // of a removed sub-phase), each down by one, and applying the renames in
-  // the returned order never lands on an identity still occupied.
+  // of a removed sub-phase), each down by one, applying the renames in the
+  // returned order never lands on an identity still occupied, and rewriting
+  // one line that mentions every identity (display and dash forms) entry by
+  // entry, in that order, yields each identity's own new value exactly once.
   test('property: the bracket renumber mapping is an order-safe bijection', () => {
     const identityArb = fc.uniqueArray(
       fc.record({ phase: fc.integer({ min: 1, max: 9 }), sub: subNumArb }),
@@ -569,6 +571,22 @@ describe('#4304 bracket write-path parsers', () => {
           occupied.add(key(newId));
         }
         assert.equal(occupied.size, universe.length - 1);
+
+        // Sequential textual rewrite of one line: an entry must never
+        // re-match a value an earlier entry just wrote.
+        const spellings = (phase, sub) => [`[CK.02] ${tokenOf(phase, sub)}`, `CK.02-${tokenOf(phase, sub)}`];
+        const newOf = (id) => {
+          if (!moves(id)) return id;
+          return target.sub === undefined ? { phase: id.phase - 1, sub: id.sub } : { phase: id.phase, sub: id.sub - 1 };
+        };
+        const line = universe.flatMap((id) => spellings(id.phase, id.sub)).join(', ');
+        const expectedLine = universe.flatMap((id) => {
+          const next = newOf(id);
+          return spellings(next.phase, next.sub);
+        }).join(', ');
+        let rewritten = line;
+        for (const { oldId, newId } of mapping) rewritten = _replaceQualifiedBracketReference(rewritten, oldId, newId);
+        assert.equal(rewritten, expectedLine);
       }),
     );
   });
