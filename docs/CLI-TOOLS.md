@@ -229,6 +229,19 @@ these commands work on the active milestone's `[CODE.MM] NN` identities:
   clear the current-phase fields, then retry. A current phase qualified with
   another milestone (`[CK.01] 02`) does not count.
 
+Known limits of bracket `phase remove`, which it neither rewrites nor refuses:
+
+- A checklist row for the removed id outside the active milestone window (a
+  stale copy elsewhere in `ROADMAP.md`) is kept as written and is not
+  reported.
+- The dash form is matched case-sensitively: `CK.02-03` is renumbered and
+  reported, `ck.02-03` is neither.
+- Paths are recognized only with forward slashes. A plan or summary filename
+  after a backslash (`phases\CK.02-03-three\03-01-PLAN.md`) is renumbered as
+  a bare artifact reference, where the forward-slash form is left alone.
+- An on-disk `CK.MM-NNa` directory with no `ROADMAP.md` line is not checked;
+  the unrepresentable-id refusal reads `ROADMAP.md` only.
+
 The bracket `phase remove` JSON output adds two fields:
 
 | Field | Meaning |
