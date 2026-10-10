@@ -1640,10 +1640,15 @@ function collectSiblingWorktreePhaseNums(
     try {
       const content = fs.readFileSync(path.join(siblingPlanningDir(wt), 'ROADMAP.md'), 'utf-8');
       if (bracketContext) {
-        const siblingContext = bracketWriteContext(wt, loadConfig(wt));
+        // Resolved without `bracketWriteContext`, whose `error()` writes to
+        // stderr before throwing: a sibling with no project code or no
+        // resolvable milestone simply contributes nothing.
+        const siblingProject = loadConfig(wt)['project_code'];
+        const siblingVersion = (getMilestoneInfo(wt) as { value?: { version?: string } | null }).value?.version ?? '';
         if (
-          siblingContext.project === bracketContext.project
-          && siblingContext.milestone === bracketContext.milestone
+          typeof siblingProject === 'string'
+          && siblingProject.trim() === bracketContext.project
+          && milestoneToken(siblingVersion) === bracketContext.milestone
         ) {
           addBracketRoadmapPhaseNumbers(extractCurrentMilestone(content, wt), used);
         }

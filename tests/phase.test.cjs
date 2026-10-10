@@ -2761,6 +2761,35 @@ describe('phase add allocation vs sibling git worktrees (#3849)', () => {
     assert.strictEqual(output.directory, '.planning/phases/CK.02-03-after-sibling');
   });
 
+  // #4304: a sibling whose bracket write context cannot resolve (no
+  // project_code) contributes nothing, and resolving it must not print an
+  // error to stderr while the local phase add succeeds.
+  test('bracket allocation skips a sibling without a resolvable bracket context, with clean stderr', () => {
+    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3849-bracket-noctx-'));
+    activeDirs.push(repoDir);
+    initBracketRepo(repoDir);
+    const sha = git(['rev-parse', 'HEAD'], repoDir).trim();
+    const sibling = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3849-bracket-noctx-sib-'));
+    git(['worktree', 'add', '--detach', sibling, sha], repoDir);
+    activeWorktrees.push({ repoDir, worktreeDir: sibling });
+    fs.writeFileSync(
+      path.join(sibling, '.planning', 'config.json'),
+      JSON.stringify({ phase_id_convention: 'bracket' }, null, 2) + '\n',
+    );
+    fs.appendFileSync(
+      path.join(sibling, '.planning', 'ROADMAP.md'),
+      '\n### [CK.02] 05: sibling without a project code\n\n**Goal:** ignored\n',
+    );
+
+    const result = runNode([GSD_TOOLS_BIN, 'phase', 'add', 'Local'], { cwd: repoDir, timeoutMs: LOOP_HOOK_POINT_CLI_TIMEOUT_MS });
+
+    assert.strictEqual(result.exitCode, 0, result.stderr);
+    assert.doesNotMatch(result.stderr || '', /Error:|project_code|phase_id_convention/);
+    const output = JSON.parse(result.stdout);
+    assert.strictEqual(output.phase_number, 1);
+    assert.strictEqual(output.directory, '.planning/phases/CK.02-01-local');
+  });
+
   test('a sibling worktree without .planning/ changes nothing (fail open)', () => {
     const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-3849-failopen-'));
     activeDirs.push(repoDir);
