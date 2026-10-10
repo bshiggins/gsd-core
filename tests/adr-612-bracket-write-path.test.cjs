@@ -758,9 +758,9 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.equal(out.directory, '.planning/phases/CK.02-01-first-current');
   });
 
-  // #4304: readSubdirectories intentionally ignores symlinks,
-  // so a planted link at the next allocated bracket directory used to be
-  // invisible to allocation and then followed by the .gitkeep write.
+  // #4304: readSubdirectories intentionally ignores symlinks, so a planted
+  // link at the next allocated bracket directory is invisible to allocation;
+  // phase add refuses it rather than following it with the .gitkeep write.
   test('phase add refuses a symlink planted at the allocated bracket directory without writing through it', () => {
     const dir = project('adr-612-bracket-add-symlink-');
     writeBracketFixture(dir);
@@ -1130,8 +1130,8 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.equal(out.phase_number, '03.01');
     assert.equal(fs.existsSync(planning(dir, 'phases', 'CK.02-03.01-urgent-fix')), true);
     // The sibling milestone's own Phase Details section is byte-identical:
-    // the leaked window used to insert the new section INSIDE it, before
-    // its own '### [CK.03] 03: Future Three' heading.
+    // the new section is not inserted INSIDE it, before its own
+    // '### [CK.03] 03: Future Three' heading.
     assert.equal(fs.existsSync(planning(dir, 'phases', 'CK.03-03.01-urgent-fix')), false);
 
     const roadmap = fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8');

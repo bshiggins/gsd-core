@@ -321,12 +321,9 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(roadmap.includes('### [CK.02] 02: Two'), true);
   });
 
-  // #4304: a qualified bracket id (`CK.02-02`) used to resolve and
-  // delete its directory, then crash on `parseInt(normalized, 10)` (NaN)
-  // inside renameBracketPhases/updateRoadmapAfterBracketPhaseRemoval, leaving
-  // ROADMAP and STATE unsynced with the already-deleted directory. The fix
-  // parses the qualified form through parsePhaseId and validates it BEFORE
-  // any deletion.
+  // #4304: a qualified bracket id (`CK.02-02`) is parsed through
+  // parsePhaseId and validated BEFORE any deletion, so ROADMAP, STATE and
+  // the phase directories change together or not at all.
   test('removes a phase using its fully-qualified bracket id, identically to the bare form', () => {
     const result = runGsdTools(['phase', 'remove', 'CK.02-02', '--force'], tmpDir);
     assert.equal(result.success, true, result.error || result.output);
@@ -463,12 +460,11 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     cleanup(dirPadded);
   });
 
-  // #4304: the artifact-token rewrite (`03-01-PLAN.md` -> `02-01-PLAN.md`)
-  // ran as a global replace with no milestone qualifier, so an EARLIER
-  // milestone's own same-numbered artifact reference was corrupted even
-  // though that milestone's directory/files were never touched. The display-id
-  // rewrite (`[CK.02] 03` -> `[CK.02] 02`) was already milestone-qualified and
-  // safe; only the bare-token rewrite needed scoping.
+  // #4304: the bare artifact-token rewrite (`03-01-PLAN.md` ->
+  // `02-01-PLAN.md`) carries no milestone qualifier, so it is confined to the
+  // active milestone: an EARLIER milestone's own same-numbered artifact
+  // reference stays byte-identical. The display-id rewrite (`[CK.02] 03` ->
+  // `[CK.02] 02`) is milestone-qualified by its own spelling.
   test('confines artifact-token renumbering to the active milestone, leaving an earlier milestone byte-identical', () => {
     fs.writeFileSync(
       planning('ROADMAP.md'),
@@ -1194,12 +1190,11 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, []);
   });
 
-  // #4304: references_left_untouched re-searched the
-  // PERSISTED (already-rewritten) content for pre-renumber ids, so whenever
-  // two or more phases shift, a later phase's NEW value collides textually
-  // with an earlier phase's OLD value and every correctly-rewritten line
-  // is reported as "untouched". Computing the report from the ORIGINAL
-  // line instead makes each occurrence unambiguous.
+  // #4304: references_left_untouched is computed from each ORIGINAL line.
+  // Re-searching the PERSISTED (already-rewritten) content for pre-renumber
+  // ids would report every correctly-rewritten line as "untouched" whenever
+  // two or more phases shift, because a later phase's NEW value collides
+  // textually with an earlier phase's OLD value.
   test('does not report correctly-renumbered lines as untouched when two phases shift', () => {
     replaceSeed(
       [
@@ -2231,14 +2226,11 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
 
   // #4304: the read grammar admits BOTH `[CK.02] 02:` and the
   // labeled `[CK.02] Phase 02:` spelling (pinned at
-  // tests/adr-612-bracket-grammar.test.cjs:644), and this PR's own owned-
-  // line classifier (BRACKET_HEADING_LINE_RE et al) already admits it too —
-  // but deleteSection's predicate compared heading.text against the
-  // label-less display form with a literal startsWith, and
-  // replaceQualifiedBracketReference matched the label-less literal
-  // substring only, so a labeled removal was half-applied: rows deleted,
-  // the target's own detail section kept, later phases renamed on disk
-  // with NONE of their ROADMAP headings/rows renumbered.
+  // tests/adr-612-bracket-grammar.test.cjs:644), and the owned-line
+  // classifier (BRACKET_HEADING_LINE_RE et al) admits it too. Section
+  // deletion and qualified-reference renumbering both go through that
+  // grammar, so a labeled removal deletes the target's detail section and
+  // renumbers every later heading and row, never only the rows.
   test('removes and fully renumbers the labeled "[CK.MM] Phase NN:" bracket spelling', () => {
     replaceSeed(
       [
@@ -2308,13 +2300,12 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
   // report never omits a dangling reference to the removed identity.
   // bracketQualifiedMentionedInLine only ever recognized the label-less
   // display form ("[CK.02] 02"), which is not a substring of a labeled
-  // mention ("[CK.02] Phase 02") — so a genuinely dangling
+  // mention ("[CK.02] Phase 02"). bracketQualifiedMentionedInLine
+  // therefore accepts the SAME optional "Phase " label
+  // replaceQualifiedBracketReference rewrites, rather than a second,
+  // independent label grammar, so a dangling
   // "**Depends on:** [CK.02] Phase 02" line (a phase that depended on the
-  // just-removed phase, spelled in the labeled bracket form) survived the
-  // removal byte-identical but was never flagged. Fixed by teaching
-  // bracketQualifiedMentionedInLine the SAME optional "Phase " label
-  // replaceQualifiedBracketReference already rewrites it, rather than a
-  // second, independent label grammar.
+  // just-removed phase, spelled in the labeled bracket form) is flagged.
   test('reports a dangling labeled mention of the removed identity by its persisted line number', () => {
     replaceSeed(
       [
@@ -2721,18 +2712,14 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, []);
   });
 
-  // #4304: folded the CODE (foldBracketId) before
-  // parsePhaseId but passed the captured NUMBER through verbatim, so a
-  // non-canonical ROADMAP spelling ("[CK.02] 2:", not the canonical
-  // "[CK.02] 02:") threw parsePhaseId's own canonicality check and
-  // classified as 'other' — invisible to the heading/checklist/progress
-  // deletion, the renumber mapping, and the sub-phase guard alike, even
-  // though `roadmap get-phase`/`analyze`/`validate` and this PR's own
-  // `phase insert`/`phase add` all already treat it as a real phase. The
-  // fix canonicalizes the captured number (phaseToken, the same adapter the
-  // bare-token argument path already uses) before parsePhaseId, and makes
-  // the qualified-reference rewriter/detector match the number through the
-  // same tolerant grammar instead of the canonical literal.
+  // #4304: a non-canonical ROADMAP spelling ("[CK.02] 2:", not the
+  // canonical "[CK.02] 02:") is a real phase to `roadmap get-phase`,
+  // `analyze`, `validate`, `phase insert` and `phase add`. The owned-line
+  // classifier canonicalizes the captured number (phaseToken, the adapter
+  // the bare-token argument path uses) before parsePhaseId, and the
+  // qualified-reference rewriter and detector match the number through the
+  // same tolerant grammar, so the heading, checklist and progress deletion,
+  // the renumber mapping and the sub-phase guard all see it.
   test('removes and renumbers a non-canonically-spelled phase number, reporting the dangling old mention', () => {
     replaceSeed(
       [
@@ -2965,12 +2952,10 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.deepEqual(out.references_left_untouched, []);
   });
 
-  // #4304: the OTHER shape the same over-claim broke — a
-  // genuinely global "## Progress" table sitting AFTER a LATER milestone's
-  // own heading, with nothing recognized following it. The ownership check treated it
-  // as owned by that later milestone (or, before this fix, by whichever
-  // milestone the active one's own separate Progress heading pushed it
-  // toward), leaving the removed identity's row stale.
+  // #4304: the other shared-table shape: a genuinely global "## Progress"
+  // table sitting AFTER a LATER milestone's own heading, with nothing
+  // recognized following it, is shared territory rather than that later
+  // milestone's own, so the removed identity's row is deleted from it.
   test('deletes the removed phase\'s row from a global Progress table trailing after a later milestone', () => {
     replaceSeed(
       [
@@ -3195,9 +3180,8 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
   // match for the version), so the located window is just the Goals
   // paragraph — ending exactly where the real milestone heading begins —
   // and the target's real heading/checklist lines never fall inside it.
-  // Before this fix, `phase remove` still deleted the target's directory
-  // and renamed later ones while its heading/checklist survived in
-  // ROADMAP.md; the pre-mutation guard now refuses before touching disk.
+  // Deleting the directory there would leave its heading/checklist in
+  // ROADMAP.md, so the pre-mutation guard refuses before touching disk.
   test('refuses to remove a phase when a decoy heading carrying the active version precedes the real milestone heading', () => {
     replaceSeed(
       [

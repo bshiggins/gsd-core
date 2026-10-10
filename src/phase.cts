@@ -3801,7 +3801,7 @@ const BRACKET_OWNED_TAG_SRC = '(?:[ \\t]*\\([^)\\r\\n]{0,200}\\))?';
 // source. The owned-line expressions below compile it with that same flag;
 // compiled with no flags at all, `[ck.02] 02:`,
 // `[CK.02] phase 02:` and `[CK.02] PHASE 02:` (case variants the read
-// grammar and this PR's own `phase insert`/`phase add` already accept) would
+// grammar and `phase insert`/`phase add` accept) would
 // never classify as owned lines here. Headings and progress cells still compile
 // this source locally; checklist rows route through parsePhaseChecklistLine,
 // the same semantic reader used by init manager.
@@ -3843,8 +3843,8 @@ function phaseIdFromOwnedParts(
     // #4304: parsePhaseId's own display-form regex requires an
     // uppercase project code and checks canonicality by requiring the
     // re-rendered id to be byte-equal to the input, so a lowercase capture
-    // from the now-case-insensitive owned-line regexes above (`[ck.02]
-    // 02:`) threw here and silently classified as "not owned" — exactly the
+    // from the case-insensitive owned-line regexes above (`[ck.02]
+    // 02:`) would throw here and classify as "not owned", the
     // identity-recognition gap `foldBracketId`'s own doc comment in
     // phase-id.cts warns about ("fold before any identity operation; never
     // fold for display"). This is an identity operation.
@@ -3853,11 +3853,11 @@ function phaseIdFromOwnedParts(
     // treatment. BRACKET_OWNED_PHASE_TOKEN_CAPTURE_SRC is deliberately
     // TOLERANT (PHASE_NUMBER_TOKEN_SOURCE, the read side's own grammar) so it
     // captures "2", "002", and "02.1" — the same non-canonical spellings
-    // `roadmap get-phase`/`analyze`/`validate` and this PR's own `phase
-    // insert`/`phase add` already treat as real phases — but parsePhaseId's
+    // `roadmap get-phase`/`analyze`/`validate`, `phase insert` and
+    // `phase add` treat as real phases, but parsePhaseId's
     // canonicality check (render(parse(x)) === x) throws on every one of
-    // them, so the line silently classified as 'other' before this line's
-    // owning heading/checklist/progress row could ever be recognized.
+    // them, so without this step the line would classify as 'other' and its
+    // owning heading/checklist/progress row would never be recognized.
     // Canonicalize through the SAME adapter the bare-token argument path
     // uses (phase-id-display's `phaseToken`, per-segment pad2) BEFORE
     // parsePhaseId, exactly as `canonicalizeBracketPhaseArgument` already
@@ -4243,12 +4243,12 @@ function bracketProgressSectionRange(content: string): { start: number; end: num
  * to find where the ACTIVE milestone's own section ends).
  *
  * A version-less ADR-612 canonical milestone heading
- * (`## [CK.02] Shipped ✅`, no `vX.Y` anywhere) produced no marker at all,
- * even though the window locator itself
- * recognizes it as a milestone boundary when walking the document — so a
- * same-code shipped/active pair sharing no version token left the shipped
- * milestone's own `## Progress` heading invisible to the sandwich test, and
- * its own Complete row was deleted as if the table were shared/global.
+ * (`## [CK.02] Shipped ✅`, no `vX.Y` anywhere) is a marker because the
+ * window locator recognizes it as a milestone boundary when walking the
+ * document. Without it, a same-code shipped/active pair sharing no version
+ * token would leave the shipped milestone's own `## Progress` heading
+ * invisible to the sandwich test, and its own Complete row would be
+ * deleted as if the table were shared/global.
  *
  * Deliberately NOT merged into one "one representative per identity" pass:
  * a shipped and active milestone commonly share the SAME bracket code
@@ -4311,16 +4311,14 @@ function bracketRecognizedMilestoneMarkers(content: string): number[] {
  * DIFFERENT, non-active milestone's OWN dedicated section, rather than
  * being a genuinely document-level/shared table?
  *
- * An earlier version of this rule's answer — "the active milestone has a
- * Progress heading of its own, and this isn't it, so it must be someone
- * else's" — over-claims: a genuinely global `## Progress` that lists every
- * milestone's rows (before any milestone heading at all, or trailing after
- * the LAST recognized milestone heading with nothing bounding it on the far
- * side) is neither the active milestone's own nor any
- * OTHER milestone's dedicated section, yet that earlier rule called it
- * "owned elsewhere" merely because it wasn't the active one's.
+ * The answer "the active milestone has a Progress heading of its own, and
+ * this isn't it, so it must be someone else's" would over-claim: a
+ * genuinely global `## Progress` that lists every milestone's rows (before
+ * any milestone heading at all, or trailing after the LAST recognized
+ * milestone heading with nothing bounding it on the far side) is neither
+ * the active milestone's own nor any OTHER milestone's dedicated section.
  *
- * The fix asks a POSITIONAL question instead, over every recognized
+ * The rule asks a POSITIONAL question instead, over every recognized
  * milestone heading in the document (`bracketRecognizedMilestoneMarkers`),
  * not just the active one: is this Progress heading SANDWICHED strictly
  * between two recognized milestone headings — i.e. does it immediately
@@ -4498,10 +4496,10 @@ function bracketArtifactMentionedInLine(line: string, id: BracketRoadmapPhaseId)
 
 /**
  * #4304: computed from the ORIGINAL (pre-rewrite) line, never
- * the persisted content — re-searching the PERSISTED text for a
- * pre-renumber id is how the prior implementation produced false
- * positives whenever two or more phases shifted (a later phase's NEW
- * value collides textually with an earlier phase's OLD value).
+ * the persisted content: re-searching the PERSISTED text for a
+ * pre-renumber id produces false positives whenever two or more phases
+ * shift (a later phase's NEW value collides textually with an earlier
+ * phase's OLD value).
  *
  * The removed identity is a dangling reference by construction wherever it
  * is mentioned — nothing ever rewrites a reference to a deleted phase — so
@@ -4667,9 +4665,9 @@ function planBracketRoadmapRemoval(
   // own-table-end closes over too early) plus a document-level
   // `## Progress` section that is not itself owned by a DIFFERENT
   // milestone (legacy's own #2012 scope, plus an ownership gate),
-  // never the whole document. Without this, a same-identity row in ANY
-  // pipe table anywhere (a shipped milestone sharing the same bracket
-  // code, an unrelated Requirements Traceability table) was deleted.
+  // never the whole document, so a same-identity row in another pipe table
+  // (a shipped milestone sharing the same bracket code, an unrelated
+  // Requirements Traceability table) is never deleted.
   const headingsForOwnTable = tokenizeHeadings(content);
   const progressSectionRange = bracketProgressSectionRange(content);
   const ownProgressSectionRanges = bracketOwnProgressSectionRanges(content, ranges, headingsForOwnTable);
@@ -4721,9 +4719,9 @@ function planBracketRoadmapRemoval(
   // #4304: the referencesLeftUntouched report is computed
   // from each KEPT line's ORIGINAL (pre-rewrite) text, never the
   // persisted (already-rewritten) content: re-searching persisted text
-  // for a pre-renumber id is how the prior implementation produced false
-  // positives whenever two or more phases shifted (a later phase's NEW
-  // value collides textually with an earlier phase's OLD value). A line
+  // for a pre-renumber id produces false positives whenever two or more
+  // phases shift (a later phase's NEW value collides textually with an
+  // earlier phase's OLD value). A line
   // that gets DELETED here (the target's own owned heading/checklist/
   // progress row) can never be "left untouched": it does not exist in
   // the output at all, so only kept lines are considered.

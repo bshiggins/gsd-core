@@ -24,12 +24,12 @@
  *   (g) boundary        — non-canonical spellings are rejected, not coerced
  *   (h) boundary        — toDir's slug guards hold (empty / all-digit / type)
  *   (i) idempotency     — parse is stable under re-render
- *   (j) checklist       — parsePhaseChecklistLine reads the first identity
+ *   (j) checklist:      parsePhaseChecklistLine reads the first identity
  *                         after the checkbox and is stable under re-render
- *   (k) dependencies    — extractPhaseDependencyTokens yields each accepted
+ *   (k) dependencies:   extractPhaseDependencyTokens yields each accepted
  *                         spelling's canonical identity once, in order, and
  *                         its output re-extracts to itself
- *   (l) renumber        — the bracket renumber mapping is an order-safe
+ *   (l) renumber:       the bracket renumber mapping is an order-safe
  *                         bijection onto the identities left after removal
  */
 
@@ -374,10 +374,9 @@ describe('bracket dependency tokenizer: capture-group indexing', () => {
     // call spelling collides with prompt-injection-scan.sh's code-execution
     // pattern (DEFECT.PROMPT-INJECTION-SCAN-COLLISION). That pattern cannot
     // be narrowed without dropping real child-process hits, so the collision
-    // is avoided here rather than allowlisted — this file has no other need
+    // is avoided here rather than allowlisted: this file has no other need
     // of an exemption, and the wording above deliberately does not spell the
-    // trigger token out, the same way gsd-code-reviewer.md's defense contract
-    // was reworded instead of exempted (#4209 R2).
+    // trigger token out, as gsd-code-reviewer.md's defense contract does.
     const groupCount = ''.match(new RegExp(`${prefix}|`)).length - 1;
     assert.equal(
       groupCount,

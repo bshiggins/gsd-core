@@ -359,11 +359,10 @@ function bracketAltIntroSrcFor(idSrc: string): string {
  * write-side bracket-identity regexes (the qualified-reference replacer, the
  * qualified-mention detector) build their intro through this instead of
  * re-typing `[ \t]+` / case-sensitive brackets independently of the read
- * grammar. Hand-composed copies drift: an earlier revision shipped
- * case-sensitive, `[ \t]+`-spaced copies that silently rejected
+ * grammar. A hand-composed case-sensitive, `[ \t]+`-spaced copy would reject
  * `[ck.02] 02:`, `[CK.02] PHASE 02:`, and the no-space `[CK.02]02:`, all of
- * which `roadmap get-phase` / `roadmap analyze` / this PR's own `phase
- * insert` and `phase add` already accept as real phases).
+ * which `roadmap get-phase`, `roadmap analyze`, `phase insert` and
+ * `phase add` accept as real phases.
  */
 function bracketQualifiedIntroSrcFor(project: unknown, milestone: unknown): string {
   return bracketAltIntroSrcFor(`${escapeRegex(String(project))}\\.${escapeRegex(String(milestone))}`);
