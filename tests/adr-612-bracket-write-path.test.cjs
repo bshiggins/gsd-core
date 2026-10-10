@@ -791,7 +791,22 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.equal(out.directory, '.planning/phases/CK.02-01-foundation');
     const roadmap = fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8');
     assert.equal(roadmap.includes('### [CK.02] 01: Foundation'), true);
-    assert.equal(roadmap.includes('**Depends on:** [CK.02] 00'), true);
+    // The first phase has no predecessor: no Depends on line, never a
+    // phantom [CK.02] 00 the manager could never satisfy.
+    assert.equal(roadmap.includes('[CK.02] 00'), false);
+    assert.equal(roadmap.includes('**Depends on:**'), false);
+  });
+
+  test('phase add-batch omits the dependency line only for the first bracket phase of an empty milestone', () => {
+    const dir = project('adr-612-first-bracket-batch-');
+    writeEmptyBracketFixture(dir);
+
+    run(['phase', 'add-batch', '--descriptions', '["Foundation","Second"]'], dir);
+
+    const roadmap = fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8');
+    assert.equal(roadmap.includes('[CK.02] 00'), false);
+    assert.equal((roadmap.match(/\*\*Depends on:\*\*/g) ?? []).length, 1);
+    assert.equal(roadmap.includes('**Depends on:** [CK.02] 01'), true);
   });
 
   test('bracket convention without a project code refuses instead of falling back to legacy emit', () => {

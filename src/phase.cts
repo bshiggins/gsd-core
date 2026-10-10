@@ -1912,7 +1912,10 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
     if (bracketContext && typeof _newPhaseId === 'number') {
       const id = bracketPhaseId(bracketContext, _newPhaseId);
       const display = renderPhaseId(id);
-      const dependsOn = `\n**Depends on:** ${renderPhaseId(bracketPhaseId(bracketContext, _newPhaseId - 1))}`;
+      // The first phase of a milestone has no predecessor to depend on.
+      const dependsOn = _newPhaseId > 1
+        ? `\n**Depends on:** ${renderPhaseId(bracketPhaseId(bracketContext, _newPhaseId - 1))}`
+        : '';
       phaseEntry =
         `\n### ${display}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${id.phase} to break down)\n`;
     } else {
@@ -2090,7 +2093,9 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
       let phaseEntry: string;
       if (bracketContext && typeof newPhaseId === 'number') {
         const id = bracketPhaseId(bracketContext, newPhaseId);
-        const dependsOn = `\n**Depends on:** ${renderPhaseId(bracketPhaseId(bracketContext, newPhaseId - 1))}`;
+        const dependsOn = newPhaseId > 1
+          ? `\n**Depends on:** ${renderPhaseId(bracketPhaseId(bracketContext, newPhaseId - 1))}`
+          : '';
         phaseEntry =
           `\n### ${renderPhaseId(id)}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${id.phase} to break down)\n`;
       } else {
