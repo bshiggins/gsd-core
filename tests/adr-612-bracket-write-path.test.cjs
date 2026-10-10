@@ -911,6 +911,18 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
       assert.match(result.error, /bracket/);
       assert.match(result.error, /#5067/);
       assert.deepEqual(snapshotTree(planning(dir)), before);
+
+      // Outside the bracket convention --id and phase_naming custom keep
+      // their legacy behavior.
+      const legacyDir = project('adr-612-legacy-add-custom-id-');
+      fs.writeFileSync(
+        planning(legacyDir, 'config.json'),
+        JSON.stringify({ project_code: 'CK', phase_naming: 'custom' }, null, 2) + '\n',
+      );
+      fs.writeFileSync(planning(legacyDir, 'ROADMAP.md'), '# Roadmap\n\n## v2.0 Foundation\n');
+      const legacy = run(['phase', 'add', '--id', 'AUTH', 'Custom Auth'], legacyDir);
+      assert.equal(legacy.phase_number, 'AUTH');
+      assert.equal(legacy.directory, '.planning/phases/CK-AUTH-custom-auth');
     });
 
     test('phase add refuses phase_naming custom under the bracket convention', () => {
@@ -941,20 +953,6 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
       assert.match(result.error, /bracket/);
       assert.match(result.error, /#5067/);
       assert.deepEqual(snapshotTree(planning(dir)), before);
-    });
-
-    test('phase add --id and phase_naming custom keep their legacy behavior outside the bracket convention', () => {
-      const dir = project('adr-612-legacy-add-custom-id-');
-      fs.writeFileSync(
-        planning(dir, 'config.json'),
-        JSON.stringify({ project_code: 'CK', phase_naming: 'custom' }, null, 2) + '\n',
-      );
-      fs.writeFileSync(planning(dir, 'ROADMAP.md'), '# Roadmap\n\n## v2.0 Foundation\n');
-
-      const out = run(['phase', 'add', '--id', 'AUTH', 'Custom Auth'], dir);
-
-      assert.equal(out.phase_number, 'AUTH');
-      assert.equal(out.directory, '.planning/phases/CK-AUTH-custom-auth');
     });
   });
 

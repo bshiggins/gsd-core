@@ -4095,6 +4095,37 @@ describe('#4304 / ADR-612 bracket phase remove refuses shapes it cannot rewrite'
 
     const result = assertRefusedUnchanged(['phase', 'remove', '02', '--force'], /02a/);
     assert.match(result.error, /not representable/i);
+
+    // An unrepresentable id below the removed phase is not affected by the
+    // renumbering and does not block the removal.
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current 🚧',
+        '',
+        '- [ ] [CK.02] 01a: Early hotfix',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '',
+      ],
+      threePhases,
+    );
+    const below = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(below.success, true, below.error || below.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    assert.equal(roadmap.includes('- [ ] [CK.02] 01a: Early hotfix'), true);
+    assert.equal(roadmap.includes('### [CK.02] 02: Three'), true);
   });
 
   test('refuses when the active milestone carries a three-level phase id under the target', () => {
@@ -4129,38 +4160,6 @@ describe('#4304 / ADR-612 bracket phase remove refuses shapes it cannot rewrite'
     assert.match(result.error, /not representable/i);
   });
 
-  test('an unrepresentable id below the removed phase does not block removal', () => {
-    replaceSeed(
-      [
-        '# Roadmap',
-        '',
-        '## [CK.02] v2.0 — Current 🚧',
-        '',
-        '- [ ] [CK.02] 01a: Early hotfix',
-        '- [ ] [CK.02] 01: One',
-        '- [ ] [CK.02] 02: Two',
-        '- [ ] [CK.02] 03: Three',
-        '',
-        '### [CK.02] 01: One',
-        '**Goal:** keep',
-        '',
-        '### [CK.02] 02: Two',
-        '**Goal:** remove',
-        '',
-        '### [CK.02] 03: Three',
-        '**Goal:** renumber',
-        '',
-      ],
-      threePhases,
-    );
-
-    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
-    assert.equal(result.success, true, result.error || result.output);
-    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
-    assert.equal(roadmap.includes('- [ ] [CK.02] 01a: Early hotfix'), true);
-    assert.equal(roadmap.includes('### [CK.02] 02: Three'), true);
-  });
-
   for (const [name, currentPhase] of [['the removed phase', '02'], ['a phase the removal renumbers', '03']]) {
     test(`refuses when STATE.md names ${name} as the current phase`, () => {
       fs.writeFileSync(
@@ -4183,16 +4182,15 @@ describe('#4304 / ADR-612 bracket phase remove refuses shapes it cannot rewrite'
 
       const result = assertRefusedUnchanged(['phase', 'remove', '02', '--force'], /STATE\.md/);
       assert.match(result.error, /current phase/i);
+
+      // A current phase before the removed one is neither deleted nor
+      // renumbered, so it does not block the removal.
+      fs.writeFileSync(
+        planning('STATE.md'),
+        '---\nmilestone: v2.0\ncurrent_phase: "01"\n---\n\n# State\n\n**Current Phase:** 01\n**Status:** Planning\n',
+      );
+      const earlier = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+      assert.equal(earlier.success, true, earlier.error || earlier.output);
     });
   }
-
-  test('a STATE.md current phase before the removed phase does not block removal', () => {
-    fs.writeFileSync(
-      planning('STATE.md'),
-      '---\nmilestone: v2.0\ncurrent_phase: "01"\n---\n\n# State\n\n**Current Phase:** 01\n**Status:** Planning\n',
-    );
-
-    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
-    assert.equal(result.success, true, result.error || result.output);
-  });
 });
