@@ -76,6 +76,8 @@ function documentedQueryNames(files) {
   return [...new Map(names.map((parts) => [parts.join(' '), parts])).values()];
 }
 
+const PRE_HUB_PHASE_SUBCOMMANDS = ['mvp-mode', 'tdd-applicable'];
+
 let runtimeRegisteredNamesCache;
 
 function runtimeRegisteredNames() {
@@ -88,8 +90,11 @@ function runtimeRegisteredNames() {
   const capabilities = require('../gsd-core/bin/lib/capability-registry.cjs');
   for (const name of Object.keys(capabilities.commandFamilies)) registered.add(name);
   const phase = require('../gsd-core/bin/lib/phase.cjs');
-  for (const handler of Object.keys(phase).filter((name) => /^cmdPhase[A-Z]/.test(name))) {
-    const subcommand = handler.slice('cmdPhase'.length).replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
+  // Only the two pre-hub phase subcommands are query verbs; the other cmdPhase*
+  // exports (plan-index, add, ...) are not documented query targets.
+  for (const subcommand of PRE_HUB_PHASE_SUBCOMMANDS) {
+    const handler = `cmdPhase${subcommand.replace(/(^|-)([a-z])/g, (_, __, c) => c.toUpperCase())}`;
+    assert.equal(typeof phase[handler], 'function', `phase.cjs must export ${handler}`);
     registered.add(`phase.${subcommand}`);
   }
   for (const value of Object.values(commandAliases)) {
@@ -190,12 +195,16 @@ test('a bad subcommand under a registered non-family root is rejected', () => {
     content: [
       'gsd-tools query frontmatter.no-such-subcommand',
       'gsd-tools query worktree.no-such-subcommand',
+      'gsd-tools query phase.plan-index',
+      'gsd-tools query phase.mvp-mode',
+      'gsd-tools query phase.tdd-applicable',
       'gsd-tools query frontmatter.get',
       'gsd-tools query worktree.base-check',
     ].join('\n'),
   }], registered), [
     'tests/synthetic-query-contract.md: frontmatter.no-such-subcommand',
     'tests/synthetic-query-contract.md: worktree.no-such-subcommand',
+    'tests/synthetic-query-contract.md: phase.plan-index',
   ]);
 });
 
