@@ -4890,10 +4890,18 @@ function stateCurrentPhaseAffectedByBracketRemoval(
   const fm = frontmatterMod.extractFrontmatter(rawState, statePath) as Record<string, unknown>;
   const current = stateMod.resolveCurrentPhaseId(fm, frontmatterMod.stripFrontmatter(rawState));
   if (current === null || current === undefined) return null;
-  const match = /^(?:\[[^\]]+\][ \t]*)?(\d+)(?:\.(\d+))?$/.exec(String(current).trim());
+  const match = /^(?:\[([A-Za-z][A-Za-z0-9_]*)\.(\d+)\][ \t]*)?(\d+)(?:\.(\d+))?$/.exec(String(current).trim());
   if (!match) return null;
-  const phase = Number(match[1]);
-  const subphase = match[2] === undefined ? undefined : Number(match[2]);
+  // A current phase qualified with another project or milestone is not the
+  // active milestone's phase, whatever its number.
+  if (
+    match[1] !== undefined
+    && (match[1].toUpperCase() !== targetId.project || Number(match[2]) !== Number(targetId.milestone))
+  ) {
+    return null;
+  }
+  const phase = Number(match[3]);
+  const subphase = match[4] === undefined ? undefined : Number(match[4]);
   const sameNumber = (id: BracketRoadmapPhaseId): boolean =>
     Number(id.phase) === phase
     && (id.subphase === undefined ? subphase === undefined : Number(id.subphase) === subphase);
@@ -5164,9 +5172,11 @@ function cmdPhaseRemove(
     const currentPhase = stateCurrentPhaseAffectedByBracketRemoval(cwd, targetId, bracketMapping);
     if (currentPhase !== null) {
       error(
-        `Cannot remove phase ${normalized}: STATE.md names phase ${currentPhase} as the current phase, `
-        + 'and this removal deletes or renumbers it while phase remove leaves the current-phase fields unchanged. '
-        + 'Move the current phase to an earlier phase first, then retry.',
+        `Cannot remove phase ${renderPhaseId(targetId)}: STATE.md's current phase is ${currentPhase}, which this `
+        + 'removal deletes or renumbers, and phase remove does not rewrite the current-phase fields. '
+        + 'Bracket phase remove deletes only phases after the current phase. To remove this one, point STATE.md\'s '
+        + `current phase at a phase before ${renderPhaseId(targetId)}, or, when there is none, clear the current-phase `
+        + 'fields (frontmatter current_phase, the Current Phase field and the Current Position Phase line), then retry.',
       );
     }
   }

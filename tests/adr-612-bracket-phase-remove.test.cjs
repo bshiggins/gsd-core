@@ -4160,6 +4160,82 @@ describe('#4304 / ADR-612 bracket phase remove refuses shapes it cannot rewrite'
     assert.match(result.error, /not representable/i);
   });
 
+  function writeState(currentPhase) {
+    fs.writeFileSync(
+      planning('STATE.md'),
+      [
+        '---',
+        'milestone: v2.0',
+        `current_phase: "${currentPhase}"`,
+        '---',
+        '',
+        '# State',
+        '',
+        `**Current Phase:** ${currentPhase}`,
+        '**Status:** Planning',
+        '',
+      ].join('\n'),
+    );
+  }
+
+  test('removing phase 1 while it is the current phase refuses with a remedy that phase 1 can satisfy', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 Current 🚧',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** renumber',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+      ],
+    );
+    writeState('01');
+
+    const result = assertRefusedUnchanged(['phase', 'remove', '1', '--force'], /STATE\.md/);
+    assert.match(result.error, /current phase is 01/);
+    assert.match(result.error, /\[CK\.02\] 01/);
+    assert.match(result.error, /only phases after the current phase/i);
+    assert.match(result.error, /clear/i);
+    assert.doesNotMatch(result.error, /Move the current phase to an earlier phase first/);
+  });
+
+  test('a STATE.md current phase qualified with a prior milestone does not block removal', () => {
+    writeState('[CK.01] 02');
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+
+    // The same number qualified with the active milestone still refuses.
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 Current 🚧',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+      ],
+      [
+        ['CK.02-01-one', []],
+        ['CK.02-02-two', []],
+      ],
+    );
+    writeState('[CK.02] 02');
+    assertRefusedUnchanged(['phase', 'remove', '02', '--force'], /STATE\.md/);
+  });
+
   for (const [name, currentPhase] of [['the removed phase', '02'], ['a phase the removal renumbers', '03']]) {
     test(`refuses when STATE.md names ${name} as the current phase`, () => {
       fs.writeFileSync(
