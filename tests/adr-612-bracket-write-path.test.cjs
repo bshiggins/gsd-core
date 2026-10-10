@@ -872,6 +872,77 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     return snapshot;
   }
 
+  // #4304: under the bracket convention a supplied phase id and
+  // phase_naming "custom" have no write semantics yet (their precedence is
+  // the #5067 ruling). The writers refuse both before any write instead of
+  // discarding the id or overriding the naming mode.
+  describe('custom phase ids under the bracket convention refuse before any write', () => {
+    function writeCustomNamingConfig(dir) {
+      fs.writeFileSync(
+        planning(dir, 'config.json'),
+        JSON.stringify({ project_code: 'CK', phase_id_convention: 'bracket', phase_naming: 'custom' }, null, 2) + '\n',
+      );
+    }
+
+    test('phase add --id refuses under the bracket convention', () => {
+      const dir = project('adr-612-bracket-add-custom-id-');
+      writeBracketFixture(dir);
+      const before = snapshotTree(planning(dir));
+
+      const result = runGsdTools(['phase', 'add', '--id', 'AUTH', 'Custom Auth'], dir);
+
+      assert.equal(result.success, false, result.output);
+      assert.match(result.error, /--id/);
+      assert.match(result.error, /bracket/);
+      assert.match(result.error, /#5067/);
+      assert.deepEqual(snapshotTree(planning(dir)), before);
+    });
+
+    test('phase add refuses phase_naming custom under the bracket convention', () => {
+      const dir = project('adr-612-bracket-add-custom-naming-');
+      writeBracketFixture(dir);
+      writeCustomNamingConfig(dir);
+      const before = snapshotTree(planning(dir));
+
+      const result = runGsdTools(['phase', 'add', 'Custom Auth'], dir);
+
+      assert.equal(result.success, false, result.output);
+      assert.match(result.error, /phase_naming/);
+      assert.match(result.error, /bracket/);
+      assert.match(result.error, /#5067/);
+      assert.deepEqual(snapshotTree(planning(dir)), before);
+    });
+
+    test('phase add-batch refuses phase_naming custom under the bracket convention', () => {
+      const dir = project('adr-612-bracket-batch-custom-naming-');
+      writeBracketFixture(dir);
+      writeCustomNamingConfig(dir);
+      const before = snapshotTree(planning(dir));
+
+      const result = runGsdTools(['phase', 'add-batch', '--descriptions', '["Custom Auth","Custom Billing"]'], dir);
+
+      assert.equal(result.success, false, result.output);
+      assert.match(result.error, /phase_naming/);
+      assert.match(result.error, /bracket/);
+      assert.match(result.error, /#5067/);
+      assert.deepEqual(snapshotTree(planning(dir)), before);
+    });
+
+    test('phase add --id and phase_naming custom keep their legacy behavior outside the bracket convention', () => {
+      const dir = project('adr-612-legacy-add-custom-id-');
+      fs.writeFileSync(
+        planning(dir, 'config.json'),
+        JSON.stringify({ project_code: 'CK', phase_naming: 'custom' }, null, 2) + '\n',
+      );
+      fs.writeFileSync(planning(dir, 'ROADMAP.md'), '# Roadmap\n\n## v2.0 Foundation\n');
+
+      const out = run(['phase', 'add', '--id', 'AUTH', 'Custom Auth'], dir);
+
+      assert.equal(out.phase_number, 'AUTH');
+      assert.equal(out.directory, '.planning/phases/CK-AUTH-custom-auth');
+    });
+  });
+
   test('phase insert finds the target heading in the Phase Details range across an intervening sibling milestone', () => {
     const dir = project('adr-612-bracket-insert-details-');
     writeConfig(dir, 'bracket');

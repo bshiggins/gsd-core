@@ -1715,6 +1715,35 @@ function assertPhaseDirectoryDestinationSafe(
   }
 }
 
+/**
+ * #4304: the bracket writers mint every identity from the milestone's own
+ * numbering. A caller-supplied `--id` or `phase_naming: "custom"` has no
+ * bracket write semantics yet: #5067 owns their precedence (a supplied id is
+ * validated against the resolved convention, "custom" keeps bypassing
+ * generation). Until it lands, refuse before any write rather than discard
+ * the id or override the naming mode.
+ */
+function assertBracketGeneratedIdentity(
+  command: string,
+  config: Record<string, unknown>,
+  customId?: string | null,
+): void {
+  if (customId) {
+    error(
+      `${command}: --id ${JSON.stringify(customId)} is not supported under phase_id_convention "bracket"; ` +
+        'bracket phase identities are generated from the active milestone. ' +
+        'Custom id precedence under the bracket convention lands with #5067.',
+    );
+  }
+  if (config['phase_naming'] === 'custom') {
+    error(
+      `${command}: phase_naming "custom" is not supported under phase_id_convention "bracket"; ` +
+        'bracket phase identities are generated from the active milestone. ' +
+        'Custom naming precedence under the bracket convention lands with #5067.',
+    );
+  }
+}
+
 function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: string): void {
   if (!description) {
     error('description required for phase add');
@@ -1729,6 +1758,7 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
 
   const slug = generateSlugInternal(description) || '';
   const convention = resolvePhaseIdConvention(cwd);
+  if (convention === 'bracket') assertBracketGeneratedIdentity('phase add', config, customId);
   const bracketContext = convention === 'bracket' ? bracketWriteContext(cwd, config) : null;
 
   const { newPhaseId, dirName } = withPlanningLock(cwd, () => {
@@ -1896,6 +1926,7 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
   const projectCode = (config.project_code as string) || '';
   const prefix = projectCode ? `${projectCode}-` : '';
   const convention = resolvePhaseIdConvention(cwd);
+  if (convention === 'bracket') assertBracketGeneratedIdentity('phase add-batch', config);
   const bracketContext = convention === 'bracket' ? bracketWriteContext(cwd, config) : null;
 
   const results = withPlanningLock(cwd, () => {
