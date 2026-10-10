@@ -4698,6 +4698,26 @@ function planBracketRoadmapRemoval(
     return enclosing.length > 0 && enclosing[enclosing.length - 1].ownedElsewhere;
   };
 
+  // A row is a Progress-table row only when the nearest heading above it is
+  // a Progress-titled heading, a phase heading (the bare table that follows
+  // the phase list), or the milestone or details heading that opens the
+  // window. Any other heading, at any level, opens a different table (a
+  // phase-keyed Requirements Traceability table), whose rows are never
+  // deleted: a row keyed by the removed identity there refuses the removal.
+  const windowAnchors = new Set<number>(
+    ranges ? [ranges.primary.start, ...(ranges.details ? [ranges.details.start] : [])] : [],
+  );
+  const nearestHeadingKeepsProgressTable = (lineStart: number): boolean => {
+    let nearest: HeadingToken | undefined;
+    for (const heading of headingsForOwnTable) {
+      if (heading.offset >= lineStart) break;
+      nearest = heading;
+    }
+    if (!nearest || windowAnchors.has(nearest.offset)) return true;
+    if (BRACKET_PROGRESS_HEADING_TITLE_RE.test(nearest.text.trim())) return true;
+    return classifyBracketOwnedLine('#'.repeat(nearest.level) + ' ' + nearest.text).kind === 'heading';
+  };
+
   // #4304: the referencesLeftUntouched report is computed
   // from each KEPT line's ORIGINAL (pre-rewrite) text, never the
   // persisted (already-rewritten) content: re-searching persisted text
@@ -4721,10 +4741,11 @@ function planBracketRoadmapRemoval(
       continue;
     }
     const owned = classifyBracketOwnedLine(line.text);
-    const inMilestoneOwnTable = owned.kind === 'progress'
+    const underProgressTableHeading = owned.kind === 'progress' && nearestHeadingKeepsProgressTable(line.start);
+    const inMilestoneOwnTable = underProgressTableHeading
       && (lineStartsInMilestoneOwnTable(content, line.start, ranges, headingsForOwnTable)
         || ownProgressSectionRanges.some((r) => line.start >= r.start && line.start < r.end));
-    const inProgressSection = owned.kind === 'progress' && Boolean(
+    const inProgressSection = underProgressTableHeading && Boolean(
       progressSectionRange
       && !progressSectionOwnedElsewhere
       && line.start >= progressSectionRange.start

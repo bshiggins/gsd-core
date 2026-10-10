@@ -4030,40 +4030,42 @@ describe('#4304 / ADR-612 bracket phase remove refuses shapes it cannot rewrite'
     assert.match(result.error, /\| \[CK\.02\] 02 \| 0\/1 \| Shared \|/);
   });
 
-  test('refuses when a phase-keyed traceability row for the target would survive under a level-2 heading', () => {
-    replaceSeed(
-      [
-        '# Roadmap',
-        '',
-        '## [CK.02] v2.0 — Current 🚧',
-        '',
-        '- [ ] [CK.02] 01: One',
-        '- [ ] [CK.02] 02: Two',
-        '- [ ] [CK.02] 03: Three',
-        '',
-        '### [CK.02] 01: One',
-        '**Goal:** keep',
-        '',
-        '### [CK.02] 02: Two',
-        '**Goal:** remove',
-        '',
-        '### [CK.02] 03: Three',
-        '**Goal:** renumber',
-        '',
-        '## Requirements Traceability',
-        '',
-        '| Phase | Requirement | Status |',
-        '| --- | --- | --- |',
-        '| [CK.02] 02 | REQ-07 | Open |',
-        '| [CK.02] 03 | REQ-08 | Open |',
-        '',
-      ],
-      threePhases,
-    );
+  for (const level of [2, 3]) {
+    test(`refuses when a phase-keyed traceability row for the target would survive under a level-${level} heading`, () => {
+      replaceSeed(
+        [
+          '# Roadmap',
+          '',
+          '## [CK.02] v2.0 — Current 🚧',
+          '',
+          '- [ ] [CK.02] 01: One',
+          '- [ ] [CK.02] 02: Two',
+          '- [ ] [CK.02] 03: Three',
+          '',
+          '### [CK.02] 01: One',
+          '**Goal:** keep',
+          '',
+          '### [CK.02] 02: Two',
+          '**Goal:** remove',
+          '',
+          '### [CK.02] 03: Three',
+          '**Goal:** renumber',
+          '',
+          `${'#'.repeat(level)} Requirements Traceability`,
+          '',
+          '| Phase | Requirement | Status |',
+          '| --- | --- | --- |',
+          '| [CK.02] 02 | REQ-07 | Open |',
+          '| [CK.02] 03 | REQ-08 | Open |',
+          '',
+        ],
+        threePhases,
+      );
 
-    const result = assertRefusedUnchanged(['phase', 'remove', '02', '--force'], /table row/i);
-    assert.match(result.error, /REQ-07/);
-  });
+      const result = assertRefusedUnchanged(['phase', 'remove', '02', '--force'], /table row/i);
+      assert.match(result.error, /REQ-07/);
+    });
+  }
 
   test('refuses when the active milestone carries a letter-suffixed phase id the removal would misattribute', () => {
     replaceSeed(

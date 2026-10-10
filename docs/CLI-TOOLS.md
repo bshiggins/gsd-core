@@ -212,6 +212,12 @@ these commands work on the active milestone's `[CODE.MM] NN` identities:
 
 - the phase is outside the active milestone, has executed plans (without
   `--force`) or live sub-phases, or resolves only to legacy-spelled artifacts;
+- a pipe-table row keyed by the removed id would survive outside the
+  milestone's own Progress tables: a shared Progress table the rewrite cannot
+  attribute, or any other phase-keyed table (for example a Requirements
+  Traceability table) under a heading of any level. A Progress-table row is
+  one whose nearest heading is a Progress-titled heading, a phase heading or
+  the milestone heading itself;
 - a phase id in the active milestone, such as `02a`, is one the bracket grammar
   cannot represent and the removal would renumber it;
 - the `STATE.md` current phase (frontmatter `current_phase`, the
