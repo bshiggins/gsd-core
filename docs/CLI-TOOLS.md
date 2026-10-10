@@ -202,17 +202,26 @@ these commands work on the active milestone's `[CODE.MM] NN` identities:
   two-digit form (`02.03`, not `2.3`). The legacy `999` backlog parent keeps
   its upstream spelling.
 - `phase remove <phase>` accepts a bare number (`2`, `02`), a qualified id
-  (`CK.02-02`, `CK.02-01.01`) or the display form (`[CK.02] 02`). It refuses,
-  before anything is deleted or renamed, when the phase is outside the active
-  milestone, has executed plans (without `--force`) or live sub-phases,
-  resolves only to legacy-spelled artifacts, or when the rewrite could not
-  leave `ROADMAP.md` and `STATE.md` consistent (for example a table row keyed
-  by the removed id outside the milestone's own Progress tables, a phase id
-  such as `02a` the bracket grammar cannot represent, or a `STATE.md` current
-  phase the removal deletes or renumbers). Otherwise it deletes the phase,
-  renumbers the milestone's later phases and sub-phases on disk and in
-  `ROADMAP.md` from one mapping, and leaves shipped and archived history
-  byte-identical.
+  (`CK.02-02`, `CK.02-01.01`) or the display form (`[CK.02] 02`). It deletes
+  the phase, renumbers the milestone's later phases and sub-phases on disk and
+  in `ROADMAP.md` from one mapping, and leaves shipped and archived history
+  byte-identical. It refuses, before anything is deleted or renamed, in the
+  cases listed below.
+
+`phase remove` refuses, with nothing changed, when:
+
+- the phase is outside the active milestone, has executed plans (without
+  `--force`) or live sub-phases, or resolves only to legacy-spelled artifacts;
+- a phase id in the active milestone, such as `02a`, is one the bracket grammar
+  cannot represent and the removal would renumber it;
+- the `STATE.md` current phase (frontmatter `current_phase`, the
+  `Current Phase` field, or the Current Position `Phase:` line, read in that
+  order) is the removed phase or a phase the removal renumbers, that is, the
+  target is the current phase or any phase before it. Bracket `phase remove` deletes only phases after the current phase, because
+  it does not rewrite the current-phase fields. To remove such a phase, point
+  the current phase at a phase before the target, or, when there is none,
+  clear the current-phase fields, then retry. A current phase qualified with
+  another milestone (`[CK.01] 02`) does not count.
 
 The bracket `phase remove` JSON output adds two fields:
 
