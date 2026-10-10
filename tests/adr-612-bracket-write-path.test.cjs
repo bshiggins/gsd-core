@@ -943,6 +943,72 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     });
   });
 
+  // #4304: a decoy heading carrying the active version token ahead of the
+  // real milestone heading mislocates the read-side window. phase add and
+  // add-batch refuse before any write instead of appending the new phase
+  // into the decoy section.
+  describe('phase add refuses a mislocated milestone window before any write', () => {
+    function writeDecoyFixture(dir, phaseLines) {
+      writeConfig(dir, 'bracket');
+      fs.writeFileSync(planning(dir, 'STATE.md'), '---\nmilestone: v2.0\n---\n');
+      fs.writeFileSync(
+        planning(dir, 'ROADMAP.md'),
+        [
+          '# Roadmap',
+          '',
+          '## Goals for v2.0',
+          '',
+          'Ship the thing.',
+          '',
+          '## [CK.02] v2.0 — Current 🚧',
+          '',
+          ...phaseLines,
+        ].join('\n'),
+      );
+    }
+
+    for (const [name, args] of [
+      ['phase add', ['phase', 'add', 'Three']],
+      ['phase add-batch', ['phase', 'add-batch', '--descriptions', '["Three","Four"]']],
+    ]) {
+      test(`${name} refuses when the window lands on a decoy heading before the milestone's phases`, () => {
+        const dir = project('adr-612-bracket-add-decoy-');
+        writeDecoyFixture(dir, [
+          '- [ ] [CK.02] 01: One',
+          '- [ ] [CK.02] 02: Two',
+          '',
+          '### [CK.02] 01: One',
+          '**Goal:** keep',
+          '',
+          '### [CK.02] 02: Two',
+          '**Goal:** keep',
+          '',
+        ]);
+        fs.mkdirSync(planning(dir, 'phases', 'CK.02-01-one'), { recursive: true });
+        const before = snapshotTree(planning(dir));
+
+        const result = runGsdTools(args, dir);
+
+        assert.equal(result.success, false, result.output);
+        assert.match(result.error, /Goals for v2\.0/);
+        assert.match(result.error, /\[CK\.02\] v2\.0/);
+        assert.deepEqual(snapshotTree(planning(dir)), before);
+      });
+    }
+
+    test('phase add refuses when the window lands on a decoy heading before an empty milestone', () => {
+      const dir = project('adr-612-bracket-add-decoy-empty-');
+      writeDecoyFixture(dir, ['']);
+      const before = snapshotTree(planning(dir));
+
+      const result = runGsdTools(['phase', 'add', 'First'], dir);
+
+      assert.equal(result.success, false, result.output);
+      assert.match(result.error, /Goals for v2\.0/);
+      assert.deepEqual(snapshotTree(planning(dir)), before);
+    });
+  });
+
   test('phase insert finds the target heading in the Phase Details range across an intervening sibling milestone', () => {
     const dir = project('adr-612-bracket-insert-details-');
     writeConfig(dir, 'bracket');

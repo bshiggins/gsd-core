@@ -7542,6 +7542,9 @@ export = {
   cmdStateBeginPhase,
   cmdStatePlannedPhase,
   cmdStateCompletePhase,
+  // #4304: the canonical write-path current-phase ladder, read by the bracket
+  // `phase remove` refusal before it deletes or renumbers that phase.
+  resolveCurrentPhaseId,
   cmdStateValidate,
   cmdStateSync,
   cmdStatePrune,

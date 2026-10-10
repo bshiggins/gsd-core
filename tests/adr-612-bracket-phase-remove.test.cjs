@@ -1574,7 +1574,6 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
         '| Phase | Requirement | Status |',
         '| --- | --- | --- |',
         '| [CK.01] 02 | REQ-01 | Done |',
-        '| [CK.02] 02 | REQ-07 | Open |',
         '| [CK.02] 03 | REQ-08 | Open |',
         '',
       ],
@@ -1602,11 +1601,10 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(roadmap.includes('| [CK.02] 03 | 0/1 | Planned |'), false);
     assert.equal((roadmap.match(/^\| \[CK\.02\] 02 \| 0\/1 \| Planned \|$/gm) ?? []).length, 1);
 
-    // The Requirements Traceability table is not a Progress table: the
-    // dangling REQ-07 row (naming the just-removed identity) survives
-    // byte-identical, and REQ-08's identity is renumbered like any other
-    // qualified reference — its ROW is never a deletion candidate.
-    assert.equal(roadmap.includes('| [CK.02] 02 | REQ-07 | Open |'), true);
+    // The Requirements Traceability table is not a Progress table: REQ-08's
+    // identity is renumbered like any other qualified reference and its ROW
+    // is never a deletion candidate. A row keyed by the removed identity
+    // there refuses the removal instead (see the refusal suite below).
     assert.equal(roadmap.includes('| [CK.02] 03 | REQ-08 | Open |'), false);
     assert.equal(roadmap.includes('| [CK.02] 02 | REQ-08 | Open |'), true);
     assert.equal(roadmap.includes('| [CK.01] 02 | REQ-01 | Done |'), true);
@@ -3961,5 +3959,240 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal((roadmap.match(/^\| \[CK\.02\] 02 \|/gm) ?? []).length, 2);
     assert.equal((roadmap.match(/^\| \[CK\.02\] 03 \|/gm) ?? []).length, 0);
     assert.deepEqual(out.references_left_untouched, []);
+  });
+});
+
+// #4304: shapes the removal rewrite cannot rewrite correctly refuse before
+// any mutation, leaving the planning tree byte-identical, instead of
+// producing a duplicated or misattributed identity.
+describe('#4304 / ADR-612 bracket phase remove refuses shapes it cannot rewrite', () => {
+  beforeEach(() => {
+    tmpDir = createTempProject('adr-612-remove-refuse-');
+    seed();
+  });
+  afterEach(() => cleanup(tmpDir));
+
+  function assertRefusedUnchanged(args, pattern) {
+    const before = snapshotTree(planning());
+    const result = runGsdTools(args, tmpDir);
+    assert.equal(result.success, false, result.output);
+    assert.match(result.error, pattern);
+    assert.deepEqual(snapshotTree(planning()), before);
+    return result;
+  }
+
+  const threePhases = [
+    ['CK.02-01-one', []],
+    ['CK.02-02-two', []],
+    ['CK.02-03-three', []],
+  ];
+
+  test('refuses when a shared Progress row for the target would survive beside a level-2 own Progress heading', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current 🚧',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '',
+        '## Progress (v2.0)',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] 01 | 0/1 | Planned |',
+        '| [CK.02] 02 | 0/1 | Planned |',
+        '| [CK.02] 03 | 0/1 | Planned |',
+        '',
+        '## Progress',
+        '',
+        '| Phase | Plans | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] 02 | 0/1 | Shared |',
+        '| [CK.02] 03 | 0/1 | Shared |',
+        '',
+      ],
+      threePhases,
+    );
+
+    const result = assertRefusedUnchanged(['phase', 'remove', '02', '--force'], /table row/i);
+    assert.match(result.error, /\| \[CK\.02\] 02 \| 0\/1 \| Shared \|/);
+  });
+
+  test('refuses when a phase-keyed traceability row for the target would survive under a level-2 heading', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current 🚧',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '',
+        '## Requirements Traceability',
+        '',
+        '| Phase | Requirement | Status |',
+        '| --- | --- | --- |',
+        '| [CK.02] 02 | REQ-07 | Open |',
+        '| [CK.02] 03 | REQ-08 | Open |',
+        '',
+      ],
+      threePhases,
+    );
+
+    const result = assertRefusedUnchanged(['phase', 'remove', '02', '--force'], /table row/i);
+    assert.match(result.error, /REQ-07/);
+  });
+
+  test('refuses when the active milestone carries a letter-suffixed phase id the removal would misattribute', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current 🚧',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 02a: Hotfix',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 02a: Hotfix',
+        '**Goal:** not bracket-representable',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '',
+      ],
+      threePhases,
+    );
+
+    const result = assertRefusedUnchanged(['phase', 'remove', '02', '--force'], /02a/);
+    assert.match(result.error, /not representable/i);
+  });
+
+  test('refuses when the active milestone carries a three-level phase id under the target', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current 🚧',
+        '',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 02.01.01: Deep',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 02.01.01: Deep',
+        '**Goal:** not bracket-representable',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '',
+      ],
+      threePhases,
+    );
+
+    const result = assertRefusedUnchanged(['phase', 'remove', '02', '--force'], /02\.01\.01/);
+    assert.match(result.error, /not representable/i);
+  });
+
+  test('an unrepresentable id below the removed phase does not block removal', () => {
+    replaceSeed(
+      [
+        '# Roadmap',
+        '',
+        '## [CK.02] v2.0 — Current 🚧',
+        '',
+        '- [ ] [CK.02] 01a: Early hotfix',
+        '- [ ] [CK.02] 01: One',
+        '- [ ] [CK.02] 02: Two',
+        '- [ ] [CK.02] 03: Three',
+        '',
+        '### [CK.02] 01: One',
+        '**Goal:** keep',
+        '',
+        '### [CK.02] 02: Two',
+        '**Goal:** remove',
+        '',
+        '### [CK.02] 03: Three',
+        '**Goal:** renumber',
+        '',
+      ],
+      threePhases,
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
+    const roadmap = fs.readFileSync(planning('ROADMAP.md'), 'utf8');
+    assert.equal(roadmap.includes('- [ ] [CK.02] 01a: Early hotfix'), true);
+    assert.equal(roadmap.includes('### [CK.02] 02: Three'), true);
+  });
+
+  for (const [name, currentPhase] of [['the removed phase', '02'], ['a phase the removal renumbers', '03']]) {
+    test(`refuses when STATE.md names ${name} as the current phase`, () => {
+      fs.writeFileSync(
+        planning('STATE.md'),
+        [
+          '---',
+          'milestone: v2.0',
+          `current_phase: "${currentPhase}"`,
+          '---',
+          '',
+          '# State',
+          '',
+          `**Current Phase:** ${currentPhase}`,
+          `**Current focus:** [CK.02] ${currentPhase} — Work`,
+          '**Status:** Planning',
+          '**Last Activity:** 2026-09-01',
+          '',
+        ].join('\n'),
+      );
+
+      const result = assertRefusedUnchanged(['phase', 'remove', '02', '--force'], /STATE\.md/);
+      assert.match(result.error, /current phase/i);
+    });
+  }
+
+  test('a STATE.md current phase before the removed phase does not block removal', () => {
+    fs.writeFileSync(
+      planning('STATE.md'),
+      '---\nmilestone: v2.0\ncurrent_phase: "01"\n---\n\n# State\n\n**Current Phase:** 01\n**Status:** Planning\n',
+    );
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    assert.equal(result.success, true, result.error || result.output);
   });
 });

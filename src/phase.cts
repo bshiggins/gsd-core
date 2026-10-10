@@ -1744,6 +1744,62 @@ function assertBracketGeneratedIdentity(
   }
 }
 
+/**
+ * #4304: refuse a bracket `phase add` / `add-batch` whose located milestone
+ * window is a decoy. A non-milestone heading carrying the active version
+ * token ahead of the real milestone heading (`## Goals for v2.0` before
+ * `## [CK.02] v2.0 Current`) is where the read side locates the window, so
+ * the new entry would land in the decoy section, outside every reader's view
+ * of the milestone. The window is accepted when its own heading carries the
+ * active bracket qualifier; otherwise a live (unfenced, not historical)
+ * milestone heading elsewhere that carries both the active qualifier and the
+ * active version token is the real one, and the writer refuses before any
+ * write, naming both lines. Read-side window selection is unchanged.
+ */
+function assertBracketAddWindowLocated(
+  rawContent: string,
+  cwd: string,
+  context: BracketWriteContext,
+  command: string,
+): void {
+  const ranges = currentMilestoneRawRanges(rawContent, cwd, 'bracket');
+  if (!ranges) return;
+  const lineAt = (offset: number): string => {
+    const end = rawContent.indexOf('\n', offset);
+    return rawContent.slice(offset, end === -1 ? rawContent.length : end).replace(/\r$/, '');
+  };
+  const qualifierRe = new RegExp(
+    `^\\[${escapeRegex(context.project)}\\.${escapeRegex(context.milestone)}\\]`,
+    'i',
+  );
+  const windowHeading = lineAt(ranges.primary.start);
+  if (qualifierRe.test(windowHeading.replace(/^#+[ \t]*/, ''))) return;
+
+  const version = String((getMilestoneInfo(cwd) as { value?: { version?: string } | null }).value?.version ?? '');
+  if (!version) return;
+  const versionRe = new RegExp(`(?<![\\w.])v?${escapeRegex(version.replace(/^v/i, ''))}(?![\\w.-])`, 'i');
+  const historicalLineStarts = archivedOrClosedMilestoneLineStarts(rawContent);
+  const insideWindow = (offset: number): boolean =>
+    (offset >= ranges.primary.start && offset < ranges.primary.end)
+    || Boolean(ranges.details && offset >= ranges.details.start && offset < ranges.details.end);
+  const realHeading = tokenizeHeadings(rawContent).find((heading) =>
+    !insideWindow(heading.offset)
+    && !historicalLineStarts.has(heading.offset)
+    && rawContent[heading.offset] === '#'
+    && isRecognizedMilestoneHeading(heading.text, heading.level)
+    && qualifierRe.test(heading.text.trim())
+    && versionRe.test(heading.text));
+  if (!realHeading) return;
+  const lineNumber = (offset: number): number => rawContent.slice(0, offset).split('\n').length;
+  error(
+    `${command}: the active milestone window was located at ROADMAP.md line ${lineNumber(ranges.primary.start)} `
+      + `(${JSON.stringify(windowHeading.trim())}), but the milestone heading for ${renderMilestoneId(context)} `
+      + `${version} is at line ${lineNumber(realHeading.offset)} (${JSON.stringify(lineAt(realHeading.offset).trim())}). `
+      + 'Writing the new phase there would place it outside the milestone. Rename or remove the earlier heading '
+      + 'so it no longer carries the active version token, then retry.',
+  );
+}
+
 function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: string): void {
   if (!description) {
     error('description required for phase add');
@@ -1763,6 +1819,7 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
 
   const { newPhaseId, dirName } = withPlanningLock(cwd, () => {
     const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
+    if (bracketContext) assertBracketAddWindowLocated(rawContent, cwd, bracketContext, 'phase add');
     const content = extractCurrentMilestone(rawContent, cwd);
 
     const projectCode = (config.project_code as string) || '';
@@ -1931,6 +1988,7 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
 
   const results = withPlanningLock(cwd, () => {
     let rawContent = fs.readFileSync(roadmapPath, 'utf-8');
+    if (bracketContext) assertBracketAddWindowLocated(rawContent, cwd, bracketContext, 'phase add-batch');
     const content = extractCurrentMilestone(rawContent, cwd);
     let maxPhase = 0;
     if (bracketContext) {
@@ -4498,6 +4556,207 @@ function bracketPhaseDeletionContainerBoundary(content: string, targetOffset: nu
   return null;
 }
 
+interface BracketRoadmapRemovalPlan {
+  content: string;
+  roadmapLinesRewritten: number;
+  keptOriginalLines: { text: string; active: boolean }[];
+  survivingTargetRows: string[];
+}
+
+/**
+ * #4304: the pure ROADMAP rewrite for a bracket removal, computed from the
+ * content alone so `phase remove` can run it before any mutation and refuse
+ * on what it would leave behind. `survivingTargetRows` lists every live
+ * (unfenced, not historical) pipe-table row keyed by the removed identity
+ * that the rewrite keeps: a shared Progress table the scope rules cannot
+ * attribute, or a non-Progress table such as a phase-keyed traceability
+ * table. Keeping such a row leaves a dangling identity that the renumbered
+ * sibling then duplicates; deleting it could drop data the row carries.
+ */
+function planBracketRoadmapRemoval(
+  originalContent: string,
+  targetId: BracketRoadmapPhaseId,
+  mapping: BracketRenumberMapping[],
+  cwd: string,
+): BracketRoadmapRemovalPlan {
+  // #4304: scope the section deletion to the active
+  // milestone's own ranges — the SAME primary+details discovery the
+  // checklist-row deletion below already uses — computed from the
+  // content BEFORE deletion. Without this, deleteSection removes the
+  // FIRST matching heading in the whole document: a shipped milestone
+  // and the active one sharing the same bracket code (milestoneToken
+  // folds e.g. v2.0 and v2.1 to one [CK.02]) let the shipped section's
+  // own detail heading be deleted while the active one survives.
+  const preDeleteRanges = currentMilestoneRawRanges(originalContent, cwd, 'bracket');
+  // #4304: historical protection applies while SELECTING the section, not
+  // only during the later per-line rewrite. A closed details archive can
+  // sit inside the raw active-milestone range and carry the same folded
+  // bracket id as the live phase; choosing that heading first deletes
+  // history and leaves the live target behind.
+  const preDeleteHistoricalLineStarts = archivedOrClosedMilestoneLineStarts(originalContent);
+  const isTargetHeading = (heading: ReturnType<typeof tokenizeHeadings>[number]): boolean => {
+    // #4304: classify the heading through the SAME shared
+    // owned-line grammar (classifyBracketOwnedLine / BRACKET_HEADING_LINE_RE)
+    // the checklist/progress-row deletion below already uses, instead of
+    // a literal `startsWith(targetDisplay)` — that comparison only ever
+    // recognized the display spelling ("[CK.02] 02"), so the read-grammar-
+    // admitted labeled spelling ("[CK.02] Phase 02:", pinned at
+    // tests/adr-612-bracket-grammar.test.cjs:644) was never matched here
+    // and its detail section survived a "removal" that deleted every
+    // other owned line for the same identity.
+    if (heading.level < 2 || heading.level > 4) return false;
+    const headingLine = '#'.repeat(heading.level) + ' ' + heading.text;
+    const owned = classifyBracketOwnedLine(headingLine);
+    if (owned.kind !== 'heading' || !owned.id || !sameBracketPhaseId(owned.id, targetId)) {
+      return false;
+    }
+    if (preDeleteHistoricalLineStarts.has(heading.offset)) return false;
+    if (!preDeleteRanges) return true;
+    return (
+      (heading.offset >= preDeleteRanges.primary.start && heading.offset < preDeleteRanges.primary.end)
+      || Boolean(
+        preDeleteRanges.details
+        && heading.offset >= preDeleteRanges.details.start
+        && heading.offset < preDeleteRanges.details.end,
+      )
+    );
+  };
+  const selectedTargetHeading = tokenizeHeadings(originalContent).find(isTargetHeading);
+  let deletionEndOffset: number | undefined;
+  if (selectedTargetHeading) {
+    const nextDistinctPhaseHeading = tokenizeHeadings(originalContent).find(
+      (heading) => heading.offset > selectedTargetHeading.offset
+        && isDistinctReaderPhaseHeading(heading, targetId),
+    );
+    const containingRange = preDeleteRanges
+      ? [preDeleteRanges.primary, ...(preDeleteRanges.details ? [preDeleteRanges.details] : [])]
+        .find((range) => selectedTargetHeading.offset >= range.start && selectedTargetHeading.offset < range.end)
+      : null;
+    const containerBoundary = bracketPhaseDeletionContainerBoundary(
+      originalContent,
+      selectedTargetHeading.offset,
+    );
+    const historicalBoundary = [...preDeleteHistoricalLineStarts]
+      .filter((offset) => offset > selectedTargetHeading.offset)
+      .sort((a, b) => a - b)[0];
+    deletionEndOffset = Math.min(
+      containingRange?.end ?? originalContent.length,
+      containerBoundary ?? originalContent.length,
+      historicalBoundary ?? originalContent.length,
+      nextDistinctPhaseHeading?.offset ?? originalContent.length,
+    );
+  }
+  let content = deleteSection(originalContent, isTargetHeading, { endOffset: deletionEndOffset });
+  let roadmapLinesRewritten = content === originalContent ? 0 : 1;
+  const ranges = currentMilestoneRawRanges(content, cwd, 'bracket');
+  // #4304: progress/table-row deletion is
+  // scoped to the active milestone's OWN table content
+  // (bracketMilestoneOwnTableEnd — narrower than `ranges` itself, see its
+  // own doc comment) plus its own "Progress"-titled heading found ANYWHERE
+  // in its ranges (bracketOwnProgressSectionRanges — additive:
+  // covers a `## Notes` aside or a per-milestone `## Progress` the plain
+  // own-table-end closes over too early) plus a document-level
+  // `## Progress` section that is not itself owned by a DIFFERENT
+  // milestone (legacy's own #2012 scope, plus an ownership gate)
+  // — never the whole document. Without this, a same-identity row in ANY
+  // pipe table anywhere (a shipped milestone sharing the same bracket
+  // code, an unrelated Requirements Traceability table) was deleted.
+  const headingsForOwnTable = tokenizeHeadings(content);
+  const progressSectionRange = bracketProgressSectionRange(content);
+  const ownProgressSectionRanges = bracketOwnProgressSectionRanges(content, ranges, headingsForOwnTable);
+  const progressSectionOwnedElsewhere = progressSectionRange
+    ? bracketProgressSectionOwnedByOtherMilestone(content, progressSectionRange.start, ranges, ownProgressSectionRanges)
+    : false;
+  const historicalLineStarts = archivedOrClosedMilestoneLineStarts(content);
+  const fencedLineNumbers = fencedRoadmapLineNumbers(content);
+  // A row inside a Progress-titled section that the ownership rule assigns
+  // to a different milestone is that milestone's own record: kept, and not
+  // a surviving row of the removed identity.
+  const progressSections = headingsForOwnTable
+    .filter((heading) => BRACKET_PROGRESS_HEADING_TITLE_RE.test(heading.text.trim()))
+    .map((heading) => ({
+      start: heading.offset,
+      end: bracketMilestoneOwnTableEnd(content, heading.offset, headingsForOwnTable),
+      ownedElsewhere: bracketProgressSectionOwnedByOtherMilestone(
+        content,
+        heading.offset,
+        ranges,
+        ownProgressSectionRanges,
+      ),
+    }));
+  const inProgressSectionOwnedByOtherMilestone = (lineStart: number): boolean => {
+    const enclosing = progressSections.filter((section) => lineStart >= section.start && lineStart < section.end);
+    return enclosing.length > 0 && enclosing[enclosing.length - 1].ownedElsewhere;
+  };
+
+  // #4304: the referencesLeftUntouched report is computed
+  // from each KEPT line's ORIGINAL (pre-rewrite) text, never the
+  // persisted (already-rewritten) content — re-searching persisted text
+  // for a pre-renumber id is how the prior implementation produced false
+  // positives whenever two or more phases shifted (a later phase's NEW
+  // value collides textually with an earlier phase's OLD value). A line
+  // that gets DELETED here (the target's own owned heading/checklist/
+  // progress row) can never be "left untouched" — it does not exist in
+  // the output at all — so only kept lines are considered.
+  const keptOriginalLines: { text: string; active: boolean }[] = [];
+  const survivingTargetRows: string[] = [];
+
+  const rewritten: string[] = [];
+  for (const line of splitRoadmapLineRecords(content)) {
+    const active = lineStartsInActiveMilestone(line.start, ranges);
+    const historical = historicalLineStarts.has(line.start);
+    const fenced = fencedLineNumbers.has(line.lineNumber);
+    if (fenced) {
+      rewritten.push(line.text + line.eol);
+      keptOriginalLines.push({ text: line.text, active: false });
+      continue;
+    }
+    const owned = classifyBracketOwnedLine(line.text);
+    const inMilestoneOwnTable = owned.kind === 'progress'
+      && (lineStartsInMilestoneOwnTable(content, line.start, ranges, headingsForOwnTable)
+        || ownProgressSectionRanges.some((r) => line.start >= r.start && line.start < r.end));
+    const inProgressSection = owned.kind === 'progress' && Boolean(
+      progressSectionRange
+      && !progressSectionOwnedElsewhere
+      && line.start >= progressSectionRange.start
+      && line.start < progressSectionRange.end,
+    );
+    if (!historical
+      && owned.id
+      && sameBracketPhaseId(owned.id, targetId)
+      && ((active && owned.kind === 'checklist') || inMilestoneOwnTable || inProgressSection)) {
+      roadmapLinesRewritten += 1;
+      continue;
+    }
+    if (
+      !historical
+      && owned.kind === 'progress'
+      && owned.id
+      && sameBracketPhaseId(owned.id, targetId)
+      && !inProgressSectionOwnedByOtherMilestone(line.start)
+    ) {
+      survivingTargetRows.push(line.text);
+    }
+
+    let next = line.text;
+    if (!historical) {
+      for (const { oldId, newId } of mapping) {
+        next = replaceQualifiedBracketReference(next, oldId, newId);
+        if (active) next = replaceBareBracketArtifactReference(next, oldId, newId);
+      }
+    }
+    if (next !== line.text) roadmapLinesRewritten += 1;
+    rewritten.push(next + line.eol);
+    // A historical line can be physically inside the raw active milestone
+    // range (closed details nested below the live milestone heading). It is
+    // intentionally exempt from this mutation, so it is not an active
+    // dangling reference for the removal report either.
+    keptOriginalLines.push({ text: line.text, active: active && !historical });
+  }
+  content = rewritten.join('');
+  return { content, roadmapLinesRewritten, keptOriginalLines, survivingTargetRows };
+}
+
 /**
  * Remove the active bracket phase and renumber its later identities. Qualified
  * references are rewritten roadmap-wide, including global sections and other
@@ -4516,152 +4775,12 @@ function updateRoadmapAfterBracketPhaseRemoval(
   return withPlanningLock(cwd, () => {
     const originalContent = fs.readFileSync(roadmapPath, 'utf-8');
     const targetId = bracketPhaseId(context, removedInt, removedSubphase);
-    // #4304: scope the section deletion to the active
-    // milestone's own ranges — the SAME primary+details discovery the
-    // checklist-row deletion below already uses — computed from the
-    // content BEFORE deletion. Without this, deleteSection removes the
-    // FIRST matching heading in the whole document: a shipped milestone
-    // and the active one sharing the same bracket code (milestoneToken
-    // folds e.g. v2.0 and v2.1 to one [CK.02]) let the shipped section's
-    // own detail heading be deleted while the active one survives.
-    const preDeleteRanges = currentMilestoneRawRanges(originalContent, cwd, 'bracket');
-    // #4304: historical protection applies while SELECTING the section, not
-    // only during the later per-line rewrite. A closed details archive can
-    // sit inside the raw active-milestone range and carry the same folded
-    // bracket id as the live phase; choosing that heading first deletes
-    // history and leaves the live target behind.
-    const preDeleteHistoricalLineStarts = archivedOrClosedMilestoneLineStarts(originalContent);
-    const isTargetHeading = (heading: ReturnType<typeof tokenizeHeadings>[number]): boolean => {
-      // #4304: classify the heading through the SAME shared
-      // owned-line grammar (classifyBracketOwnedLine / BRACKET_HEADING_LINE_RE)
-      // the checklist/progress-row deletion below already uses, instead of
-      // a literal `startsWith(targetDisplay)` — that comparison only ever
-      // recognized the display spelling ("[CK.02] 02"), so the read-grammar-
-      // admitted labeled spelling ("[CK.02] Phase 02:", pinned at
-      // tests/adr-612-bracket-grammar.test.cjs:644) was never matched here
-      // and its detail section survived a "removal" that deleted every
-      // other owned line for the same identity.
-      if (heading.level < 2 || heading.level > 4) return false;
-      const headingLine = '#'.repeat(heading.level) + ' ' + heading.text;
-      const owned = classifyBracketOwnedLine(headingLine);
-      if (owned.kind !== 'heading' || !owned.id || !sameBracketPhaseId(owned.id, targetId)) {
-        return false;
-      }
-      if (preDeleteHistoricalLineStarts.has(heading.offset)) return false;
-      if (!preDeleteRanges) return true;
-      return (
-        (heading.offset >= preDeleteRanges.primary.start && heading.offset < preDeleteRanges.primary.end)
-        || Boolean(
-          preDeleteRanges.details
-          && heading.offset >= preDeleteRanges.details.start
-          && heading.offset < preDeleteRanges.details.end,
-        )
-      );
-    };
-    const selectedTargetHeading = tokenizeHeadings(originalContent).find(isTargetHeading);
-    let deletionEndOffset: number | undefined;
-    if (selectedTargetHeading) {
-      const nextDistinctPhaseHeading = tokenizeHeadings(originalContent).find(
-        (heading) => heading.offset > selectedTargetHeading.offset
-          && isDistinctReaderPhaseHeading(heading, targetId),
-      );
-      const containingRange = preDeleteRanges
-        ? [preDeleteRanges.primary, ...(preDeleteRanges.details ? [preDeleteRanges.details] : [])]
-          .find((range) => selectedTargetHeading.offset >= range.start && selectedTargetHeading.offset < range.end)
-        : null;
-      const containerBoundary = bracketPhaseDeletionContainerBoundary(
-        originalContent,
-        selectedTargetHeading.offset,
-      );
-      const historicalBoundary = [...preDeleteHistoricalLineStarts]
-        .filter((offset) => offset > selectedTargetHeading.offset)
-        .sort((a, b) => a - b)[0];
-      deletionEndOffset = Math.min(
-        containingRange?.end ?? originalContent.length,
-        containerBoundary ?? originalContent.length,
-        historicalBoundary ?? originalContent.length,
-        nextDistinctPhaseHeading?.offset ?? originalContent.length,
-      );
-    }
-    let content = deleteSection(originalContent, isTargetHeading, { endOffset: deletionEndOffset });
-    let roadmapLinesRewritten = content === originalContent ? 0 : 1;
-    const ranges = currentMilestoneRawRanges(content, cwd, 'bracket');
-    // #4304: progress/table-row deletion is
-    // scoped to the active milestone's OWN table content
-    // (bracketMilestoneOwnTableEnd — narrower than `ranges` itself, see its
-    // own doc comment) plus its own "Progress"-titled heading found ANYWHERE
-    // in its ranges (bracketOwnProgressSectionRanges — additive:
-    // covers a `## Notes` aside or a per-milestone `## Progress` the plain
-    // own-table-end closes over too early) plus a document-level
-    // `## Progress` section that is not itself owned by a DIFFERENT
-    // milestone (legacy's own #2012 scope, plus an ownership gate)
-    // — never the whole document. Without this, a same-identity row in ANY
-    // pipe table anywhere (a shipped milestone sharing the same bracket
-    // code, an unrelated Requirements Traceability table) was deleted.
-    const headingsForOwnTable = tokenizeHeadings(content);
-    const progressSectionRange = bracketProgressSectionRange(content);
-    const ownProgressSectionRanges = bracketOwnProgressSectionRanges(content, ranges, headingsForOwnTable);
-    const progressSectionOwnedElsewhere = progressSectionRange
-      ? bracketProgressSectionOwnedByOtherMilestone(content, progressSectionRange.start, ranges, ownProgressSectionRanges)
-      : false;
-    const historicalLineStarts = archivedOrClosedMilestoneLineStarts(content);
-    const fencedLineNumbers = fencedRoadmapLineNumbers(content);
-
-    // #4304: the referencesLeftUntouched report is computed
-    // from each KEPT line's ORIGINAL (pre-rewrite) text, never the
-    // persisted (already-rewritten) content — re-searching persisted text
-    // for a pre-renumber id is how the prior implementation produced false
-    // positives whenever two or more phases shifted (a later phase's NEW
-    // value collides textually with an earlier phase's OLD value). A line
-    // that gets DELETED here (the target's own owned heading/checklist/
-    // progress row) can never be "left untouched" — it does not exist in
-    // the output at all — so only kept lines are considered.
-    const keptOriginalLines: { text: string; active: boolean }[] = [];
-
-    const rewritten: string[] = [];
-    for (const line of splitRoadmapLineRecords(content)) {
-      const active = lineStartsInActiveMilestone(line.start, ranges);
-      const historical = historicalLineStarts.has(line.start);
-      const fenced = fencedLineNumbers.has(line.lineNumber);
-      if (fenced) {
-        rewritten.push(line.text + line.eol);
-        keptOriginalLines.push({ text: line.text, active: false });
-        continue;
-      }
-      const owned = classifyBracketOwnedLine(line.text);
-      const inMilestoneOwnTable = owned.kind === 'progress'
-        && (lineStartsInMilestoneOwnTable(content, line.start, ranges, headingsForOwnTable)
-          || ownProgressSectionRanges.some((r) => line.start >= r.start && line.start < r.end));
-      const inProgressSection = owned.kind === 'progress' && Boolean(
-        progressSectionRange
-        && !progressSectionOwnedElsewhere
-        && line.start >= progressSectionRange.start
-        && line.start < progressSectionRange.end,
-      );
-      if (!historical
-        && owned.id
-        && sameBracketPhaseId(owned.id, targetId)
-        && ((active && owned.kind === 'checklist') || inMilestoneOwnTable || inProgressSection)) {
-        roadmapLinesRewritten += 1;
-        continue;
-      }
-
-      let next = line.text;
-      if (!historical) {
-        for (const { oldId, newId } of mapping) {
-          next = replaceQualifiedBracketReference(next, oldId, newId);
-          if (active) next = replaceBareBracketArtifactReference(next, oldId, newId);
-        }
-      }
-      if (next !== line.text) roadmapLinesRewritten += 1;
-      rewritten.push(next + line.eol);
-      // A historical line can be physically inside the raw active milestone
-      // range (closed details nested below the live milestone heading). It is
-      // intentionally exempt from this mutation, so it is not an active
-      // dangling reference for the removal report either.
-      keptOriginalLines.push({ text: line.text, active: active && !historical });
-    }
-    content = rewritten.join('');
+    const { content, roadmapLinesRewritten, keptOriginalLines } = planBracketRoadmapRemoval(
+      originalContent,
+      targetId,
+      mapping,
+      cwd,
+    );
 
     const bracketNormalization = { preserveFencedMarkdownStructure: true } as const;
     platformWriteSync(roadmapPath, content, bracketNormalization);
@@ -4695,6 +4814,81 @@ function updateRoadmapAfterBracketPhaseRemoval(
       referencesLeftUntouched,
     };
   });
+}
+
+/**
+ * #4304: phase ids the reader lists but the bracket grammar cannot represent
+ * (a letter suffix such as `02a`, or a three-level `02.01.01`) are invisible
+ * to the renumber mapping and the owned-line rewrite. Removing a phase at or
+ * below them would leave them on their old numbers beside renumbered
+ * siblings, so they are reported here, from the live (unfenced, not
+ * historical) lines of the active milestone, for the caller to refuse.
+ * An integer removal is affected by every such id whose leading number is
+ * at or above the removed one; a sub-phase removal by those sharing its
+ * leading number.
+ */
+function unrepresentableBracketIdsAffectedByRemoval(
+  content: string,
+  ranges: ReturnType<typeof currentMilestoneRawRanges>,
+  removedInt: number,
+  removedSubphase: number | undefined,
+): string[] {
+  if (!ranges) return [];
+  const historicalLineStarts = archivedOrClosedMilestoneLineStarts(content);
+  const fencedLineNumbers = fencedRoadmapLineNumbers(content);
+  const liveActive = splitRoadmapLineRecords(content)
+    .map((line) => (
+      lineStartsInActiveMilestone(line.start, ranges)
+      && !historicalLineStarts.has(line.start)
+      && !fencedLineNumbers.has(line.lineNumber)
+        ? line.text
+        : ''
+    ))
+    .join('\n');
+  const affected: string[] = [];
+  for (const id of scanMilestonePhaseIds(liveActive, 'bracket')) {
+    // The owned-line grammar canonicalizes each numeric segment through
+    // `phaseToken` (`002` reads as `02`), so representable means one or two
+    // numeric segments that each canonicalize.
+    const segments = String(id).split('.');
+    if (segments.length <= 2 && segments.every((segment) => /^\d+$/.test(segment) && phaseToken(segment) !== null)) {
+      continue;
+    }
+    const leading = /^(\d+)/.exec(String(id));
+    if (!leading) continue;
+    const phase = Number(leading[1]);
+    if (removedSubphase === undefined ? phase >= removedInt : phase === removedInt) affected.push(String(id));
+  }
+  return affected;
+}
+
+/**
+ * #4304: `phase remove` adjusts only STATE.md's phase counts. When STATE.md's
+ * current phase (the canonical frontmatter, `Current Phase`, scoped prose
+ * ladder) is the removed identity or one the removal renumbers, every
+ * current-phase field would keep naming the old identity, which afterwards
+ * belongs to a different phase. Returns that current phase for the caller to
+ * refuse on, or null.
+ */
+function stateCurrentPhaseAffectedByBracketRemoval(
+  cwd: string,
+  targetId: BracketRoadmapPhaseId,
+  mapping: BracketRenumberMapping[],
+): string | null {
+  const statePath = path.join(planningDir(cwd), 'STATE.md');
+  if (!fs.existsSync(statePath)) return null;
+  const rawState = fs.readFileSync(statePath, 'utf-8');
+  const fm = frontmatterMod.extractFrontmatter(rawState, statePath) as Record<string, unknown>;
+  const current = stateMod.resolveCurrentPhaseId(fm, frontmatterMod.stripFrontmatter(rawState));
+  if (current === null || current === undefined) return null;
+  const match = /^(?:\[[^\]]+\][ \t]*)?(\d+)(?:\.(\d+))?$/.exec(String(current).trim());
+  if (!match) return null;
+  const phase = Number(match[1]);
+  const subphase = match[2] === undefined ? undefined : Number(match[2]);
+  const sameNumber = (id: BracketRoadmapPhaseId): boolean =>
+    Number(id.phase) === phase
+    && (id.subphase === undefined ? subphase === undefined : Number(id.subphase) === subphase);
+  return sameNumber(targetId) || mapping.some(({ oldId }) => sameNumber(oldId)) ? String(current).trim() : null;
 }
 
 function cmdPhaseRemove(
@@ -4927,6 +5121,43 @@ function cmdPhaseRemove(
         + `${entangled.length === 1 ? 'this legacy spelling resolves' : 'these legacy spellings resolve'} `
         + `to a phase it would delete or renumber: ${entangled.map(describeEntangledLegacySpelling).join('; ')}. `
         + 'Convert each to its bracket spelling, then retry.',
+      );
+    }
+  }
+
+  if (removeContext) {
+    const targetId = bracketPhaseId(removeContext, removedInt, removedSubphase);
+    const unrepresentable = unrepresentableBracketIdsAffectedByRemoval(
+      roadmapContentBeforeRemoval!,
+      preRemovalRanges,
+      removedInt,
+      removedSubphase,
+    );
+    if (unrepresentable.length > 0) {
+      error(
+        `Cannot remove phase ${normalized}: the active milestone lists phase id(s) `
+        + `${unrepresentable.join(', ')} that are not representable in the bracket convention, `
+        + 'so phase remove can neither delete nor renumber them alongside their siblings. '
+        + 'Renumber or remove them first, then retry.',
+      );
+    }
+
+    const plan = planBracketRoadmapRemoval(roadmapContentBeforeRemoval!, targetId, bracketMapping, cwd);
+    if (plan.survivingTargetRows.length > 0) {
+      error(
+        `Cannot remove phase ${normalized}: ROADMAP.md has table row(s) keyed by ${renderPhaseId(targetId)} `
+        + `outside the milestone's own Progress tables (${plan.survivingTargetRows.map((row) => JSON.stringify(row.trim())).join(', ')}). `
+        + 'Removing the phase would leave each row naming an identity a renumbered sibling takes over. '
+        + 'Delete or re-key those rows first, then retry.',
+      );
+    }
+
+    const currentPhase = stateCurrentPhaseAffectedByBracketRemoval(cwd, targetId, bracketMapping);
+    if (currentPhase !== null) {
+      error(
+        `Cannot remove phase ${normalized}: STATE.md names phase ${currentPhase} as the current phase, `
+        + 'and this removal deletes or renumbers it while phase remove leaves the current-phase fields unchanged. '
+        + 'Move the current phase to an earlier phase first, then retry.',
       );
     }
   }
