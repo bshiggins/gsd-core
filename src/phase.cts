@@ -7786,4 +7786,8 @@ export = {
   computeDependencyLevels,
   buildShortFormToId,
   normalizeDependencyToken,
+  // Test seam (#4304): the bracket renumber mapping is a disk and ROADMAP
+  // bijection whose order must keep every rename destination free; exposed
+  // so a property test can drive it over generated identity sets.
+  _computeBracketRenumberMapping: computeBracketRenumberMapping,
 };

@@ -24,6 +24,13 @@
  *   (g) boundary        — non-canonical spellings are rejected, not coerced
  *   (h) boundary        — toDir's slug guards hold (empty / all-digit / type)
  *   (i) idempotency     — parse is stable under re-render
+ *   (j) checklist       — parsePhaseChecklistLine reads the first identity
+ *                         after the checkbox and is stable under re-render
+ *   (k) dependencies    — extractPhaseDependencyTokens yields each accepted
+ *                         spelling's canonical identity once, in order, and
+ *                         its output re-extracts to itself
+ *   (l) renumber        — the bracket renumber mapping is an order-safe
+ *                         bijection onto the identities left after removal
  */
 
 const { describe, test } = require('node:test');
@@ -38,7 +45,10 @@ const {
   phaseHeadingPrefixSrcFor,
   tokenizePhaseDependencyReferences,
   PHASE_HEADING_BASELINE,
+  parsePhaseChecklistLine,
+  extractPhaseDependencyTokens,
 } = require('../gsd-core/bin/lib/phase-id.cjs');
+const { _computeBracketRenumberMapping } = require('../gsd-core/bin/lib/phase.cjs');
 
 // ─── Generators ──────────────────────────────────────────────────────────────
 
@@ -415,6 +425,152 @@ describe('bracket dependency tokenizer: capture-group indexing', () => {
     assert.deepEqual(
       found.map((r) => [r.kind, r.token]),
       [['legacy', '03'], ['legacy', '04']],
+    );
+  });
+});
+
+// ─── Write-path parsers and the removal mapping (#4304) ─────────────────────
+
+const smallProjectArb = fc.constantFrom('CK', 'GSD', 'AB');
+const milestoneTokArb = fc.integer({ min: 0, max: 20 }).map((n) => String(n).padStart(2, '0'));
+const phaseNumArb = fc.integer({ min: 1, max: 40 });
+const subNumArb = fc.option(fc.integer({ min: 1, max: 9 }), { nil: undefined });
+const titleArb = fc
+  .array(fc.constantFrom(...LOWER, ' '), { minLength: 1, maxLength: 12 })
+  .map((cs) => `T${cs.join('')}`);
+const pad = (n) => String(n).padStart(2, '0');
+const tokenOf = (phase, sub) => (sub === undefined ? pad(phase) : `${pad(phase)}.${pad(sub)}`);
+
+describe('#4304 bracket write-path parsers', () => {
+  // (j) The checklist parser is line-anchored: the identity right after the
+  // checkbox wins over any later identity in the title, and a canonical
+  // re-render of what it read parses back to the same record.
+  test('property: parsePhaseChecklistLine reads the leading identity and is stable under re-render', () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom('x', 'X', ' '),
+        fc.boolean(),
+        fc.boolean(),
+        smallProjectArb,
+        milestoneTokArb,
+        phaseNumArb,
+        subNumArb,
+        titleArb,
+        phaseNumArb,
+        (box, bold, labeled, project, milestone, phase, sub, title, laterPhase) => {
+          const token = tokenOf(phase, sub);
+          const decoy = `[${project}.${milestone}] ${pad(laterPhase)}: later`;
+          const line = `- [${box}] ${bold ? '**' : ''}[${project}.${milestone}] ${labeled ? 'Phase ' : ''}`
+            + `${token}: ${title} ${decoy}${bold ? '**' : ''}`;
+          const parsed = parsePhaseChecklistLine(line, 'bracket');
+          assert.deepEqual(parsed, {
+            checked: box !== ' ',
+            bracketId: `${project}.${milestone}`,
+            phaseToken: token,
+          });
+          const rerendered = `- [${parsed.checked ? 'x' : ' '}] [${parsed.bracketId}] ${parsed.phaseToken}: ${title}`;
+          assert.deepEqual(parsePhaseChecklistLine(rerendered, 'bracket'), parsed);
+        },
+      ),
+    );
+  });
+
+  // (k) Every accepted spelling of a qualified dependency (display, unpadded,
+  // labeled, dash) comes back as its canonical display identity, once, in
+  // first-mention order; the output itself is a fixed point.
+  test('property: extractPhaseDependencyTokens canonicalizes, dedupes and re-extracts to itself', () => {
+    const depArb = fc.record({
+      project: smallProjectArb,
+      milestone: milestoneTokArb,
+      phase: phaseNumArb,
+      sub: subNumArb,
+      spelling: fc.constantFrom('display', 'unpadded', 'labeled', 'dash'),
+    });
+    fc.assert(
+      fc.property(
+        fc.array(depArb, { minLength: 1, maxLength: 6 }),
+        fc.nat(),
+        fc.constantFrom('display', 'unpadded', 'labeled', 'dash'),
+        fc.constantFrom(', ', ' and '),
+        (mentions, again, respelling, joiner) => {
+          // Re-mention one identity in another spelling so deduplication is
+          // exercised on every run, not only on a rare generated collision.
+          const deps = [...mentions, { ...mentions[again % mentions.length], spelling: respelling }];
+          const spell = ({ project, milestone, phase, sub, spelling }) => {
+            if (spelling === 'dash') return `${project}.${milestone}-${tokenOf(phase, sub)}`;
+            if (spelling === 'unpadded') {
+              return `[${project}.${milestone}] ${sub === undefined ? phase : `${phase}.${sub}`}`;
+            }
+            return `[${project}.${milestone}] ${spelling === 'labeled' ? 'Phase ' : ''}${tokenOf(phase, sub)}`;
+          };
+          const prose = deps.map(spell).join(joiner);
+          const expected = [...new Set(deps.map((d) => `[${d.project}.${d.milestone}] ${tokenOf(d.phase, d.sub)}`))];
+          const tokens = extractPhaseDependencyTokens(prose, 'bracket');
+          assert.deepEqual(tokens, expected, prose);
+          assert.deepEqual(extractPhaseDependencyTokens(tokens.join(', '), 'bracket'), tokens);
+        },
+      ),
+    );
+  });
+
+  // (l) Removing one identity from a generated milestone: the mapping moves
+  // exactly the later identities (later top-level phases, or later siblings
+  // of a removed sub-phase), each down by one, and applying the renames in
+  // the returned order never lands on an identity still occupied.
+  test('property: the bracket renumber mapping is an order-safe bijection', () => {
+    const identityArb = fc.uniqueArray(
+      fc.record({ phase: fc.integer({ min: 1, max: 9 }), sub: subNumArb }),
+      { minLength: 1, maxLength: 14, selector: (id) => `${id.phase}.${id.sub ?? ''}` },
+    );
+    fc.assert(
+      fc.property(identityArb, fc.nat(), fc.nat(), (identities, pick, order) => {
+        const target = identities[pick % identities.length];
+        // phase remove refuses an integer target that still has sub-phases,
+        // so the mapping is only ever asked about targets without them.
+        const universe = target.sub === undefined
+          ? identities.filter((id) => !(id.phase === target.phase && id.sub !== undefined))
+          : identities;
+        const shuffled = [...universe].sort((a, b) => ((a.phase * 31 + (a.sub ?? 0) + order) % 7) - ((b.phase * 31 + (b.sub ?? 0) + order) % 7));
+        const roadmap = [
+          '# Roadmap',
+          '',
+          '## [CK.02] v2.0 Current',
+          '',
+          ...shuffled.map((id) => `### [CK.02] ${tokenOf(id.phase, id.sub)}: P`),
+          '',
+        ].join('\n');
+        const mapping = _computeBracketRenumberMapping(
+          '/nonexistent-phases-dir-for-property',
+          roadmap,
+          { primary: { start: 0, end: roadmap.length }, details: null },
+          { project: 'CK', milestone: '02' },
+          target.phase,
+          target.sub,
+        );
+        const key = (id) => `${Number(id.phase)}.${id.subphase === undefined ? '' : Number(id.subphase)}`;
+        const occupied = new Set(universe.map((id) => `${id.phase}.${id.sub ?? ''}`));
+        occupied.delete(`${target.phase}.${target.sub ?? ''}`);
+
+        const moves = (id) => (target.sub === undefined
+          ? id.phase > target.phase
+          : id.phase === target.phase && id.sub !== undefined && id.sub > target.sub);
+        const expectedOld = universe.filter(moves).map((id) => `${id.phase}.${id.sub ?? ''}`).sort();
+        assert.deepEqual(mapping.map(({ oldId }) => key(oldId)).sort(), expectedOld);
+
+        for (const { oldId, newId } of mapping) {
+          if (target.sub === undefined) {
+            assert.equal(Number(newId.phase), Number(oldId.phase) - 1);
+            assert.equal(newId.subphase, oldId.subphase);
+          } else {
+            assert.equal(Number(newId.phase), Number(oldId.phase));
+            assert.equal(Number(newId.subphase), Number(oldId.subphase) - 1);
+          }
+          assert.equal(occupied.has(key(newId)), false, `rename onto occupied ${key(newId)}`);
+          occupied.delete(key(oldId));
+          occupied.add(key(newId));
+        }
+        assert.equal(occupied.size, universe.length - 1);
+      }),
     );
   });
 });
