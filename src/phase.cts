@@ -4906,7 +4906,10 @@ function stateCurrentPhaseAffectedByBracketRemoval(
   const fm = frontmatterMod.extractFrontmatter(rawState, statePath) as Record<string, unknown>;
   const current = stateMod.resolveCurrentPhaseId(fm, frontmatterMod.stripFrontmatter(rawState));
   if (current === null || current === undefined) return null;
-  const match = /^(?:\[([A-Za-z][A-Za-z0-9_]*)\.(\d+)\][ \t]*)?(\d+)(?:\.(\d+))?$/.exec(String(current).trim());
+  const match = new RegExp(
+    `^(?:\\[(${phaseIdMod.BRACKET_PROJECT_CODE_SRC})\\.(\\d+)\\][ \\t]*)?(\\d+)(?:\\.(\\d+))?$`,
+    'i',
+  ).exec(String(current).trim());
   if (!match) return null;
   // A current phase qualified with another project or milestone is not the
   // active milestone's phase, whatever its number.
