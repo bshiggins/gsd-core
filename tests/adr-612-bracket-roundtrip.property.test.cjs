@@ -360,8 +360,8 @@ describe('bracket phase id: toDir slug guards', () => {
 // inside the prefix — including inside either of its two alternatives, or
 // inside BRACKET_ID_SRC — silently shifts the token list to a later index, and
 // the reader would then slice the wrong span without failing loudly. The
-// review could not rule this out from the regex definitions alone, so the
-// invariant is pinned here rather than left to inspection.
+// regex definitions alone do not rule this out, so the invariant is pinned
+// here rather than left to inspection.
 
 describe('bracket dependency tokenizer: capture-group indexing', () => {
   // Structural: the capturing prefix contributes EXACTLY one group, so the

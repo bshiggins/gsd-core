@@ -1081,8 +1081,8 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
   // version-less bracket milestone heading (no v\d+.\d+ / emoji marker) the
   // active details window ran through the NEXT sibling milestone's OWN
   // "(Phase Details)" section instead of stopping at it. Insert's header
-  // search (which walks this SAME details range, found in both milestone sections
-  // B3 fix) then planted the new section inside the wrong milestone.
+  // search (which walks this SAME details range, shared with bracket
+  // removal) then planted the new section inside the wrong milestone.
   test('phase insert locates its Phase Details heading correctly when milestone headings carry no version token', () => {
     const dir = project('adr-612-bracket-insert-versionless-details-');
     writeConfig(dir, 'bracket');

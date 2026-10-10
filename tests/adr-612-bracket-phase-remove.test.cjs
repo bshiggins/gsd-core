@@ -1435,7 +1435,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
   // the bracketBoundary the SAME function applies to the primary range end
   // (roadmap-parser.cts:2298), so on version-less bracket milestone headings
   // the active details window ran through the NEXT sibling milestone's own
-  // "(Phase Details)" section. Removal's active-range rewrite and its W2
+  // "(Phase Details)" section. Removal's active-range rewrite and its
   // pre-delete ranges both consume this window, so the sibling's own bare
   // artifact token ('**Plans:** `03-01-PLAN.md`') was rewritten to point at
   // a file that does not exist on disk.
@@ -2726,7 +2726,7 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
   // non-canonical ROADMAP spelling ("[CK.02] 2:", not the canonical
   // "[CK.02] 02:") threw parsePhaseId's own canonicality check and
   // classified as 'other' — invisible to the heading/checklist/progress
-  // deletion, the renumber mapping, and the W2 sub-phase scan alike, even
+  // deletion, the renumber mapping, and the sub-phase guard alike, even
   // though `roadmap get-phase`/`analyze`/`validate` and this PR's own
   // `phase insert`/`phase add` all already treat it as a real phase. The
   // fix canonicalizes the captured number (phaseToken, the same adapter the

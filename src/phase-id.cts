@@ -359,7 +359,7 @@ function bracketAltIntroSrcFor(idSrc: string): string {
  * write-side bracket-identity regexes (the qualified-reference replacer, the
  * qualified-mention detector) build their intro through this instead of
  * re-typing `[ \t]+` / case-sensitive brackets independently of the read
- * grammar — the exact drift B1 found (an earlier revision shipped hand-composed,
+ * grammar. Hand-composed copies drift: an earlier revision shipped
  * case-sensitive, `[ \t]+`-spaced copies that silently rejected
  * `[ck.02] 02:`, `[CK.02] PHASE 02:`, and the no-space `[CK.02]02:`, all of
  * which `roadmap get-phase` / `roadmap analyze` / this PR's own `phase

@@ -1028,9 +1028,8 @@ const PHASE_HEADING_BLOCK_STRIP_RE = new RegExp(
  * project is on the bracket convention. Extracted (#4304 PR-4) from
  * `extractCurrentMilestoneScoped`'s own inline block so it and
  * `currentMilestoneRawRanges` share one heading grammar instead of each
- * re-deriving the bracket intro pattern independently — the exact
- * Generative Fix Divergence class this file's own review history (#2761)
- * repeatedly flags. Byte-identical logic to the block it replaces; moving it
+ * re-deriving the bracket intro pattern independently, the Generative Fix
+ * Divergence class #2761 documents. Byte-identical logic to the block it replaces; moving it
  * changes no behavior.
  */
 function bracketFallbackHeadingMatches(

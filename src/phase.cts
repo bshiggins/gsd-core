@@ -2643,7 +2643,7 @@ function cmdPhaseInsert(
       // section carrying the same milestone identity — so it can pass even
       // when the target's own detail heading lives ONLY in that Phase
       // Details range, separated from primary by an unrelated sibling
-      // milestone. Search the SAME two raw ranges the B3 remove fix
+      // milestone. Search the SAME two raw ranges bracket removal
       // discovers (primary, then details) instead of primary alone, so a
       // heading the pre-flight check can see is also found here.
       const headerSearchRanges = bracketSectionRanges
@@ -3651,8 +3651,8 @@ function bracketOwnedLineOutsideActiveWindow(
   // checklist-row deletion (the per-line loop, gated on `active`) are two
   // INDEPENDENT scoped operations in `updateRoadmapAfterBracketPhaseRemoval`
   // — a degenerate window can legitimately contain one kind of owned line
-  // while missing the other (p8: the version-less bracket-fallback
-  // selects the first PHASE heading as if it were the milestone heading, so
+  // while missing the other (with no milestone heading, the version-less
+  // bracket fallback selects the first PHASE heading as if it were the milestone heading, so
   // the resulting window happens to span every later phase HEADING to EOF
   // while the checklist bullets — which sit ABOVE that heading — are still
   // entirely outside it). Finding the heading safely inside must never mask
@@ -4314,9 +4314,9 @@ function bracketRecognizedMilestoneMarkers(content: string): number[] {
  * An earlier version of this rule's answer — "the active milestone has a
  * Progress heading of its own, and this isn't it, so it must be someone
  * else's" — over-claims: a genuinely global `## Progress` that lists every
- * milestone's rows (before any milestone heading at all, r1b/s7; or trailing
- * after the LAST recognized milestone heading with nothing bounding it on
- * the far side, s4 shape d) is neither the active milestone's own nor any
+ * milestone's rows (before any milestone heading at all, or trailing after
+ * the LAST recognized milestone heading with nothing bounding it on the far
+ * side) is neither the active milestone's own nor any
  * OTHER milestone's dedicated section, yet that earlier rule called it
  * "owned elsewhere" merely because it wasn't the active one's.
  *
@@ -4327,8 +4327,8 @@ function bracketRecognizedMilestoneMarkers(content: string): number[] {
  * follow one specific milestone's own heading (nothing else of that kind in
  * between) AND does some other recognized milestone heading follow it
  * later in the document? Only then is it unambiguously that earlier
- * milestone's own trailing section (r1, r1c, the same-code two-versions
- * shape). A Progress heading with NOTHING preceding it (top of document) or
+ * milestone's own trailing section (a shipped milestone's own table, or the
+ * same-code two-versions shape). A Progress heading with NOTHING preceding it (top of document) or
  * NOTHING following it (trailing after the last recognized milestone
  * heading) is open, shared territory — never "elsewhere" — because a
  * milestone's own dedicated section and a document-wide table that merely
@@ -4345,15 +4345,14 @@ function bracketProgressSectionOwnedByOtherMilestone(
   // Progress-titled headings (any level) is never "elsewhere".
   if (ownProgressSectionRanges.some((r) => r.start === progressStart)) return false;
 
-  // #4304 (B1, regression from commit de31ccac0): the original rule's own
-  // precondition — the ACTIVE milestone must own a Progress heading of its
-  // own before a DIFFERENT Progress heading can be "someone else's" — was
-  // dropped when de31ccac0 rewrote this as a purely positional question.
-  // Without it, a document whose ACTIVE milestone has no dedicated Progress
-  // heading of its own (the common single-shared-table layout: one global
-  // `## Progress` table, no per-milestone one) had its shared table declared
-  // another milestone's the moment ANY version-bearing heading — a
-  // `## Backlog (v4.0 candidates)` line, a changelog entry — followed it in
+  // #4304: the positional question below applies only when the ACTIVE
+  // milestone owns a Progress heading of its own; only then can a DIFFERENT
+  // Progress heading be "someone else's". Without that precondition, a
+  // document whose ACTIVE milestone has no dedicated Progress heading of its
+  // own (the common single-shared-table layout: one global `## Progress`
+  // table, no per-milestone one) would have its shared table declared
+  // another milestone's the moment ANY version-bearing heading (a
+  // `## Backlog (v4.0 candidates)` line, a changelog entry) followed it in
   // the document, because the positional scan alone cannot distinguish "this
   // table is the NEXT milestone's own dedicated section" from "this table is
   // shared and a later milestone heading simply comes after it in the file".
@@ -4403,14 +4402,14 @@ function bracketProgressSectionOwnedByOtherMilestone(
  * ranges — regardless of what precedes it within those ranges.
  * `bracketMilestoneOwnTableEnd`/`lineStartsInMilestoneOwnTable` above anchor
  * ONLY at the milestone/details heading itself, so an intervening heading of
- * level <= the milestone's own — a `## Notes` aside (r8), or the
- * milestone's OWN `## Progress` heading when a shipped sibling sharing the
- * bracket code sorts its own `## Progress` first in the document (r1c) —
- * closed that "own table" window before ever reaching the table it was
+ * level <= the milestone's own (a `## Notes` aside, or the milestone's OWN
+ * `## Progress` heading when a shipped sibling sharing the bracket code
+ * sorts its own `## Progress` first in the document) closed that "own
+ * table" window before ever reaching the table it was
  * meant to include. This is ADDITIVE, never a replacement for it: the
  * existing bare-table-directly-after-phase-headings scope still
  * independently keeps an unrelated `## Requirements Traceability` table
- * (q4, r1b) out of scope, because that heading is not titled "Progress".
+ * out of its deletion scope, because that heading is not titled "Progress".
  *
  * The exact-title check required "progress", so a suffixed
  * title ("## Progress (v2.1)", "### Progress (v2.0)") never engaged this
@@ -4590,8 +4589,8 @@ function planBracketRoadmapRemoval(
   cwd: string,
 ): BracketRoadmapRemovalPlan {
   // #4304: scope the section deletion to the active
-  // milestone's own ranges — the SAME primary+details discovery the
-  // checklist-row deletion below already uses — computed from the
+  // milestone's own ranges (the SAME primary+details discovery the
+  // checklist-row deletion below already uses), computed from the
   // content BEFORE deletion. Without this, deleteSection removes the
   // FIRST matching heading in the whole document: a shipped milestone
   // and the active one sharing the same bracket code (milestoneToken
@@ -4608,7 +4607,7 @@ function planBracketRoadmapRemoval(
     // #4304: classify the heading through the SAME shared
     // owned-line grammar (classifyBracketOwnedLine / BRACKET_HEADING_LINE_RE)
     // the checklist/progress-row deletion below already uses, instead of
-    // a literal `startsWith(targetDisplay)` — that comparison only ever
+    // a literal `startsWith(targetDisplay)`; that comparison only ever
     // recognized the display spelling ("[CK.02] 02"), so the read-grammar-
     // admitted labeled spelling ("[CK.02] Phase 02:", pinned at
     // tests/adr-612-bracket-grammar.test.cjs:644) was never matched here
@@ -4661,14 +4660,14 @@ function planBracketRoadmapRemoval(
   const ranges = currentMilestoneRawRanges(content, cwd, 'bracket');
   // #4304: progress/table-row deletion is
   // scoped to the active milestone's OWN table content
-  // (bracketMilestoneOwnTableEnd — narrower than `ranges` itself, see its
+  // (bracketMilestoneOwnTableEnd, narrower than `ranges` itself, see its
   // own doc comment) plus its own "Progress"-titled heading found ANYWHERE
-  // in its ranges (bracketOwnProgressSectionRanges — additive:
+  // in its ranges (bracketOwnProgressSectionRanges, additive:
   // covers a `## Notes` aside or a per-milestone `## Progress` the plain
   // own-table-end closes over too early) plus a document-level
   // `## Progress` section that is not itself owned by a DIFFERENT
-  // milestone (legacy's own #2012 scope, plus an ownership gate)
-  // — never the whole document. Without this, a same-identity row in ANY
+  // milestone (legacy's own #2012 scope, plus an ownership gate),
+  // never the whole document. Without this, a same-identity row in ANY
   // pipe table anywhere (a shipped milestone sharing the same bracket
   // code, an unrelated Requirements Traceability table) was deleted.
   const headingsForOwnTable = tokenizeHeadings(content);
@@ -4701,13 +4700,13 @@ function planBracketRoadmapRemoval(
 
   // #4304: the referencesLeftUntouched report is computed
   // from each KEPT line's ORIGINAL (pre-rewrite) text, never the
-  // persisted (already-rewritten) content — re-searching persisted text
+  // persisted (already-rewritten) content: re-searching persisted text
   // for a pre-renumber id is how the prior implementation produced false
   // positives whenever two or more phases shifted (a later phase's NEW
   // value collides textually with an earlier phase's OLD value). A line
   // that gets DELETED here (the target's own owned heading/checklist/
-  // progress row) can never be "left untouched" — it does not exist in
-  // the output at all — so only kept lines are considered.
+  // progress row) can never be "left untouched": it does not exist in
+  // the output at all, so only kept lines are considered.
   const keptOriginalLines: { text: string; active: boolean }[] = [];
   const survivingTargetRows: string[] = [];
 
