@@ -597,6 +597,7 @@ const {
   loadSkillsManifest,
   stageSkillsForProfile,
   stageAgentsForProfile,
+  selectAgentFilesForProfile,
   stageSkillsForRuntimeAsSkills,
 } = require(path.join(_gsdLibDir, 'install-profiles.cjs'));
 // ADR-857 phase 4c: load capability registry (optional; missing → falls back to undefined)
@@ -676,7 +677,7 @@ function _resolveScopeSafe(id, runtime) {
 function _kindDestDir(layout, kindName, targetDir) {
   const kind = layout.kinds.find((k) => k.kind === kindName);
   if (!kind) return null;
-  return resolveRuntimeArtifactDestination(targetDir, kind);
+  return path.join(kind.home || targetDir, kind.destSubpath);
 }
 
 /**
@@ -886,7 +887,7 @@ function isSkillsRuntimeInstall(runtime, scope) {
   return Array.isArray(scopeLayout) && scopeLayout.length > 0;
 }
 
-function preflightInstallSymlinkDestinations(runtime, configDir, scope, installMode, resolvedProfile, packageRoot) {
+function preflightInstallSymlinkDestinations(runtime, configDir, scope, installMode, agentProfile, packageRoot) {
   const check = (installRoot, destination, message) => {
     if (hasExistingSymlinkBetween(path.resolve(installRoot), destination, { allowOptInFollow: isSymlinkedDestOptIn() })) {
       throw new Error(message);
@@ -904,13 +905,15 @@ function preflightInstallSymlinkDestinations(runtime, configDir, scope, installM
   const standaloneAgents = shouldInstallStandaloneAgents(Boolean(behaviors.pluginOnlyInstall), skillsRuntime);
 
   for (const kind of layout.kinds) {
+    // Combined-family commands have no write-time trust check to front-run.
+    if (combinedFamily && kind.kind === 'commands') continue;
     const installRoot = resolveRuntimeArtifactInstallRoot(configDir, kind);
     const dest = resolveRuntimeArtifactDestination(configDir, kind);
     if (hasExistingSymlinkBetween(path.resolve(installRoot), dest, { allowOptInFollow: isSymlinkedDestOptIn() })) {
       if (combinedFamily && kind.kind === 'skills') {
         throw new Error(installOpencodeFamilySkillsSymlinkRefusalMessage(dest, installRoot));
       }
-      if (standaloneAgents && kind.kind === 'agents') {
+      if ((standaloneAgents || combinedFamily) && kind.kind === 'agents') {
         throw new Error(installAgentsKindStandaloneSymlinkRefusalMessage(dest, installRoot));
       }
       if (legacyFlatLocal && (kind.kind === 'commands' || kind.kind === 'skills')) {
@@ -948,14 +951,11 @@ function preflightInstallSymlinkDestinations(runtime, configDir, scope, installM
     check(configDir, path.resolve(agentsTomlDir), installCodexConfigSymlinkRefusalMessage(configDir));
 
     const agentsSrc = path.join(packageRoot, 'agents');
-    const selectedAgents = resolvedProfile && resolvedProfile.agents;
-    for (const file of fs.readdirSync(agentsSrc).filter((entry) => entry.startsWith('gsd-') && entry.endsWith('.md'))) {
-      const fileStem = file.replace(/\.md$/, '');
-      if (selectedAgents instanceof Set && !selectedAgents.has(fileStem)) continue;
-      const agentTomlSourcePath = path.join(agentsSrc, file);
-      const source = fs.readFileSync(agentTomlSourcePath, 'utf8');
-      const content = prepareCodexAgentConfigContent(source, agentTomlSourcePath, configDir);
-      const name = codexAgentTomlName(file, content);
+    const agentFiles = fs.readdirSync(agentsSrc, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.startsWith('gsd-')).map((entry) => entry.name);
+    for (const file of selectAgentFilesForProfile(agentFiles, agentProfile)) {
+      const source = fs.readFileSync(path.join(agentsSrc, file), 'utf8');
+      const name = codexAgentTomlName(file, source);
       const agentTomlPath = assertDestWithinConfigHome(agentsTomlDir, `${name}.toml`);
       if (hasExistingSymlinkBetween(resolvedRoot, agentTomlPath, { allowOptInFollow: isSymlinkedDestOptIn() })) {
         throw new Error(installCodexAgentTomlSymlinkRefusalMessage(agentTomlPath));
@@ -972,9 +972,11 @@ function prepareCodexAgentConfigContent(source, sourcePath, targetDir) {
   return convertClaudeToCodexMarkdown(content);
 }
 
-function codexAgentTomlName(file, content) {
-  const { frontmatter } = extractFrontmatterAndBody(content);
-  return extractFrontmatterField(frontmatter, 'name') || file.replace(/\.md$/, '');
+function codexAgentTomlName(file, source) {
+  const { frontmatter } = extractFrontmatterAndBody(source);
+  // Composition preserves the header. Convert only that header for identity;
+  // if composition ever rewrites identity, resolve it here for both callers.
+  return extractFrontmatterField(convertClaudeToCodexMarkdown(frontmatter), 'name') || file.replace(/\.md$/, '');
 }
 
 /**
@@ -7230,7 +7232,7 @@ function installCodexConfig(targetDir, agentsSrc, sandboxTier = 'codex-agent-san
     // for that call; see `deriveCodexSandboxMode`'s doc in
     // `codex-agent-toml.cts` for the resolution.
     const fileStem = file.replace(/\.md$/, '');
-    const name = codexAgentTomlName(file, content);
+    const name = codexAgentTomlName(file, source);
     const description = extractFrontmatterField(frontmatter, 'description') || '';
 
     agents.push({ name, description: toSingleLine(description) });
@@ -10852,8 +10854,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     return stageSkillsForProfile(commandsGsdDir, _resolvedProfile);
   }
   function _stageAgents(agentsDir) {
-    if (_isCoreProfileAlias) return agentsDir;
-    return stageAgentsForProfile(agentsDir, _resolvedProfile);
+    return stageAgentsForProfile(agentsDir, _agentProfile);
   }
   const persistActiveProfileMarker = () => {
     try {
@@ -10879,7 +10880,24 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     localDirName: hostBehaviorsFor(runtime).localTargetIsProjectRoot === true ? undefined : getDirName(runtime),
   });
 
-  preflightInstallSymlinkDestinations(runtime, targetDir, _installScopeId, _effectiveInstallMode, _resolvedProfile, src);
+  // Resolve the committed surface before preflight and keep that selection
+  // for every subsequent writer, including Codex's staged agent TOMLs.
+  if (isSkillsRuntimeInstall(runtime, _installScopeId)) {
+    const _committedSurface = readSurface(targetDir);
+    if (_committedSurface) {
+      _resolvedProfile = resolveSurface(
+        targetDir,
+        loadSkillsManifest(_commandsDir),
+        undefined,
+        _installedCapabilityRegistry,
+        _committedSurface,
+      );
+    }
+  }
+  // Core keeps the existing unfiltered raw-agent staging behavior. It emits
+  // no Codex TOMLs because its effective install mode is minimal.
+  const _agentProfile = _isCoreProfileAlias ? { ..._resolvedProfile, skills: '*' } : _resolvedProfile;
+  preflightInstallSymlinkDestinations(runtime, targetDir, _installScopeId, _effectiveInstallMode, _agentProfile, src);
 
   // #2875 (#1874-F19 anti-inertness, test-matrix C7): recover any user
   // artifact orphaned by a PRIOR install run that died between staging and
@@ -11501,19 +11519,6 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   if (_isSkillsRuntime) {
     // Layout-driven install for skills-based runtimes (full and minimal modes)
     const scope = _installScopeId;
-    // Preserve an existing Runtime Surface selection during upgrades. The
-    // installer refreshes the source corpus first, then emits exactly the
-    // already-committed selection instead of widening it to the base profile.
-    const _committedSurface = readSurface(targetDir);
-    if (_committedSurface) {
-      _resolvedProfile = resolveSurface(
-        targetDir,
-        loadSkillsManifest(_commandsDir),
-        undefined,
-        _installedCapabilityRegistry,
-        _committedSurface,
-      );
-    }
     // ADR-1239 upgrade 3 / #2088: a kind may declare an alternate install `home`
     // (e.g. Codex skills -> $HOME/.agents/skills) instead of the runtime's normal
     // configDir. Resolve the ACTUAL on-disk skills root here, descriptor-driven

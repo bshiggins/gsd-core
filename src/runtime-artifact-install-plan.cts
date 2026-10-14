@@ -174,7 +174,7 @@ function resolveRuntimeArtifactDestination(configDir: string, kind: ArtifactKind
 }
 
 function resolveRuntimeArtifactInstallRoot(configDir: string, kind: ArtifactKind): string {
-  return typeof kind.home === 'string' && kind.home !== '' ? kind.home : configDir;
+  return kind.home ?? configDir;
 }
 
 function shouldInstallCombinedFamily(behaviors: { combinedFamilyInstall?: boolean }): boolean {
