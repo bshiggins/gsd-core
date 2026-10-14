@@ -133,7 +133,7 @@ import { updateTableCell, deleteTableRow, escapeCell, splitTableRow } from './ma
 import { deleteSection, updateBullet, tokenizeHeadings, scanFencedBlocks, type HeadingToken } from './markdown-sectionizer.cjs';
 import { PathAcceptance, tryWithinRoot } from './security.cjs';
 // #5060: the Phase Status Module owns the ROADMAP Status-cell token vocabulary.
-import { PHASE_STATUS, toRoadmapStatusCell } from './phase-status.cjs';
+import { PHASE_STATUS, toRoadmapStatusCell, phaseStatus } from './phase-status.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- roadmap.cjs is an export= CommonJS module
 import roadmapMod = require('./roadmap.cjs');
 const { buildPhaseHeadingRegex } = roadmapMod;
@@ -7509,6 +7509,25 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         const nextPhaseDisplayName =
           phaseDisplayNameFromRoadmap(roadmapContent, nextPhaseNum) ??
           phaseDisplayNameFromSlug(nextPhaseName);
+        // #4824: classify the SELECTED next phase from disk (the same ladder
+        // roadmap analyze uses) so the Status / Current Plan / Stopped-at
+        // handoff does not say "ready to plan" for a phase already planned or
+        // executed. A missing directory or unreadable phase keeps the
+        // historical wording.
+        let nextPhaseDisk: { status: ReturnType<typeof phaseStatus>['value']['status']; planCount: number; summaryCount: number } | null = null;
+        if (nextPhaseNum && !isLastPhase) {
+          try {
+            const nextInfo = findPhaseInternal(cwd, nextPhaseNum) as unknown as { found?: boolean; directory?: string } | null;
+            if (nextInfo && nextInfo.found && nextInfo.directory) {
+              const { value } = phaseStatus(path.join(cwd, nextInfo.directory), {
+                convention: resolvePhaseIdConvention(cwd),
+              });
+              nextPhaseDisk = { status: value.status, planCount: value.planCount, summaryCount: value.summaryCount };
+            }
+          } catch {
+            /* best-effort: an unreadable next phase keeps `Ready to plan` */
+          }
+        }
         const completeResult = transitionCore(
           stateContent,
           {
@@ -7519,6 +7538,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             isLastPhase,
             planCount,
             summaryCount,
+            nextPhaseDisk,
           },
           {
             clock: realClock,
