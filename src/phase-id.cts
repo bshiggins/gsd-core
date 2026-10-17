@@ -24,6 +24,7 @@
  */
 
 import { escapeRegex } from './pattern.cjs';
+import { tokenizeHeadings } from './markdown-sectionizer.cjs';
 
 // ─── Phase-id helpers ─────────────────────────────────────────────────────────
 
@@ -1404,6 +1405,80 @@ const BARE_INTEGER_RE = new RegExp(`^${LEADING_DIGIT_RUN_SOURCE}$`);
 /** Strip leading zeros for numeric-equality compare, keeping a lone "0". */
 const unpad = (digits: string): string => digits.replace(/^0+(?=\d)/, '');
 
+/** #5186: the directory shape shared by phase.add and custom-ID readers. */
+function phaseDirectoryName(id: string, slug: string, projectCode?: string | null): string {
+  return `${projectCode ? `${projectCode}-` : ''}${id}-${slug}`;
+}
+
+/** Keep numeric, letter-suffixed and bracket queries on their legacy path. */
+function isCustomPhaseId(id: string): boolean {
+  return !new RegExp(`^${PHASE_NUMBER_TOKEN_SOURCE}(?:-\\d+)*$`, 'i').test(id)
+    && !id.startsWith('[');
+}
+
+type CustomPhaseOptions = { phaseNaming?: unknown; projectCode?: string | null };
+type CustomPhaseQuery = { id: string; projectCode?: string | null; knownIds: string[] };
+
+/** Custom heading IDs are identity hints only; titles never locate directories. */
+function customPhaseQuery(id: string, roadmap: string, options: CustomPhaseOptions = {}): CustomPhaseQuery | null {
+  if (!isCustomPhaseId(id)) return null;
+  if (id.includes('/') || id.includes('\\')) return null;
+  const prefix = options.projectCode ? `${options.projectCode}-` : '';
+  const body = prefix && id.startsWith(prefix) ? id.slice(prefix.length) : id;
+  // Reuse the numeric tokenizer so directory-name queries retain legacy resolution.
+  const numeric = derivePhaseTokenSegments(body);
+  if (!numeric.prefix && numeric.tokenSegments.length > 0) return null;
+  if (options.phaseNaming !== undefined && options.phaseNaming !== 'custom') return null;
+  if (options.phaseNaming === undefined && hasProjectCodePrefix(id)) return null;
+  const headingId = /^Phase[ \t]+([^ \t:\n]+)(?:[ \t]+\([^)\n]*\))?[ \t]*:/;
+  const knownIds = tokenizeHeadings(roadmap)
+    .filter(heading => heading.level >= 2 && heading.level <= 4)
+    .flatMap(heading => {
+      const match = heading.text.match(headingId);
+      return match ? [match[1]] : [];
+    });
+  return { id, projectCode: options.projectCode, knownIds };
+}
+
+/** Candidate project prefixes for the custom directory shape. */
+function customDirectoryBodies(dir: string, projectCode?: string | null): string[] {
+  const bodies = [dir];
+  if (projectCode) {
+    const prefix = `${projectCode}-`;
+    if (dir.startsWith(prefix)) bodies.push(dir.slice(prefix.length));
+  } else if (projectCode === undefined) {
+    const prefix = dir.match(/^[A-Z][A-Z0-9_]*-/);
+    if (prefix) bodies.push(dir.slice(prefix[0].length));
+  }
+  return bodies;
+}
+
+/**
+ * Directory IDs preserve their written case; generated slugs are lowercase.
+ * A leading uppercase run therefore supplies IDs even after headings are archived.
+ * Explicit heading IDs and the query also cover mixed-case custom IDs.
+ */
+function customIdsFromDirectories(dirs: string[], projectCode?: string | null): string[] {
+  return dirs.flatMap(dir => customDirectoryBodies(dir, projectCode).map(body => {
+    const segments = body.split('-');
+    let count = 1;
+    while (count < segments.length - 1 && !/[a-z]/.test(segments[count])) count++;
+    return segments.slice(0, count).join('-');
+  }));
+}
+
+/** Longest known ID wins; the remainder is read from disk, never from a title. */
+function customPhaseDirectoryParts(dir: string, query: CustomPhaseQuery, dirs: string[]): { id: string; slug: string } | null {
+  const ids = [...new Set([query.id, ...query.knownIds, ...customIdsFromDirectories(dirs, query.projectCode)])]
+    .sort((a, b) => b.length - a.length);
+  for (const body of customDirectoryBodies(dir, query.projectCode)) {
+    const owner = ids.find(id => body.startsWith(phaseDirectoryName(id, '')));
+    if (owner !== query.id) continue;
+    return { id: query.id, slug: body.slice(phaseDirectoryName(query.id, '').length) };
+  }
+  return null;
+}
+
 /**
  * #2528: the CANONICAL phase-directory match selection — the one rule every
  * directory-resolution path (the shared locator plus the `find-phase` and
@@ -1471,7 +1546,13 @@ const unpad = (digits: string): string => digits.replace(/^0+(?=\d)/, '');
  * the directory's leading digit run instead of `extractPhaseToken` (whose
  * token for these dirs is the mis-absorbed multi-segment form).
  */
-function matchPhaseDirs(dirs: string[], normalized: string, convention?: string | null): { matches: string[]; usedBareFallback: boolean } {
+function matchPhaseDirs(dirs: string[], normalized: string, convention?: string | null, custom?: CustomPhaseQuery | null): { matches: string[]; usedBareFallback: boolean } {
+  if (custom) {
+    // A full directory name is an existing lookup form, distinct from an ID prefix.
+    const exact = dirs.filter(d => d === custom.id);
+    if (exact.length > 0) return { matches: exact, usedBareFallback: false };
+    return { matches: dirs.filter(d => customPhaseDirectoryParts(d, custom, dirs) !== null), usedBareFallback: false };
+  }
   const primary = dirs.filter(d => phaseTokenMatches(d, normalized, convention));
   if (primary.length > 0) return { matches: primary, usedBareFallback: false };
 
@@ -1796,6 +1877,10 @@ export = {
   scopeToPhase,
   phaseTokenMatches,
   matchPhaseDirs,
+  phaseDirectoryName,
+  customPhaseQuery,
+  customPhaseDirectoryParts,
+  isCustomPhaseId,
   phaseNumberForMatch,
   phaseKeyFromToken,
   phaseKeyFromDir,

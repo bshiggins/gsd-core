@@ -9,18 +9,19 @@
  * location; only the module boundary moved. The core.cjs re-export spine
  * was retired in epic #1267; callers import phase-locator helpers directly.
  *
- * Dependencies (leaf modules only — no loadConfig):
+ * Dependencies (leaf modules only; no loadConfig):
  *   - node:fs / node:path (stdlib)
  *   - ./phase-id.cjs       (normalizePhaseName, matchPhaseDirs, phaseNumberForMatch)
  *   - ./core-utils.cjs     (readSubdirectories, getPhaseFileStats, extractCanonicalPlanId, toPosixPath)
  *   - ./planning-workspace.cjs (planningDir)
+ *   - ./roadmap-parser.cjs (existing milestone enumeration filter)
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdModule = require('./phase-id.cjs');
-const { normalizePhaseName, matchPhaseDirs, phaseNumberForMatch, isSentinelPhaseId, comparePhaseNum } = phaseIdModule;
+const { customPhaseQuery, customPhaseDirectoryParts, normalizePhaseName, matchPhaseDirs, phaseNumberForMatch, isSentinelPhaseId, comparePhaseNum } = phaseIdModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import coreUtilsModule = require('./core-utils.cjs');
 const { readSubdirectories, getPhaseFileStats, extractCanonicalPlanId, toPosixPath, findUnsummarizedPlans } = coreUtilsModule;
@@ -204,7 +205,16 @@ function listArchiveVersionDirs(cwd: string, wsOverride?: string | null): Archiv
   return out;
 }
 
-function searchPhaseInDir(baseDir: string, relBase: string, normalized: string, convention?: string | null): PhaseSearchResult | null {
+/** Read identity hints for the pure phase-id matcher, without loading config. */
+function customPhaseQueryFor(cwd: string, phase: unknown, options: { phaseNaming?: unknown; projectCode?: string | null } = {}) {
+  const id = String(phase);
+  if (!customPhaseQuery(id, '', options)) return null;
+  let roadmap = '';
+  try { roadmap = fs.readFileSync(path.join(planningDir(cwd), 'ROADMAP.md'), 'utf8'); } catch { /* absent or archived */ }
+  return customPhaseQuery(id, roadmap, options);
+}
+
+function searchPhaseInDir(baseDir: string, relBase: string, normalized: string, convention?: string | null, custom?: ReturnType<typeof customPhaseQueryFor>): PhaseSearchResult | null {
   try {
     const dirs = readSubdirectories(baseDir, true);
     // #2528: canonical two-pass selection (exact token match, then the
@@ -212,7 +222,7 @@ function searchPhaseInDir(baseDir: string, relBase: string, normalized: string, 
     // phase-plan-index scans — see phase-id.cts::matchPhaseDirs.
     // #4801: the convention is threaded (optional) so bracket-convention
     // consumers get exact token matching here too.
-    const { matches, usedBareFallback } = matchPhaseDirs(dirs, normalized, convention);
+    const { matches, usedBareFallback } = matchPhaseDirs(dirs, normalized, convention, custom);
     if (matches.length === 0) return null;
 
     // #2237: fail loud when multiple directories match the same bare phase
@@ -242,10 +252,11 @@ function searchPhaseInDir(baseDir: string, relBase: string, normalized: string, 
 
     const match = matches[0];
 
-    const phaseToken = phaseNumberForMatch(match, usedBareFallback);
+    const parts = custom ? customPhaseDirectoryParts(match, custom, dirs) : null;
+    const phaseToken = parts?.id || phaseNumberForMatch(match, usedBareFallback);
     const phaseNumber = phaseToken || normalized;
     const afterToken = match.slice(phaseToken ? phaseToken.length : 0).replace(/^-/, '');
-    const phaseName = afterToken || null;
+    const phaseName = parts?.slug || afterToken || null;
     const phaseDir = path.join(baseDir, match);
     const { plans: unsortedPlans, summaries: unsortedSummaries, hasResearch, hasContext, hasVerification, hasReviews } = getPhaseFileStats(phaseDir);
     const plans = unsortedPlans.sort();
@@ -353,15 +364,16 @@ function searchPhaseInDir(baseDir: string, relBase: string, normalized: string, 
   }
 }
 
-function findPhaseInternal(cwd: string, phase: unknown, convention?: string | null): PhaseSearchResult | null {
+function findPhaseInternal(cwd: string, phase: unknown, convention?: string | null, options: { phaseNaming?: unknown; projectCode?: string | null } = {}): PhaseSearchResult | null {
   if (!phase) return null;
 
   const phasesDir = path.join(planningDir(cwd), 'phases');
   const normalized = normalizePhaseName(phase);
+  const custom = convention === 'bracket' ? null : customPhaseQueryFor(cwd, phase, options);
 
   const relPhasesDir = toPosixPath(path.relative(cwd, phasesDir));
   // #4801: convention threaded through to the matcher (see searchPhaseInDir).
-  const current = searchPhaseInDir(phasesDir, relPhasesDir, normalized, convention);
+  const current = searchPhaseInDir(phasesDir, relPhasesDir, normalized, convention, custom);
   if (current) return current;
 
   // #2855: scope the archived-milestone fallback to the SAME workstream as the
@@ -375,7 +387,7 @@ function findPhaseInternal(cwd: string, phase: unknown, convention?: string | nu
   // getArchivedPhaseDirs via listArchiveVersionDirs (see its doc comment).
   for (const { version, archivePath } of listArchiveVersionDirs(cwd)) {
     const relBase = toPosixPath(path.relative(cwd, archivePath));
-    const result = searchPhaseInDir(archivePath, relBase, normalized, convention);
+    const result = searchPhaseInDir(archivePath, relBase, normalized, convention, custom);
     if (result) {
       result.archived = version;
       return result;
@@ -591,6 +603,7 @@ function getAllArchivedPhaseDirs(cwd: string): ArchivedPhaseDir[] {
 }
 
 export = {
+  customPhaseQueryFor,
   searchPhaseInDir,
   findPhaseInternal,
   getArchivedPhaseDirs,

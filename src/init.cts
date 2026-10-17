@@ -108,6 +108,8 @@ const {
 const { pathExistsInternal, generateSlugInternal, toPosixPath } = coreUtils;
 const {
   comparePhaseNum,
+  phaseDirectoryName,
+  isCustomPhaseId,
   normalizePhaseName,
   stripProjectCodePrefix,
   PHASE_NUMBER_TOKEN_SOURCE,
@@ -193,8 +195,9 @@ function guardedFindPhase(
   cwd: string,
   phase: string,
   projectCode: unknown,
+  phaseNaming?: unknown,
 ): Record<string, unknown> | null {
-  let phaseInfo = findPhaseInternal(cwd, phase) as unknown as Record<string, unknown> | null;
+  let phaseInfo = findPhaseInternal(cwd, phase, undefined, { phaseNaming, projectCode: projectCode as string | null }) as unknown as Record<string, unknown> | null;
   if (isForeignPrefixedPhaseQuery(phase, projectCode) && !phaseInfoMatchesExactPrefix(phaseInfo, phase)) {
     phaseInfo = null;
   }
@@ -1015,7 +1018,7 @@ function cmdInitExecutePhase(
   }
 
   const config = loadConfig(cwd);
-  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code, config.phase_naming);
   // #3216: getMilestoneInfo now returns a ScopedResult — `.value` carries the
   // MilestoneInfo (or null on any non-COMPLETE scope). NOT display-only: when
   // `branching_strategy === 'milestone'`, `milestone['version']`/`['name']`
@@ -1221,7 +1224,7 @@ function cmdInitPlanPhase(
 
   const config = loadConfig(cwd);
   // #2056/#2104: foreign-prefixed queries must not collapse to numeric phases.
-  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code, config.phase_naming);
   const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
   phaseInfo = applyRoadmapFallback(phaseInfo, roadmapPhase, (rp) => {
     const phaseName = rp['phase_name'] as string | null;
@@ -1256,12 +1259,15 @@ function cmdInitPlanPhase(
   const phaseNamePlan = resolvePhaseDisplayName(phaseInfo, roadmapPhase);
   const rawProjectCodePlan = (config.project_code as string) || '';
   let expectedPhaseDirPlan: string | null = null;
-  if (!phaseDirPlan && phaseNumberPlan && phaseNamePlan) {
+  const customNamingPlan = config.phase_naming === 'custom' && isCustomPhaseId(phase);
+  if ((!phaseDirPlan || customNamingPlan) && phaseNumberPlan && phaseNamePlan) {
     const paddedNum = normalizePhaseName(phaseNumberPlan);
-    const slug = (generateSlugInternal(phaseNamePlan) || '').substring(0, 60);
+    const expectedName = (roadmapPhase?.['phase_name'] as string | undefined) || phaseNamePlan;
+    const slug = (generateSlugInternal(expectedName) || '').substring(0, 60);
     if (slug) {
-      const prefix = rawProjectCodePlan ? `${rawProjectCodePlan}-` : '';
-      const dirName = `${prefix}${paddedNum}-${slug}`;
+      const dirName = phaseDirectoryName(
+        config.phase_naming === 'custom' && isCustomPhaseId(phaseNumberPlan) ? phaseNumberPlan : paddedNum, slug, rawProjectCodePlan,
+      );
       // #2376: absolute — see comment on phase_dir below.
       expectedPhaseDirPlan = toPosixPath(path.join(planningPaths(cwd).phases, dirName));
     }
@@ -1951,7 +1957,7 @@ function cmdInitVerifyWork(cwd: string, phase: string, raw: boolean): void {
 
   const config = loadConfig(cwd);
   const _slashRuntime = resolveRuntime(cwd);
-  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code, config.phase_naming);
   const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
   phaseInfo = applyRoadmapFallback(phaseInfo, roadmapPhase, (rp) => {
     const phaseName = rp['phase_name'] as string | null;
@@ -2081,7 +2087,7 @@ function cmdInitCodeReview(
   options: Record<string, unknown> = {},
 ): void {
   const config = loadConfig(cwd);
-  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code, config.phase_naming);
   const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
   phaseInfo = applyRoadmapFallback(phaseInfo, roadmapPhase, (rp) => {
     const rpName = rp['phase_name'] as string | null;
@@ -2160,7 +2166,7 @@ function cmdInitReview(
   options: Record<string, unknown> = {},
 ): void {
   const config = loadConfig(cwd);
-  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code, config.phase_naming);
   const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
   phaseInfo = applyRoadmapFallback(phaseInfo, roadmapPhase, (rp) => ({
     found: true,
@@ -2231,7 +2237,7 @@ function cmdInitDiscussPhaseAssumptions(
   options: Record<string, unknown> = {},
 ): void {
   const config = loadConfig(cwd);
-  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code, config.phase_naming);
   const roadmapPhase = guardedGetRoadmapPhase(cwd, phase, config.project_code);
   phaseInfo = applyRoadmapFallback(phaseInfo, roadmapPhase, (rp) => {
     const rpName = rp['phase_name'] as string | null;
@@ -2295,7 +2301,7 @@ function cmdInitDiscussPhaseAssumptions(
 
 function cmdInitPhaseOp(cwd: string, phase: string, raw: boolean): void {
   const config = loadConfig(cwd);
-  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code);
+  let phaseInfo = guardedFindPhase(cwd, phase, config.project_code, config.phase_naming);
 
   // #2237: surface ambiguous phase-directory collisions instead of silently
   // taking the first match when unrelated projects share a .planning/phases/ tree.

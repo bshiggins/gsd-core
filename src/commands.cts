@@ -29,6 +29,8 @@ const { toPosixPath, generateSlugInternal, extractOneLinerFromBody } = coreUtils
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
 const {
+  phaseDirectoryName,
+  isCustomPhaseId,
   normalizePhaseName,
   comparePhaseNum,
   extractPhaseToken,
@@ -3794,8 +3796,9 @@ function cmdScaffold(cwd: string, type: string, options: ScaffoldOptions, raw: b
       // #3287: apply project_code prefix to stay consistent with phase.add/phase.insert
       const scaffoldConfig = loadConfig(cwd);
       const scaffoldProjectCode = (scaffoldConfig['project_code'] as string) || '';
-      const scaffoldPrefix = scaffoldProjectCode ? `${scaffoldProjectCode}-` : '';
-      const dirName = `${scaffoldPrefix}${padded}-${slug}`;
+      const dirName = phaseDirectoryName(
+        scaffoldConfig.phase_naming === 'custom' && isCustomPhaseId(phase) ? phase : padded, slug || '', scaffoldProjectCode,
+      );
       const phasesParent = planningPaths(cwd).phases;
       platformEnsureDir(phasesParent);
       const dirPath = path.join(phasesParent, dirName);

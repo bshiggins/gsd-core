@@ -16,7 +16,7 @@ import ioMod = require('./io.cjs');
 const { output, error, formatDiagnosticToken, declineNoOp } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { normalizePhaseName, phaseMarkdownRegexSource, matchPhaseDirs, stripProjectCodePrefix, OPTIONAL_PHASE_TAG_SOURCE, roadmapPhaseLookupSources, phaseHeadingPrefixSrcFor, PHASE_HEADING_BASELINE, isSentinelPhaseId, scopeToPhase, bracketQualifiedKey, foldBracketId } = phaseIdMod;
+const { normalizePhaseName, phaseMarkdownRegexSource, phaseMarkdownRegexSourceExact, isCustomPhaseId, matchPhaseDirs, stripProjectCodePrefix, OPTIONAL_PHASE_TAG_SOURCE, roadmapPhaseLookupSources, phaseHeadingPrefixSrcFor, PHASE_HEADING_BASELINE, isSentinelPhaseId, scopeToPhase, bracketQualifiedKey, foldBracketId } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
 const { findPhaseInternal, listMilestonePhaseDirs, listAllPhaseDirs } = phaseLocatorMod;
@@ -1128,7 +1128,8 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
 
   const roadmapPath = planningPaths(cwd).roadmap;
 
-  const phaseInfo = findPhaseInternal(cwd, phaseNum);
+  const phaseConfig = loadConfigForScope(cwd);
+  const phaseInfo = findPhaseInternal(cwd, phaseNum, undefined, { phaseNaming: phaseConfig.phase_naming, projectCode: phaseConfig.project_code as string | null });
   if (!phaseInfo) {
     error(`Phase ${phaseNum} not found`);
   }
@@ -1259,7 +1260,10 @@ function cmdRoadmapUpdatePlanProgress(cwd: string, phaseNum: string | null | und
     // step becomes conditional on `roadmapContent !== originalContent`.
     const originalContent = fs.readFileSync(roadmapPath, 'utf-8');
     let roadmapContent = originalContent;
-    const phasePattern = phaseMarkdownRegexSource(phaseNum);
+    // #5186: a custom ID such as SETUP-2 is literal, not numeric phase 2.
+    const phasePattern = phaseConfig.phase_naming === 'custom' && isCustomPhaseId(String(phaseNum))
+      ? (phaseMarkdownRegexSourceExact(phaseNum) || phaseMarkdownRegexSource(phaseNum))
+      : phaseMarkdownRegexSource(phaseNum);
     // #4247: ONE local source for the ATX phase-heading anchor that every
     // section-scoped writer below (`planSectionPattern`,
     // `insertRowsPatternA|B`) starts with — extracted so the target-detection

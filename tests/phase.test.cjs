@@ -28,7 +28,7 @@ const {
 // already used for the same CLI call elsewhere in this file (runPhaseComplete
 // above, and `run()` below at 15000ms for a lighter query-only call).
 const PHASE_COMPLETE_TIMEOUT_MS = 60000;
-const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, homeSandboxEnv, createTempProject, cleanup } = require('./helpers.cjs');
 const { splitTableRow } = require('../gsd-core/bin/lib/markdown-table.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const fc = require('fast-check');
@@ -17383,5 +17383,199 @@ describe('#4972: phase complete warns when an active verify:post audit is missin
     } finally {
       cleanup(tmpDir);
     }
+  });
+});
+
+// #5186: custom IDs written by phase.add must resolve through every reader.
+describe('custom phase add-then-resolve regressions (#5186)', () => {
+  function fixture(projectCode) {
+    const cwd = fs.realpathSync(createTempProject());
+    fs.writeFileSync(path.join(cwd, '.planning', 'config.json'), JSON.stringify({
+      phase_naming: 'custom', project_code: projectCode,
+    }));
+    fs.writeFileSync(path.join(cwd, '.planning', 'ROADMAP.md'),
+      '# Roadmap\n\n## Milestone v1.0: Test\n\n## Phases\n\n### Phase INITIAL: Initial\n\n**Goal:** Setup\n');
+    return cwd;
+  }
+
+  function query(cwd, args) {
+    const result = runGsdTools(['query', ...args], cwd, homeSandboxEnv(cwd));
+    assert.equal(result.success, true, result.error || result.output);
+    return JSON.parse(result.output);
+  }
+
+  function add(cwd, id, title, code) {
+    query(cwd, ['phase.add', title, '--id', id]);
+    const slug = title.toLowerCase().replaceAll(' ', '-');
+    const dir = `.planning/phases/${code ? `${code}-` : ''}${id}-${slug}`;
+    assert.equal(fs.statSync(path.join(cwd, dir)).isDirectory(), true);
+    return dir;
+  }
+
+  for (const code of ['CCM', null]) {
+    test(`find-phase resolves a newly added custom ID with project code ${code} (#5186)`, () => {
+      const cwd = fixture(code);
+      try {
+        const dir = add(cwd, 'PRODUCT-BOUNDARY', 'Product Boundary', code);
+        const found = query(cwd, ['find-phase', 'PRODUCT-BOUNDARY']);
+        assert.equal(found.found, true);
+        assert.equal(found.directory, dir);
+        assert.equal(found.phase_number, 'PRODUCT-BOUNDARY');
+        assert.equal(found.phase_name, 'product-boundary');
+        assert.equal(query(cwd, ['find-phase', path.basename(dir)]).directory, dir);
+      } finally { cleanup(cwd); }
+    });
+
+    test(`init.plan-phase agrees with expected_phase_dir for custom ID with project code ${code} (#5186)`, () => {
+      const cwd = fixture(code);
+      try {
+        const dir = add(cwd, 'PRODUCT-BOUNDARY', 'Product Boundary', code);
+        const init = query(cwd, ['init.plan-phase', 'PRODUCT-BOUNDARY']);
+        assert.equal(init.phase_dir, path.join(cwd, dir).split(path.sep).join('/'));
+        assert.equal(init.phase_dir, init.expected_phase_dir);
+      } finally { cleanup(cwd); }
+    });
+
+    for (const id of ['PRODUCT-BOUNDARY', 'SETUP-2']) {
+      test(`roadmap.update-plan-progress ticks custom ID ${id} with project code ${code} (#5186)`, () => {
+        const cwd = fixture(code);
+        try {
+          const dir = add(cwd, id, 'Product Boundary', code);
+          const plan = `${id}-01`;
+          fs.writeFileSync(path.join(cwd, dir, `${plan}-PLAN.md`),
+            `---\nphase: ${id}\nplan: 01\nwave: 1\n---\n# Plan\n`);
+          fs.writeFileSync(path.join(cwd, dir, `${plan}-SUMMARY.md`), '---\nstatus: complete\n---\n# Summary\n');
+          fs.writeFileSync(path.join(cwd, dir, `${id}-VERIFICATION.md`),
+            '---\nstatus: passed\n---\n# Verification\n');
+          const roadmap = path.join(cwd, '.planning', 'ROADMAP.md');
+          fs.writeFileSync(roadmap, fs.readFileSync(roadmap, 'utf8').replace('- [ ] TBD', '- TBD'));
+          fs.appendFileSync(roadmap, `\n- [ ] **Phase ${id}: Product Boundary**\n- [ ] ${plan}: Build boundary\n`);
+          query(cwd, ['roadmap.update-plan-progress', id, plan, 'complete']);
+          const updated = fs.readFileSync(roadmap, 'utf8');
+          assert.ok(updated.includes(`- [x] **Phase ${id}:`));
+          assert.ok(updated.includes(`- [x] ${plan}: Build boundary`));
+        } finally { cleanup(cwd); }
+      });
+    }
+
+    test(`custom ID prefixes and slug collisions resolve independently with project code ${code} (#5186)`, () => {
+      const cwd = fixture(code);
+      try {
+        const cases = [
+          ['SETUP', 'Two'], ['SETUP-2', 'Setup'],
+          ['BUILD', 'Extra Widget Other'], ['BUILD-EXTRA', 'Widget'],
+          ['mixed.id+tag', 'Mixed Case'],
+        ];
+        const dirs = cases.map(([id, title]) => add(cwd, id, title, code));
+        for (const [i, [id]] of cases.entries()) {
+          const found = query(cwd, ['find-phase', id]);
+          assert.equal(found.found, true, id);
+          assert.equal(found.directory, dirs[i], id);
+        }
+        assert.equal(query(cwd, ['find-phase', 'PRODUCT']).found, false);
+      } finally { cleanup(cwd); }
+    });
+  }
+
+  for (const code of ['CCM', null]) {
+    test(`custom directory survives a renamed roadmap title with project code ${code} (#5186)`, () => {
+      const cwd = fixture(code);
+      try {
+        const dir = add(cwd, 'PRODUCT-BOUNDARY', 'Product Boundary', code);
+        const roadmap = path.join(cwd, '.planning', 'ROADMAP.md');
+        fs.writeFileSync(roadmap, fs.readFileSync(roadmap, 'utf8').replace(
+          'Phase PRODUCT-BOUNDARY: Product Boundary', 'Phase PRODUCT-BOUNDARY: Renamed Boundary'));
+        assert.equal(query(cwd, ['find-phase', 'PRODUCT-BOUNDARY']).directory, dir);
+        assert.equal(query(cwd, ['init.plan-phase', 'PRODUCT-BOUNDARY']).phase_dir,
+          path.join(cwd, dir).split(path.sep).join('/'));
+      } finally { cleanup(cwd); }
+    });
+
+    test(`custom directory and independently expected path can diverge with project code ${code} (#5186)`, () => {
+      const cwd = fixture(code);
+      try {
+        const dir = add(cwd, 'PRODUCT-BOUNDARY', 'Product Boundary', code);
+        const moved = dir.replace('-product-boundary', '-different-slug');
+        fs.renameSync(path.join(cwd, dir), path.join(cwd, moved));
+        const init = query(cwd, ['init.plan-phase', 'PRODUCT-BOUNDARY']);
+        assert.equal(init.phase_dir, path.join(cwd, moved).split(path.sep).join('/'));
+        assert.equal(init.expected_phase_dir, path.join(cwd, dir).split(path.sep).join('/'));
+        assert.notEqual(init.phase_dir, init.expected_phase_dir);
+      } finally { cleanup(cwd); }
+    });
+
+    test(`archived custom IDs resolve without current roadmap headings with project code ${code} (#5186)`, () => {
+      const cwd = fixture(code);
+      try {
+        const dir = add(cwd, 'PRODUCT-BOUNDARY', 'Product Boundary', code);
+        const archive = path.join(cwd, '.planning', 'milestones', 'v1.0-phases');
+        fs.mkdirSync(archive, { recursive: true });
+        const archived = path.join(archive, path.basename(dir));
+        fs.renameSync(path.join(cwd, dir), archived);
+        fs.writeFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), '# Roadmap\n\n### Phase NEXT: Next\n');
+        assert.equal(query(cwd, ['find-phase', 'PRODUCT-BOUNDARY']).directory,
+          path.relative(cwd, archived).split(path.sep).join('/'));
+        const init = query(cwd, ['init.plan-phase', 'PRODUCT-BOUNDARY']);
+        assert.equal(init.phase_dir, archived.split(path.sep).join('/'));
+      } finally { cleanup(cwd); }
+    });
+
+    test(`directory IDs disambiguate SETUP from SETUP-2 without headings with project code ${code} (#5186)`, () => {
+      const cwd = fixture(code);
+      try {
+        const short = add(cwd, 'SETUP', 'Initial Setup', code);
+        const long = add(cwd, 'SETUP-2', 'Second Setup', code);
+        fs.writeFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), '# Roadmap\n');
+        assert.equal(query(cwd, ['find-phase', 'SETUP']).directory, short);
+        assert.equal(query(cwd, ['find-phase', 'SETUP-2']).directory, long);
+        cleanup(path.join(cwd, short));
+        assert.equal(query(cwd, ['find-phase', 'SETUP']).found, false);
+      } finally { cleanup(cwd); }
+    });
+  }
+
+  test('roadmap IDs disambiguate lowercase custom prefixes (#5186)', () => {
+    const cwd = fixture('CCM');
+    try {
+      const short = add(cwd, 'setup', 'Initial Setup', 'CCM');
+      const long = add(cwd, 'setup-extra', 'Final Setup', 'CCM');
+      assert.equal(query(cwd, ['find-phase', 'setup']).directory, short);
+      assert.equal(query(cwd, ['find-phase', 'setup-extra']).directory, long);
+    } finally { cleanup(cwd); }
+  });
+
+  test('custom naming preserves legacy directory resolution (#5186)', () => {
+    const cwd = fixture('CCM');
+    try {
+      for (const [id, directory] of [['3', 'CCM-03-numeric'], ['3A', 'CCM-03A-numeric'], ['3.2', 'CCM-03.2-numeric']]) {
+        const result = runGsdTools(['scaffold', 'phase-dir', '--phase', id, '--name', 'Numeric'], cwd, homeSandboxEnv(cwd));
+        assert.equal(result.success, true, result.error || result.output);
+        assert.equal(fs.existsSync(path.join(cwd, '.planning', 'phases', directory)), true, directory);
+        assert.equal(query(cwd, ['find-phase', directory]).directory, `.planning/phases/${directory}`);
+      }
+      const bracketDir = path.join(cwd, '.planning', 'phases', 'GSD.02-05-setup');
+      fs.mkdirSync(bracketDir, { recursive: true });
+      const located = require('../gsd-core/bin/lib/phase-locator.cjs').findPhaseInternal(cwd, 'GSD.02-05', 'bracket');
+      assert.equal(located.directory, '.planning/phases/GSD.02-05-setup');
+      assert.equal(located.phase_number, 'GSD.02-05-setup');
+      assert.equal(located.phase_name, null);
+      assert.equal(located.phase_slug, null);
+    } finally { cleanup(cwd); }
+  });
+
+  test('fast-check custom phase add-then-resolve round trip (#5186)', () => {
+    const word = fc.array(fc.constantFrom(...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'), { minLength: 2, maxLength: 8 })
+      .map(chars => chars.join(''));
+    fc.assert(fc.property(word, word, fc.boolean(), (head, tail, prefixed) => {
+      const code = prefixed ? 'CCM' : null;
+      const cwd = fixture(code);
+      try {
+        const id = `${head}-${tail}`;
+        const dir = add(cwd, id, 'Property Boundary', code);
+        const found = query(cwd, ['find-phase', id]);
+        assert.equal(found.found, true, id);
+        assert.equal(found.directory, dir);
+      } finally { cleanup(cwd); }
+    }), { seed: 5186, numRuns: 20 });
   });
 });

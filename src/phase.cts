@@ -47,6 +47,8 @@ const {
   phaseMarkdownRegexSource,
   comparePhaseNum,
   matchPhaseDirs,
+  phaseDirectoryName,
+  customPhaseDirectoryParts,
   isSentinelPhaseId,
   scopeToPhase,
   OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
@@ -61,7 +63,7 @@ import { declareGateExit } from './gate-exit.cjs';
 import { gateVerdict } from './gate-verdict.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-locator.cjs is an export= CommonJS module
 import phaseLocatorMod = require('./phase-locator.cjs');
-const { findPhaseInternal, getArchivedPhaseDirs, listMilestonePhaseDirs, listAllPhaseDirs } = phaseLocatorMod;
+const { customPhaseQueryFor, findPhaseInternal, getArchivedPhaseDirs, listMilestonePhaseDirs, listAllPhaseDirs } = phaseLocatorMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-scope.cjs is an export= CommonJS module
 import planningScopeMod = require('./planning-scope.cjs');
 const { SCOPE } = planningScopeMod;
@@ -539,6 +541,8 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
 
   const planBase = planningDir(cwd);
   const normalized = normalizePhaseName(phase);
+  const config = loadConfig(cwd);
+  const custom = customPhaseQueryFor(cwd, phase, { phaseNaming: config.phase_naming, projectCode: config.project_code as string | null });
   const notFound = {
     found: false,
     directory: null,
@@ -592,7 +596,7 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
       // #2528: selection delegates to the canonical two-pass matcher (exact
       // token match, then the bare-integer leading-digit-run fallback) shared
       // with the locator and the phase-plan-index scan.
-      const { matches } = matchPhaseDirs(dirs, normalized);
+      const { matches } = matchPhaseDirs(dirs, normalized, undefined, custom);
       if (matches.length === 0) continue;
       if (matches.length > 1) {
         output({
@@ -608,8 +612,9 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
         match.match(
           new RegExp(`^${OPTIONAL_PROJECT_CODE_PREFIX_SOURCE}(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i')
         ) || match.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i'));
-      const phaseNumber = dirMatch ? dirMatch[1] : normalized;
-      const phaseName = dirMatch && dirMatch[2] ? dirMatch[2] : null;
+      const customParts = custom ? customPhaseDirectoryParts(match, custom, dirs) : null;
+      const phaseNumber = customParts?.id || (dirMatch ? dirMatch[1] : normalized);
+      const phaseName = customParts?.slug || (dirMatch && dirMatch[2] ? dirMatch[2] : null);
 
       const phaseDir = path.join(searchDir, match);
       const phaseFiles = fs.readdirSync(phaseDir);
@@ -857,6 +862,8 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
 
   const phasesDir = path.join(planningDir(cwd), 'phases');
   const normalized = normalizePhaseName(phase);
+  const config = loadConfig(cwd);
+  const custom = customPhaseQueryFor(cwd, phase, { phaseNaming: config.phase_naming, projectCode: config.project_code as string | null });
 
   let phaseDir: string | null = null;
   let phaseDirName: string | null = null;
@@ -871,7 +878,7 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
     // the locator and the find-phase scan (this site previously first-matched
     // with `.find()` and had no multi-match guard — the #2237 fail-loud rule
     // now applies here too, so the three resolution paths cannot disagree).
-    const { matches } = matchPhaseDirs(dirs, normalized);
+    const { matches } = matchPhaseDirs(dirs, normalized, undefined, custom);
     if (matches.length > 1) {
       ambiguousMatches = matches;
     } else if (matches.length === 1) {
@@ -1471,7 +1478,7 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
     if (customId || config.phase_naming === 'custom') {
       _newPhaseId = customId || slug.toUpperCase();
       if (!_newPhaseId) error('--id required when phase_naming is "custom"');
-      _dirName = `${prefix}${_newPhaseId}-${slug}`;
+      _dirName = phaseDirectoryName(String(_newPhaseId), slug, projectCode);
     } else {
       // Collect all phase numbers visible in the current-milestone content.
       // Three sources are scanned so that a phase in ANY representation
