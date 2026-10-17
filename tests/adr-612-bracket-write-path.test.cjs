@@ -1993,7 +1993,7 @@ for (const convention of [null, 'sequential', 'milestone-prefixed']) {
 }
 
 for (const convention of [null, 'sequential', 'milestone-prefixed']) {
-  test(`#4304 normalization parity: ${String(convention)} matches upstream/next for a fenced phase heading`, () => {
+  test(`#4304 verbatim parity: ${String(convention)} matches upstream/next for a fenced phase heading`, () => {
     const dir = project('adr-612-legacy-fenced-normalization-');
     writeConfig(dir, convention);
     fs.writeFileSync(
@@ -2016,9 +2016,9 @@ for (const convention of [null, 'sequential', 'milestone-prefixed']) {
 
     const roadmap = fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8');
     assert.equal(
-      roadmap.includes('```md\n\n### Phase 99: Example\n\nprose\n```'),
+      roadmap.includes('```md\n### Phase 99: Example\nprose\n```'),
       true,
-      'legacy write bytes must match upstream/next normalization',
+      'legacy write bytes must match upstream/next verbatim preservation (#5113)',
     );
   });
 }
