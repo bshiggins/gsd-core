@@ -35,6 +35,7 @@ const {
   getGlobalSkillsBase,
   resolveKimiHooksTomlDir,
   isRegisteredRuntimeId,
+  resolveGsdHome,
 } = require('../gsd-core/bin/lib/runtime-homes.cjs');
 // #2870: the Install Scope Module — turns a bare 'global' | 'local' scope id
 // plus a runtime into one resolved value (configHome, settingsFile,
@@ -1284,6 +1285,17 @@ const applySettingsJsonHooks = hooksSurface.applySettingsJsonHooks;
 // writeKimiHooksToml / removeKimiHooksToml: kimi's native config.toml [[hooks]]
 // surface (#2095 EoS/kimi Upgrade 1) — separate from settings.json entirely.
 const writeKimiHooksToml = hooksSurface.writeKimiHooksToml;
+
+// #4840: false when the runtime declares `context-warnings` unsupported in its
+// descriptor (`hostBehaviors.unsupportedFeatures`). gsd-context-monitor.js reads
+// the metrics bridge file only the statusline hook writes, and the statusline
+// is wired for Claude Code alone, so on any other host the hook fires on every
+// tool event, finds no file and exits silently — forever. Such a host gets no
+// monitor registration (stale ones are stripped), as Codex does since #2586.
+function runtimeSupportsContextWarnings(runtime) {
+  const unsupported = hostBehaviorsFor(runtime).unsupportedFeatures;
+  return !(Array.isArray(unsupported) && unsupported.includes('context-warnings'));
+}
 const removeKimiHooksToml = hooksSurface.removeKimiHooksToml;
 // processAttribution: pure Co-Authored-By content transform, relocated to the
 // conversion module (ADR-1508 / #1510 Phase 1). Bound here so install.js
@@ -7022,7 +7034,7 @@ function recordDefaultsProvenance(gsdDir, runtime, defaults, setNow) {
 /** @returns {boolean} true when it removed or reverted something */
 function revertNonClaudeDefaults(runtime) {
   if (hostBehaviorsFor(runtime).nativeModelAliases || process.env.GSD_TEST_MODE) return false;
-  const gsdDir = path.join(os.homedir(), '.gsd');
+  const gsdDir = path.join(resolveGsdHome(), '.gsd'); // #5017: GSD_HOME-aware, like the loader
   const provPath = path.join(gsdDir, DEFAULTS_PROVENANCE_NAME);
   if (!fs.existsSync(provPath)) return false;
   let releaseLock = null;
@@ -7075,7 +7087,7 @@ function revertNonClaudeDefaults(runtime) {
  */
 function writeNonClaudeDefaults(runtime) {
   if (hostBehaviorsFor(runtime).nativeModelAliases || process.env.GSD_TEST_MODE) return;
-  const gsdDir = path.join(os.homedir(), '.gsd');
+  const gsdDir = path.join(resolveGsdHome(), '.gsd'); // #5017: GSD_HOME-aware, like the loader
   const defaultsPath = path.join(gsdDir, 'defaults.json');
   let releaseLock = null;
   try {
@@ -12554,6 +12566,41 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
           }
         }
       }
+      // #5123: the Copilot and Antigravity converters write their DEFAULT home
+      // into `@` includes and Kimi's prompt converter leaves a prose "GSD core/"
+      // path, none of which exist when the payload lives somewhere else. Point
+      // them at the real install root (the same `$HOME/…` / absolute prefix the
+      // other runtimes use). Global installs only: a local install resolves
+      // against its project, which the converters already handle.
+      const includeRetarget = hostBehaviorsFor(runtime);
+      if (isGlobal && (includeRetarget.defaultHomeIncludeRoot || includeRetarget.retargetsGsdCoreProsePath === true)) {
+        const includePrefix = runtimeArtifactConversion._computePathPrefix({
+          isGlobal: true,
+          isOpencode: false,
+          resolvedTarget: targetDir,
+          homeDir: os.homedir(),
+        });
+        for (const relPath of manifestFiles) {
+          const fileName = path.basename(relPath);
+          if (!(fileName.endsWith('.md') || fileName.endsWith('.toml'))) continue;
+          if (fileName === 'CHANGELOG.md') continue;
+          const retargetPath = path.join(targetDir, relPath);
+          let retargetContent;
+          try {
+            retargetContent = fs.readFileSync(retargetPath, 'utf8');
+          } catch (_retargetReadErr) {
+            continue; // inaccessible or missing — never fail the install over this pass
+          }
+          const retargeted = runtimeArtifactConversion.retargetInstalledIncludes(retargetContent, includeRetarget, includePrefix);
+          if (retargeted !== retargetContent) {
+            try {
+              fs.writeFileSync(retargetPath, retargeted);
+            } catch (_retargetWriteErr) {
+              continue;
+            }
+          }
+        }
+      }
       for (const relPath of manifestFiles) {
         const fileName = path.basename(relPath);
         if (!(fileName.endsWith('.md') || fileName.endsWith('.toml'))) continue;
@@ -13248,7 +13295,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       }
       const kimiHookOpts = { portableHooks: hasPortableHooks, runtime };
       const kimiHooksTomlPath = path.join(kimiHooksRoot, 'config.toml');
-      const kimiHooksResult = writeKimiHooksToml(kimiHooksTomlPath, kimiHooksRoot, { hookOpts: kimiHookOpts });
+      const kimiHooksResult = writeKimiHooksToml(kimiHooksTomlPath, kimiHooksRoot, { hookOpts: kimiHookOpts, contextWarnings: runtimeSupportsContextWarnings(runtime) });
       configuredEntrypoints.push(...kimiHooksResult.configuredEntrypoints);
       if (kimiHooksResult.changed) {
         console.log(`  ${green}✓${reset} Configured ${kimiHooksResult.entryCount} GSD hook(s) in ${kimiHooksTomlPath}`);
@@ -13530,6 +13577,9 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   const updateCheckCommand = isGlobal
     ? buildHookCommand(targetDir, 'gsd-check-update.js', hookOpts)
     : localCmd('gsd-check-update.js');
+  // #4840: no metrics writer on this host -> no monitor to register (see runtimeSupportsContextWarnings).
+  const contextWarnings = runtimeSupportsContextWarnings(runtime);
+  // The command stays built: the extended lifecycle events (SubagentStop, PreCompact, ...) still route to it.
   const contextMonitorCommand = isGlobal
     ? buildHookCommand(targetDir, 'gsd-context-monitor.js', hookOpts)
     : localCmd('gsd-context-monitor.js');
@@ -13574,6 +13624,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     hooksSurface: plan.hooksSurface,
     updateCheckCommand,
     contextMonitorCommand,
+    contextWarnings,
     promptGuardCommand,
     readGuardCommand,
     readInjectionScannerCommand,
@@ -13582,6 +13633,9 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     localCmd,
     localShellCmd,
   });
+  if (!contextWarnings) {
+    console.log(`  ${dim}↳${reset} ${getRuntimeLabel(runtime)}: agent-facing context warnings are unsupported (no statusline writes the context metrics the monitor reads), so the context monitor hook is not registered`);
+  }
 
   // Compute the update-banner hook command alongside the others so
   // installAllRuntimes can register it at finalize time when the user opts
