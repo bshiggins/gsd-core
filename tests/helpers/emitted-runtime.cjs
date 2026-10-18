@@ -360,11 +360,11 @@ function resolveBase(env = process.env, { cwd = REPO_ROOT } = {}) {
  * diff needs the same commit, so a silent fallback to the tip would reintroduce the
  * mismatch this exists to close.
  *
- * @returns {{ ref: string, tipSha: string, sha: string } | null} `sha` is the merge-base.
  * @param {object} [env] base-ref environment overrides.
  * @param {object} [options] resolution and reporting options.
  * @param {string} [options.cwd] repository to resolve against.
  * @param {function} [options.diagnostic] receives base context before any checks fail or skip.
+ * @returns {{ ref: string, tipSha: string, sha: string } | null} `sha` is the merge-base.
  */
 function resolveAttributionBase(env = process.env, { cwd = REPO_ROOT, diagnostic } = {}) {
   const resolved = resolveBase(env, { cwd });

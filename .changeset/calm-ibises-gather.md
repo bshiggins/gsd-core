@@ -2,4 +2,4 @@
 type: Fixed
 pr: 5508
 ---
-Local emitted-attribution checks prefer `upstream/next` over a fork's stale `origin/next` and report the resolved base with the `GSD_EMITTED_BASE` override in failure and skip output (#5187).
+**Unpinned emitted-attribution checks prefer the upstream base** — Fork clones now try `upstream/next` before `origin/next`, preserve pin and CI precedence, and report the resolved base with the `GSD_EMITTED_BASE` override before failures or skips (#5187).

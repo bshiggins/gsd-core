@@ -2395,7 +2395,7 @@ test('differential attribution over the real tree', { timeout: HEAVY_REAL_TREE_T
   // finding — it is a statement about the checkout.
   if (!resolved) {
     t.skip(
-      'no base ref resolvable; tried ' + baseRefCandidates().join(', ') +
+      'no base ref resolvable — tried ' + baseRefCandidates().join(', ') +
       '. The differential gate did NOT run here. It binds in the CI test lanes, which ' +
       'fetch the base ref explicitly; set GSD_EMITTED_BASE=<ref|sha> to run it elsewhere.',
     );
