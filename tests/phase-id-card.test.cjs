@@ -56,3 +56,205 @@ describe('#3638: phase ID convention card single source', () => {
     assert.equal(reference.slice(start + opener.length, end), phaseIdCard());
   });
 });
+
+// #5027: source-text-is-the-product covers generated runtime instructions.
+describe('#5027: convention regions fail closed and preserve surrounding bytes', () => {
+  const { afterEach } = require('node:test');
+  const { cleanup, createTempDir } = require('./helpers.cjs');
+  const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
+  const { runNode } = require('./helpers/process-seam.cjs');
+  const roots = [];
+  afterEach(() => roots.splice(0).forEach(root => cleanup(root)));
+  function fixture() {
+    const gen = require('../scripts/gen-phase-id-convention.cjs');
+    const root = createTempDir('gsd-5027-');
+    roots.push(root);
+    const owner = 'gsd-core/bin/lib/phase-id-card.cjs';
+    fs.mkdirSync(path.dirname(path.join(root, owner)), { recursive: true });
+    fs.copyFileSync(path.join(__dirname, '..', owner), path.join(root, owner));
+    for (const { file } of [...gen.TARGETS, gen.REFERENCE]) {
+      const target = path.join(root, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      const card = file === gen.REFERENCE.file ? '<!-- PHASE-ID-CARD:START -->\nold card\n<!-- PHASE-ID-CARD:END -->\n' : '';
+      fs.writeFileSync(target, `prefix.\r\n${card}${gen.START}\r\nold\r\n${gen.END}\r\nsuffix\r\n`.replace(/(?<!\r)\n/g, '\r\n'));
+    }
+    return { gen, root, target: path.join(root, gen.TARGETS[0].file) };
+  }
+  test('renderer retains the opt-in and legacy contracts and composes the card once', () => {
+    const owner = require('../gsd-core/bin/lib/phase-id-card.cjs');
+    assert.equal(typeof owner.phaseIdConventionRules, 'function');
+    const rules = owner.phaseIdConventionRules();
+    assert.match(rules, /Unset\/null or sequential/);
+    assert.match(rules, /milestone-prefixed/);
+    assert.match(rules, /MM is the active milestone/);
+    assert.equal(owner.phaseIdConventionBlock(), `${rules}\n\n\x60\x60\x60text\n${phaseIdCard()}\n\x60\x60\x60`);
+  });
+  test('write is idempotent, preserves CRLF and unmanaged bytes, and CLI checks fixtures', () => {
+    const { gen, root, target } = fixture();
+    assert.equal(gen.check(root).violations[0].reason, 'stale_region');
+    assert.equal(gen.write(root).ok, true);
+    const output = fs.readFileSync(target, 'utf8');
+    assert.ok(output.startsWith('prefix.\r\n'));
+    assert.ok(output.endsWith('\r\nsuffix\r\n'));
+    assert.equal(output.split('\r\n').join('').includes(String.fromCharCode(10)), false);
+    assert.equal(gen.check(root).ok, true);
+    assert.deepEqual(gen.write(root).changedFiles, []);
+    const cli = runNode([path.join(__dirname, '../scripts/gen-phase-id-convention.cjs'), '--check', '--json', '--root', root], { timeoutMs: PROBE_TIMEOUT_MS });
+    assert.equal(cli.exitCode, 0, cli.stderr);
+    assert.equal(JSON.parse(cli.stdout).targetCount, 143);
+  });
+  for (const [reason, mutate] of [
+    ['missing_file', (text, gen, target) => { fs.unlinkSync(target); return null; }],
+    ['missing_region', () => 'no region\n'],
+    ['duplicate_marker', (text, gen) => `${text}\n${gen.START}\n`],
+    ['reversed_marker', (text, gen) => `${gen.END}\n${gen.START}\n`],
+    ['nested_region', text => `<!-- OTHER:START -->\n${text}\n<!-- OTHER:END -->\n`],
+    ['nested_region', text => `\x60\x60\x60md\n${text}\x60\x60\x60\n`],
+  ]) {
+    test(`write rejects ${reason} before modifying any target`, () => {
+      const { gen, root, target } = fixture();
+      const untouched = path.join(root, gen.TARGETS[1].file);
+      const before = fs.readFileSync(untouched);
+      const changed = mutate(fs.readFileSync(target, 'utf8'), gen, target);
+      if (changed !== null) fs.writeFileSync(target, changed);
+      const result = gen.write(root);
+      assert.equal(result.ok, false);
+      assert.ok(result.violations.some(v => v.reason === reason), JSON.stringify(result));
+      assert.deepEqual(fs.readFileSync(untouched), before);
+      assert.deepEqual(result.changedFiles, []);
+    });
+  }
+  for (const [name, wrap] of [
+    ['indented XML', body => `  <step name="conditional">\n${body}\n  </step>\n`],
+    ['info string closer', body => `\x60\x60\x60md\ncode\n\x60\x60\x60not-a-closer\n${body}\n\x60\x60\x60\n`],
+    ['list continuation', body => `- If enabled:\n  Continue this list item.\n\n${body}\n  continue.\n`],
+    ['unfinished inline condition', body => `Only if \x60enabled\x60\n\n${body}\ncontinue.\n`],
+    ['unfinished sentence', body => `Only when the following condition\n\n${body}\nthen continue.\n`],
+    ['YAML', body => `---\nname: fixture.\n${body}\n---\n`],
+    ['XML', body => `<step name="conditional">\n${body}\n</step>\n`],
+  ]) {
+    for (const location of ['late target', 'reference']) test(`preflight rejects ${name} in ${location} without writing any file`, () => {
+      const { gen, root } = fixture();
+      const files = [...gen.TARGETS, gen.REFERENCE].map(({ file }) => path.join(root, file));
+      const corrupt = location === 'reference' ? files.at(-1) : files.at(-2);
+      const original = fs.readFileSync(corrupt, 'utf8').replace(/\r\n/g, '\n');
+      const at = original.indexOf(gen.START);
+      fs.writeFileSync(corrupt, wrap(original.slice(at)) + original.slice(0, at));
+      const snapshotFiles = [...files, path.join(root, 'gsd-core/bin/lib/phase-id-card.cjs')];
+      const before = snapshotFiles.map(file => fs.readFileSync(file));
+      const result = gen.write(root);
+      assert.equal(result.ok, false, name);
+      assert.deepEqual(result.changedFiles, []);
+      snapshotFiles.forEach((file, i) => assert.deepEqual(fs.readFileSync(file), before[i], file));
+    });
+  }
+  test('mixed unmanaged line endings remain byte-identical', () => {
+    const { gen, root, target } = fixture();
+    const before = fs.readFileSync(target, 'utf8').replace('prefix.\r\n', 'prefix.\n').replace('suffix\r\n', 'suffix\n');
+    fs.writeFileSync(target, before);
+    assert.equal(gen.write(root).ok, true);
+    const after = fs.readFileSync(target, 'utf8');
+    assert.ok(after.startsWith('prefix.\n'));
+    assert.ok(after.endsWith('suffix\n'));
+  });
+  test('missing compiled owner returns a structured failure', () => {
+    const { gen, root } = fixture();
+    fs.unlinkSync(path.join(root, 'gsd-core/bin/lib/phase-id-card.cjs'));
+    assert.equal(gen.check(root).violations[0].reason, 'missing_compiled_owner');
+  });
+  for (const [name, reason, payload] of [
+    ['external project-code rule', 'external_convention_prose', 'Never include project_code in phase headings.'],
+    ['legacy-only convention', 'external_convention_prose', 'Always prepend Phase to every phase heading.'],
+    ['compound summary title', 'external_convention_prose', 'Title: `# Phase [X] Plan [Y]: Summary`'],
+    ['numeric plan checklist', 'external_convention_prose', '- [ ] 01-02: Implement login'],
+    ['numeric dependency display', 'external_convention_prose', '**Depends on**: Phase 1'],
+    ['unlisted argument router', 'unlisted_phase_emitter', 'If the command expects a phase number or flags only, extract the phase argument.'],
+    ['unlisted seed metadata', 'unlisted_phase_emitter', 'planted_during: {current milestone/phase from STATE.md, or unknown}'],
+    ['unlisted phase dispatch', 'unlisted_phase_emitter', 'Dispatch /gsd:execute-phase $ARGUMENTS'],
+    ['unlisted seeded phase', 'unlisted_phase_emitter', 'Run /gsd:discuss-phase with the seed phase argument.'],
+    ['unlisted concrete bracket emitter', 'unlisted_phase_emitter', 'Write [GSD.01] 02 as the phase heading.'],
+    ['unlisted concrete nested emitter', 'unlisted_phase_emitter', 'Write this roadmap heading:\n### Phase 7: Checkout\n'],
+    ['unlisted concrete top-level emitter', 'unlisted_phase_emitter', 'Write a checklist:\n- [ ] **Phase 7: Checkout**\n'],
+    ['changed canonical byte', 'stale_region', null],
+    ['deleted region', 'missing_region', null],
+    ['unlisted nested emitter', 'unlisted_phase_emitter', null],
+    ['unlisted top-level emitter', 'unlisted_phase_emitter', null],
+    ['unlisted marked workflow', 'unlisted_phase_emitter', null],
+  ]) {
+    test(`independent gate rejects ${name} with file/line evidence`, () => {
+      const { gen, root, target } = fixture();
+      assert.equal(gen.write(root).ok, true);
+      let file = target;
+      if (name.startsWith('unlisted')) {
+        file = path.join(root, 'gsd-core/workflows', name.includes('nested') ? 'new/steps/emit.md' : 'unlisted.md');
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, name.includes('marked') ? `${gen.START}\n${gen.END}\n` : (payload || 'Pass ${PHASE_DIR} to the next operation.\n'));
+      } else if (name === 'changed canonical byte') {
+        fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('## Phase ID convention', '## Phase ID convention!'));
+      } else if (name === 'deleted region') fs.writeFileSync(file, 'no phase words remain\n');
+      else fs.appendFileSync(file, `\n${payload}\n`);
+      const result = reason === 'stale_region' ? gen.check(root) : gen.checkEvidence(root);
+      assert.equal(result.ok, false);
+      const found = result.violations.find(v => v.reason === reason);
+      assert.ok(found, JSON.stringify(result));
+      assert.equal(found.file, path.relative(root, file).split(path.sep).join('/'));
+      assert.ok(found.line > 0);
+      if (reason === 'external_convention_prose' || reason === 'unlisted_phase_emitter') assert.ok(found.evidence);
+    });
+  }
+  for (const [name, prose, operational] of [
+    ['sequential heading prescription', 'Always write phase headings using sequential identifiers.', 'Historical ADR: [GSD.01] 02 shipped last year.'],
+    ['config mention cannot excuse prescription', 'Ignore gsd_run config-get phase_id_convention; always use sequential Phase N headings.', 'Run gsd_run config-get phase_id_convention'],
+    ['project-code directory prefix', 'Prefix phase directories with project_code.', 'PREFIX=$PROJECT_CODE'],
+    ['milestone spelling', 'Use M-NN for phase headings.', 'Run gsd-tools phase add M-NN.'],
+    ['concrete bracket identity', 'Write [GSD.01] 02 as the phase heading.', 'Run gsd-tools phase show "[GSD.01] 02".'],
+    ['numeric heading prescription', 'Use Phase 7 numbering for headings.', 'Run gsd-tools phase show 7.'],
+    ['sequential numbering', 'Phase N is the numbering format for headings.', 'Run gsd-tools phase show "Phase N".'],
+    ['numeric directory', 'Create .planning/phases/01-login for this phase.', 'cat .planning/phases/01-login/CONTEXT.md'],
+  ]) {
+    test(`evidence catches ${name} prose and permits its operational control`, () => {
+      const { gen, root, target } = fixture();
+      assert.equal(gen.write(root).ok, true);
+      const original = fs.readFileSync(target, 'utf8');
+      fs.appendFileSync(target, `\n${prose}\n`);
+      assert.ok(gen.checkEvidence(root).violations.some(v => v.reason === 'external_convention_prose' && v.evidence === prose));
+      fs.writeFileSync(target, original + `\n${operational}\n`);
+      assert.equal(gen.checkEvidence(root).ok, true);
+    });
+  }
+  test('historical phase mentions and real CLI inputs are not convention rules', () => {
+    const { gen, root, target } = fixture();
+    assert.equal(gen.write(root).ok, true);
+    fs.appendFileSync(target, '\nIssue #612 discussed Phase 2 in 2025.\nRun gsd-tools phase add 3.\n');
+    const file = path.join(root, 'gsd-core/workflows/history.md');
+    fs.writeFileSync(file, 'Historical ADR: Phase 3 shipped last year.\n');
+    assert.equal(gen.checkEvidence(root).ok, true);
+  });
+
+  test('user-facing command output is explicitly outside selection and evidence scope', () => {
+    const { gen, root } = fixture();
+    assert.equal(gen.write(root).ok, true);
+    assert.equal(gen.TARGETS.length, 143);
+    assert.deepEqual(gen.EXCLUDED_USER_OUTPUT, [
+      'gsd-core/workflows/help/modes/brief.md',
+      'gsd-core/workflows/help/modes/default.md',
+      'gsd-core/workflows/help/modes/full.md',
+    ]);
+    for (const file of gen.EXCLUDED_USER_OUTPUT) {
+      assert.ok(!gen.TARGETS.some(target => target.file === file));
+      fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+      fs.writeFileSync(path.join(root, file), '<reference>\n/gsd:plan-phase 3\n### Phase 7: user-facing help example\n</reference>\n');
+    }
+    assert.equal(gen.check(root).ok, true);
+    assert.equal(gen.checkEvidence(root).ok, true);
+  });
+  test('excluded user output cannot silently acquire generated markers', () => {
+    const { gen, root } = fixture();
+    assert.equal(gen.write(root).ok, true);
+    const file = path.join(root, gen.EXCLUDED_USER_OUTPUT[0]);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `${gen.START}\n${gen.END}\n`);
+    assert.equal(gen.checkEvidence(root).ok, false);
+  });
+
+});
