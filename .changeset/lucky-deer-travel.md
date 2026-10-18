@@ -3,4 +3,4 @@ type: Fixed
 pr: 5509
 ---
 
-**Custom phase IDs resolve to their directories** — phases created with `phase add --id` resolve consistently in planning, roadmap analysis and writers, milestone checks, and verification probes. (#5186)
+**Custom phase IDs resolve safely and consistently** — phase lookups use known IDs independently of titles, planning readers share custom-aware phase keys, and phase creation rejects path-like IDs. (#5186)

@@ -82,6 +82,7 @@ module.exports = {
   "tests/cursor-hook-workspace-roots.test.cjs",
   "tests/cursor-hooks.test.cjs",
   "tests/cursor-subagent-isolation.test.cjs",
+  "tests/custom-phase-round4.test.cjs",
   "tests/debug-session-management.test.cjs",
   "tests/defaults-json-fallback.test.cjs",
   "tests/diagnose-windows-spawn-watcher.test.cjs",

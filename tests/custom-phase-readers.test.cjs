@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const fc = require('fast-check');
-// Twenty round trips each spawn add, find, and analyze commands.
+// Generated round trips each spawn add, find, and analyze commands.
 const ROUND_TRIP_TIMEOUT_MS = 120000;
 const { createTempProject, cleanup, runGsdTools, homeSandboxEnv } = require('./helpers.cjs');
 const locator = require('../gsd-core/bin/lib/phase-locator.cjs');
@@ -21,7 +21,7 @@ function run(cwd, args) {
 }
 function add(cwd, id, title = 'Boundary', code = null) {
   run(cwd, ['query', 'phase.add', title, '--id', id]);
-  return `.planning/phases/${code ? `${code}-` : ''}${id}-${title.toLowerCase().slice(0,60)}`;
+  return `.planning/phases/${code ? `${code}-` : ''}${id}-${title.toLowerCase().replaceAll(' ', '-').slice(0,60)}`;
 }
 function options(code, naming = 'custom') { return {phaseNaming: naming, projectCode: code}; }
 
@@ -127,13 +127,13 @@ test('custom readers: fast-check prefix ids with small mixed alphabet (#5509)', 
     fc.constantFrom('A', 'b', 'c'),
     fc.array(fc.constantFrom('A', 'b', 'c', '2'), {maxLength: 2}),
   ).map(([head, tail]) => head + tail.join(''));
-  fc.assert(fc.property(segment, fc.constantFrom('2', 'b', 'Ab'), fc.boolean(), (id, suffix, prefixed) => {
+  fc.assert(fc.property(segment, fc.constantFrom('2', 'b', 'Ab'), fc.boolean(), fc.tuple(fc.constantFrom('2024', '3', 'Boundary', 'a2'), fc.constantFrom('roadmap', 'steps', 'Ab')).map(words => words.join(' ')), (id, suffix, prefixed, title) => {
     const code = prefixed ? 'CCM' : null;
     const cwd = fixture(code);
     try {
       const longer = `${id}-${suffix}`;
-      const shortDir = add(cwd, id, 'Boundary', code);
-      const longDir = add(cwd, longer, 'Boundary', code);
+      const shortDir = add(cwd, id, title, code);
+      const longDir = add(cwd, longer, title, code);
       assert.equal(run(cwd, ['query', 'find-phase', id]).directory, shortDir);
       assert.equal(run(cwd, ['query', 'find-phase', longer]).directory, longDir);
       const rows = run(cwd, ['query', 'roadmap.analyze']).phases;
@@ -143,7 +143,7 @@ test('custom readers: fast-check prefix ids with small mixed alphabet (#5509)', 
         assert.notEqual(row.disk_status, 'no_directory');
       }
     } finally { cleanup(cwd); }
-  }), {seed: 5509, numRuns: 20});
+  }), {numRuns: 30, examples: [['A', '2', false, '2024 roadmap']]});
 });
 
 test('custom readers: canonical matcher owns the configured inverse (#5509)', () => {
@@ -207,7 +207,7 @@ test('custom readers: directory lookup bounds roadmap identity hints (#5509)', (
       return count;
     };
     reading = true;
-    const context = locator.phaseDirectoryOptions ? locator.phaseDirectoryOptions(cwd, {phase_naming: 'custom'}) : options(null);
+    const context = locator.phaseDirectoryOptions(cwd, {phase_naming: 'custom'});
     assert.equal(locator.findPhaseInternal(cwd, 'PRODUCT-BOUNDARY', undefined, context).found, true);
     reading = false;
     assert.ok(bytes > 0 && bytes <= 1024 * 1024, `roadmap read ${bytes} bytes`);

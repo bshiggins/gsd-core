@@ -48,6 +48,7 @@ const {
   comparePhaseNum,
   matchPhaseDirs,
   phaseDirectoryName,
+  PhaseDirectoryNameError,
   customPhaseDirectoryParts,
   isSentinelPhaseId,
   scopeToPhase,
@@ -611,7 +612,7 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
         match.match(
           new RegExp(`^${OPTIONAL_PROJECT_CODE_PREFIX_SOURCE}(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i')
         ) || match.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i'));
-      const customParts = custom ? customPhaseDirectoryParts(match, custom, dirs) : null;
+      const customParts = custom ? customPhaseDirectoryParts(match, custom) : null;
       const phaseNumber = customParts?.id || (dirMatch ? dirMatch[1] : normalized);
       const phaseName = customParts?.slug || (dirMatch && dirMatch[2] ? dirMatch[2] : null);
 
@@ -1476,7 +1477,11 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
     if (customId || config.phase_naming === 'custom') {
       _newPhaseId = customId || slug.toUpperCase();
       if (!_newPhaseId) error('--id required when phase_naming is "custom"');
-      _dirName = phaseDirectoryName(String(_newPhaseId), slug, projectCode);
+      try { _dirName = phaseDirectoryName(String(_newPhaseId), slug, projectCode); }
+      catch (cause) {
+        if (cause instanceof PhaseDirectoryNameError) error(cause.message, ERROR_REASON.USAGE);
+        throw cause;
+      }
     } else {
       // Collect all phase numbers visible in the current-milestone content.
       // Three sources are scanned so that a phase in ANY representation
@@ -1538,7 +1543,9 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
       _dirName = `${prefix}${paddedNum}-${slug}`;
     }
 
-    const dirPath = path.join(planningDir(cwd), 'phases', _dirName);
+    const phasesRoot = path.resolve(planningDir(cwd), 'phases');
+    const dirPath = path.resolve(phasesRoot, _dirName);
+    if (path.dirname(dirPath) !== phasesRoot) error('Phase directory escapes the phases directory', ERROR_REASON.USAGE);
 
     platformEnsureDir(dirPath);
     platformWriteSync(path.join(dirPath, '.gitkeep'), '');
@@ -1864,7 +1871,9 @@ function cmdPhaseInsert(
     const projectCode = (insertConfig.project_code as string) || '';
     const pfx = projectCode ? `${projectCode}-` : '';
     const _dirName = `${pfx}${_decimalPhase}-${slug}`;
-    const dirPath = path.join(planningDir(cwd), 'phases', _dirName);
+    const phasesRoot = path.resolve(planningDir(cwd), 'phases');
+    const dirPath = path.resolve(phasesRoot, _dirName);
+    if (path.dirname(dirPath) !== phasesRoot) error('Phase directory escapes the phases directory', ERROR_REASON.USAGE);
 
     platformEnsureDir(dirPath);
     platformWriteSync(path.join(dirPath, '.gitkeep'), '');
@@ -3682,6 +3691,7 @@ function auditArtifactWarnings(cwd: string, phaseFullDir: string): string[] {
 }
 
 function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
+  const directoryContext = phaseDirectoryOptions(cwd);
   if (!phaseNum) {
     error('phase number required for phase complete');
   }
@@ -3728,7 +3738,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
   const phasesDir = path.join(planningDir(cwd), 'phases');
   const today = realClock.localToday();
 
-  const phaseInfoRaw = findPhaseInternal(cwd, phaseNum, undefined, phaseDirectoryOptions(cwd));
+  const phaseInfoRaw = findPhaseInternal(cwd, phaseNum, undefined, directoryContext);
   if (!phaseInfoRaw) {
     error(`Phase ${phaseNum} not found`);
   }
@@ -4956,7 +4966,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         let nextPhaseDisk: { status: ReturnType<typeof phaseStatus>['value']['status']; planCount: number; summaryCount: number } | null = null;
         if (nextPhaseNum && !isLastPhase) {
           try {
-            const nextInfo = findPhaseInternal(cwd, nextPhaseNum, undefined, phaseDirectoryOptions(cwd)) as unknown as { found?: boolean; directory?: string } | null;
+            const nextInfo = findPhaseInternal(cwd, nextPhaseNum, undefined, directoryContext) as unknown as { found?: boolean; directory?: string } | null;
             if (nextInfo && nextInfo.found && nextInfo.directory) {
               const { value } = phaseStatus(path.join(cwd, nextInfo.directory), {
                 convention: resolvePhaseIdConvention(cwd),

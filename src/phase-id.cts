@@ -1407,7 +1407,12 @@ const BARE_INTEGER_RE = new RegExp(`^${LEADING_DIGIT_RUN_SOURCE}$`);
 const unpad = (digits: string): string => digits.replace(/^0+(?=\d)/, '');
 
 /** #5186: the directory shape shared by phase.add and custom-ID readers. */
+const UNSAFE_PHASE_DIRECTORY_PART_RE = /[/\\\0]|\.\./;
+class PhaseDirectoryNameError extends Error {}
 function phaseDirectoryName(id: string, slug: string, projectCode?: string | null): string {
+  if (!id || [id, slug, projectCode ?? ''].some(part => UNSAFE_PHASE_DIRECTORY_PART_RE.test(part))) {
+    throw new PhaseDirectoryNameError('Invalid phase id or directory component: paths, .. and NUL are not allowed');
+  }
   return `${projectCode ? `${projectCode}-` : ''}${id}-${slug}`;
 }
 
@@ -1429,12 +1434,12 @@ function phaseDirectoryContext(config: Record<string, unknown>, roadmap = '', kn
 function phaseScanTokenSource(context: PhaseDirectoryContext): string {
   return context?.phaseNaming === 'custom' ? '[^ \t:\n]+' : PHASE_NUMBER_TOKEN_SOURCE;
 }
-type CustomPhaseQuery = { id: string; projectCode?: string | null; knownIds: string[] };
+type CustomPhaseQuery = { id: string; listed: boolean; projectCode?: string | null; prefixes: { id: string; prefix: string }[] };
 
 /** Custom heading IDs are identity hints only; titles never locate directories. */
 function customPhaseQuery(id: string, roadmap: string, options: PhaseDirectoryContext): CustomPhaseQuery | null {
   if (options?.phaseNaming !== 'custom' || !isCustomPhaseId(id)) return null;
-  if (id.includes('/') || id.includes('\\')) return null;
+  if (UNSAFE_PHASE_DIRECTORY_PART_RE.test(id)) return null;
   const prefix = options.projectCode ? `${options.projectCode}-` : '';
   const body = prefix && id.startsWith(prefix) ? id.slice(prefix.length) : id;
   // Reuse the numeric tokenizer so directory-name queries retain legacy resolution.
@@ -1447,7 +1452,14 @@ function customPhaseQuery(id: string, roadmap: string, options: PhaseDirectoryCo
       const match = heading.text.match(headingId);
       return match ? [match[1]] : [];
     });
-  return { id, projectCode: options.projectCode, knownIds: [...knownIds, ...options.knownIds ?? []] };
+  const listed = [...new Set([...knownIds, ...options.knownIds ?? []])].sort((a, b) => b.length - a.length);
+  // Listed identities outrank the query; a directory's slug never invents an ID.
+  return {
+    id, listed: listed.includes(id), projectCode: options.projectCode,
+    prefixes: (listed.includes(id) ? listed : [...listed, id])
+      .filter(token => !UNSAFE_PHASE_DIRECTORY_PART_RE.test(token))
+      .map(token => ({id: token, prefix: phaseDirectoryName(token, '')})),
+  };
 }
 
 /** Candidate project prefixes for the custom directory shape. */
@@ -1455,35 +1467,23 @@ function customDirectoryBodies(dir: string, projectCode?: string | null): string
   const bodies = [dir];
   if (projectCode) {
     const prefix = `${projectCode}-`;
-    if (dir.startsWith(prefix)) bodies.push(dir.slice(prefix.length));
+    if (dir.startsWith(prefix)) bodies.unshift(dir.slice(prefix.length));
   }
   return bodies;
 }
 
-/**
- * Directory IDs preserve their written case; generated slugs are lowercase.
- * A leading uppercase run therefore supplies IDs even after headings are archived.
- * Explicit heading IDs and the query also cover mixed-case custom IDs.
- */
-function customIdsFromDirectories(dirs: string[], projectCode?: string | null): string[] {
-  return dirs.flatMap(dir => customDirectoryBodies(dir, projectCode).map(body => {
-    const segments = body.split('-');
-    let count = 1;
-    while (count < segments.length - 1 && !/[a-z]/.test(segments[count])) count++;
-    return segments.slice(0, count).join('-');
-  }));
-}
-
-/** Longest known ID wins; the remainder is read from disk, never from a title. */
-function customPhaseDirectoryParts(dir: string, query: CustomPhaseQuery, dirs: string[]): { id: string; slug: string } | null {
-  const ids = [...new Set([query.id, ...query.knownIds, ...customIdsFromDirectories(dirs, query.projectCode)])]
-    .sort((a, b) => b.length - a.length);
+/** Known IDs and writer-shaped prefixes are computed once per query. */
+function customDirectoryOwner(dir: string, query: CustomPhaseQuery): { id: string; slug: string } | null {
   for (const body of customDirectoryBodies(dir, query.projectCode)) {
-    const owner = ids.find(id => body.startsWith(phaseDirectoryName(id, '')));
-    if (owner !== query.id) continue;
-    return { id: query.id, slug: body.slice(phaseDirectoryName(query.id, '').length) };
+    const owner = query.prefixes.find(candidate => body.startsWith(candidate.prefix));
+    if (owner) return {id: owner.id, slug: body.slice(owner.prefix.length)};
   }
   return null;
+}
+
+function customPhaseDirectoryParts(dir: string, query: CustomPhaseQuery): { id: string; slug: string } | null {
+  const owner = customDirectoryOwner(dir, query);
+  return owner?.id === query.id ? owner : null;
 }
 
 /**
@@ -1558,15 +1558,22 @@ function customPhaseDirectoryParts(dir: string, query: CustomPhaseQuery, dirs: s
  */
 function matchPhaseDirs(dirs: string[], query: string, convention: string | null | undefined, context: PhaseDirectoryContext): { matches: string[]; usedBareFallback: boolean } {
   const custom = convention === 'bracket' ? null : customPhaseQuery(query, context?.roadmap ?? '', context);
-  const normalized = context ? normalizePhaseName(query) : query;
+  const normalized = normalizePhaseName(query);
   if (custom) {
     // A full directory name is an existing lookup form, distinct from an ID prefix.
     const exact = dirs.filter(d => d === custom.id);
     if (exact.length > 0) return { matches: exact, usedBareFallback: false };
-    return { matches: dirs.filter(d => customPhaseDirectoryParts(d, custom, dirs) !== null), usedBareFallback: false };
+    return { matches: dirs.filter(d => customPhaseDirectoryParts(d, custom) !== null), usedBareFallback: false };
   }
   const primary = dirs.filter(d => phaseTokenMatches(d, normalized, convention));
   if (primary.length > 0) return { matches: primary, usedBareFallback: false };
+
+  // Normalization pads a literal continuation ID such as 0-00 to 00-00.
+  // Preserve its exact-token lookup before falling back to a bare integer.
+  if (query !== normalized && query.includes('-')) {
+    const literal = dirs.filter(d => phaseTokenMatches(d, query, convention));
+    if (literal.length > 0) return { matches: literal, usedBareFallback: false };
+  }
 
   const bare = String(normalized);
   if (!BARE_INTEGER_RE.test(bare)) return { matches: primary, usedBareFallback: false };
@@ -1617,7 +1624,8 @@ function phaseNumberForMatch(dirName: string, usedBareFallback: boolean): string
  * of wide IDs (`001.10`) is relied on by plan-ID capture and wave assignment.
  * Arithmetic is avoided (`parseInt` would lose precision on a long digit run).
  */
-function phaseKeyFromToken(token: unknown): string {
+function phaseKeyFromToken(token: unknown, context?: PhaseDirectoryContext): string {
+  if (context && customPhaseQuery(String(token), context.roadmap, context)) return String(token).toUpperCase();
   const stripped = String(token)
     .split('-')
     .map(segment => segment.replace(/^0+(?=\d)/, ''))
@@ -1638,8 +1646,15 @@ function phaseKeyFromToken(token: unknown): string {
  * #2562's own defect class reached from the other side: both sides of a comparison
  * must be derived not merely by the same function but under the same convention.
  */
-function phaseKeyFromDir(dirName: string, convention?: string | null): string {
-  return phaseKeyFromToken(extractPhaseToken(dirName, convention));
+function phaseKeyFromDir(dirName: string, convention?: string | null, context?: PhaseDirectoryContext): string {
+  if (context && convention !== 'bracket') {
+    const custom = customPhaseQuery(dirName, context.roadmap, context);
+    if (custom) {
+      const owner = customDirectoryOwner(dirName, custom);
+      if (owner) return phaseKeyFromToken(owner.id, context);
+    }
+  }
+  return phaseKeyFromToken(extractPhaseToken(dirName, convention), context);
 }
 
 /**
@@ -1649,10 +1664,11 @@ function phaseKeyFromDir(dirName: string, convention?: string | null): string {
  * mistaken for a non-phase. Returns null when the value does not BEGIN with a
  * phase token (`parsePhaseFromProse` anchoring, #2111).
  */
-function phaseKeyFromProse(value: string | null | undefined): string | null {
+function phaseKeyFromProse(value: string | null | undefined, context?: PhaseDirectoryContext): string | null {
   if (value == null) return null;
-  const { phase } = parsePhaseFromProse(String(value).replace(/[*_`~]/g, ''));
-  return phase === null ? null : phaseKeyFromToken(phase);
+  const clean = String(value).replace(/[*_`~]/g, '');
+  const { phase } = parsePhaseFromProse(clean, context);
+  return phase === null ? null : phaseKeyFromToken(phase, context);
 }
 
 /**
@@ -1681,11 +1697,16 @@ function parentPhaseKey(key: string): string | null {
  * `{ phase: null }` because they do not begin with a phase token. The name
  * extraction (parenthetical or em-dash tail, minus status words) is unchanged.
  */
-function parsePhaseFromProse(value: string | null): { phase: string | null; name: string | null } {
+function parsePhaseFromProse(value: string | null, context?: PhaseDirectoryContext): { phase: string | null; name: string | null } {
   if (!value) return { phase: null, name: null };
   // Coerce defensively so a non-string caller cannot throw on this canonical
   // surface (mirrors the sibling #2121 functions' String(...) handling).
   const str = String(value);
+  const candidate = context?.phaseNaming === 'custom'
+    ? str.trim().replace(/^Phase[ \t]+/i, '').split(/[ \t:]/, 1)[0].replace(/\.$/, '')
+    : null;
+  const query = candidate && context && customPhaseQuery(candidate, context.roadmap, context);
+  const custom = query && (query.listed || candidate === str.trim() || /^Phase[ \t]+/i.test(str.trim()));
   const phaseMatch = str.match(/^\s*(?:Phase\s+)?(?:[A-Z][A-Z0-9_]*-)?(\d+[A-Z]?(?:\.\d+)*)\b/i);
   // The name-extraction quantifiers are length-bounded so a crafted long
   // unterminated run (many `(` or `—`) in an untrusted STATE.md field value
@@ -1727,7 +1748,7 @@ function parsePhaseFromProse(value: string | null): { phase: string | null; name
     ? rawName.trim()
     : null;
   return {
-    phase: phaseMatch ? phaseMatch[1] : null,
+    phase: custom ? candidate : phaseMatch ? phaseMatch[1] : null,
     name,
   };
 }
@@ -1892,6 +1913,7 @@ export = {
   phaseDirectoryContext,
   phaseScanTokenSource,
   phaseDirectoryName,
+  PhaseDirectoryNameError,
   customPhaseQuery,
   customPhaseDirectoryParts,
   isCustomPhaseId,

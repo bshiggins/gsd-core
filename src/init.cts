@@ -2964,6 +2964,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
   }
   const rawContent = fs.readFileSync(paths.roadmap, 'utf-8');
   const content = extractCurrentMilestone(rawContent, cwd);
+  const directoryContext = phaseDirectoryOptions(cwd, config, rawContent);
 
   // #3185 (ADR-3180 Decision 1): "which phase directories belong to the
   // CURRENT milestone" is the scoped question listMilestonePhaseDirs owns —
@@ -3064,7 +3065,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
       // of reporting no_directory/phase_complete:false. Five other init
       // commands already route through this same primitive; this was the
       // holdout private copy (#4793-family declared-owner drift).
-      const located = findPhaseInternal(cwd, phaseNum, phaseIdConvention, phaseDirectoryOptions(cwd)) as unknown as Record<string, unknown> | null;
+      const located = findPhaseInternal(cwd, phaseNum, phaseIdConvention, directoryContext) as unknown as Record<string, unknown> | null;
       const dirMatch = located && located['found']
         ? path.posix.basename(String(located['directory']))
         : null;

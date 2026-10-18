@@ -816,6 +816,7 @@ function buildRoadmapDeclaredPhasesField(
 function buildRoadmapPhaseCheckboxesField(
   roadmapPath: string,
   convention: string | null,
+  directoryContext: ReturnType<typeof phaseDirectoryOptions>,
 ): { value: Record<string, boolean>; scope: Scope } {
   if (!fs.existsSync(roadmapPath)) {
     return { value: {}, scope: SCOPE.UNREADABLE };
@@ -836,7 +837,7 @@ function buildRoadmapPhaseCheckboxesField(
   // W006. NON-capturing (`capturing` defaults false), so the phase token stays
   // group 2 and the legacy repo compiles a byte-identical source.
   const checkboxRe = new RegExp(
-    `-\\s*\\[([xX ])\\].*?${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, convention)}0*(${PHASE_NUMBER_TOKEN_SOURCE})${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
+    `-\\s*\\[([xX ])\\].*?${phaseHeadingPrefixSrcFor(PHASE_HEADING_BASELINE.LABEL_ONLY, convention)}0*(${convention === 'bracket' ? PHASE_NUMBER_TOKEN_SOURCE : phaseIdMod.phaseScanTokenSource(directoryContext)})${OPTIONAL_PHASE_TAG_SOURCE}[:\\s]`,
     'gi',
   );
   const value: Record<string, boolean> = {};
@@ -1342,7 +1343,7 @@ function buildPlanningSnapshot(cwd: string): PlanningSnapshot {
     statePhaseTokens: stateFields.statePhaseTokens,
     stateStatus: stateFields.stateStatus,
     roadmapDeclaredPhases: roadmapDeclared.declared,
-    roadmapPhaseCheckboxes: buildRoadmapPhaseCheckboxesField(paths.roadmap, phaseIdConvention),
+    roadmapPhaseCheckboxes: buildRoadmapPhaseCheckboxesField(paths.roadmap, phaseIdConvention, directoryContext),
     researchValidationStatus: buildResearchValidationStatusField(paths.phases, phaseDirs.value, phaseDirs.scope, phaseIdConvention),
     milestoneArchiveStatus: buildMilestoneArchiveStatusField(cwd),
     planningRootFiles: buildPlanningRootFilesField(cwd),

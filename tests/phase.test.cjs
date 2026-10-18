@@ -17526,10 +17526,14 @@ describe('custom phase add-then-resolve regressions (#5186)', () => {
         const short = add(cwd, 'SETUP', 'Initial Setup', code);
         const long = add(cwd, 'SETUP-2', 'Second Setup', code);
         fs.writeFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), '# Roadmap\n');
-        assert.equal(query(cwd, ['find-phase', 'SETUP']).directory, short);
-        assert.equal(query(cwd, ['find-phase', 'SETUP-2']).directory, long);
+        const locator = require('../gsd-core/bin/lib/phase-locator.cjs');
+        // With headings absent, supply explicit identity hints rather than infer IDs from slugs.
+        const context = {...locator.phaseDirectoryOptions(cwd), knownIds: ['SETUP', 'SETUP-2']};
+        const locate = id => locator.findPhaseInternal(cwd, id, undefined, context);
+        assert.equal(locate('SETUP').directory, short);
+        assert.equal(locate('SETUP-2').directory, long);
         cleanup(path.join(cwd, short));
-        assert.equal(query(cwd, ['find-phase', 'SETUP']).found, false);
+        assert.equal(locate('SETUP'), null);
       } finally { cleanup(cwd); }
     });
   }
@@ -17566,16 +17570,16 @@ describe('custom phase add-then-resolve regressions (#5186)', () => {
   test('fast-check custom phase add-then-resolve round trip (#5186)', () => {
     const word = fc.array(fc.constantFrom(...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'), { minLength: 2, maxLength: 8 })
       .map(chars => chars.join(''));
-    fc.assert(fc.property(word, word, fc.boolean(), (head, tail, prefixed) => {
+    fc.assert(fc.property(word, word, fc.boolean(), fc.tuple(fc.constantFrom('2024', '3', 'Property', 'a2'), fc.constantFrom('roadmap', 'steps', 'Boundary')).map(words => words.join(' ')), (head, tail, prefixed, title) => {
       const code = prefixed ? 'CCM' : null;
       const cwd = fixture(code);
       try {
         const id = `${head}-${tail}`;
-        const dir = add(cwd, id, 'Property Boundary', code);
+        const dir = add(cwd, id, title, code);
         const found = query(cwd, ['find-phase', id]);
         assert.equal(found.found, true, id);
         assert.equal(found.directory, dir);
       } finally { cleanup(cwd); }
-    }), { seed: 5186, numRuns: 20 });
+    }), { numRuns: 30, examples: [['AB', 'CD', false, '2024 roadmap']] });
   });
 });

@@ -1795,7 +1795,8 @@ function cmdRoadmapAnnotateDependencies(cwd: string, phaseNum: string | null | u
     return;
   }
 
-  const phaseInfo = findPhaseInternal(cwd, phaseNum, undefined, phaseDirectoryOptions(cwd));
+  const directoryContext = phaseDirectoryOptions(cwd);
+  const phaseInfo = findPhaseInternal(cwd, phaseNum, undefined, directoryContext);
   // #3957 (B9.1): distinguish "phase does not resolve at all" from "phase
   // resolves but has zero plans" — previously both collapsed into the same
   // 'no plans found for phase' reason, which is simply false for the first
@@ -1893,7 +1894,7 @@ function cmdRoadmapAnnotateDependencies(cwd: string, phaseNum: string | null | u
     // Find the phase section.
     // #3537: padding-tolerant fragment so the caller's resolved padded id
     // matches un-padded ROADMAP headings.
-    const phaseEscaped = phaseMarkdownRegexSource(phaseNum, phaseDirectoryOptions(cwd, undefined, content));
+    const phaseEscaped = phaseMarkdownRegexSource(phaseNum, directoryContext);
     // #4906 Phase 5 (#4984): NOT migrated onto the heading-baseline selector —
     // this site was never one of the five ADR-4910 §8 call sites this phase
     // owns (init.cts/milestone.cts's buildPhaseHeadingScanRegex sites); a

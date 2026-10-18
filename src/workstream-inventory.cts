@@ -22,7 +22,7 @@ const { readSubdirectories } = coreUtilsMod;
 import planScan = require('./plan-scan.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
-const { planningPaths, planningRoot, getActiveWorkstream } = planningWorkspace;
+const { planningPaths, planningRoot, getActiveWorkstream, readScopedConfigValue } = planningWorkspace;
 import { stateFieldValue } from './state-document.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
 import frontmatterMod = require('./frontmatter.cjs');
@@ -34,7 +34,7 @@ const { isPhaseComplete, isVerificationStatus, VERIFICATION_STATUS } = verificat
 type VerificationStatus = verificationMod.VerificationStatus;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id.cjs is an export= CommonJS module
 import phaseIdMod = require('./phase-id.cjs');
-const { phaseKeyFromDir, phaseKeyFromProse, parentPhaseKey } = phaseIdMod;
+const { phaseDirectoryContext, phaseKeyFromDir, phaseKeyFromProse, parentPhaseKey } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- roadmap-parser.cjs is an export= CommonJS module
 import roadmapParserMod = require('./roadmap-parser.cjs');
 const { getMilestonePhaseFilter, isMilestoneShippedInRoadmap } = roadmapParserMod;
@@ -140,13 +140,7 @@ interface RoadmapProgressRow {
  * `phaseKeyFromDir` uses for directories, so a `| 01. … |` row and a `1-slug`
  * directory cannot land in different key spaces (the padding-asymmetry defect).
  */
-function parseRoadmapProgressRows(roadmapPath: string): RoadmapProgressRow[] {
-  let content: string;
-  try {
-    content = fs.readFileSync(roadmapPath, 'utf-8');
-  } catch {
-    return []; /* no roadmap */
-  }
+function parseRoadmapProgressRows(content: string, directoryContext: ReturnType<typeof phaseIdMod.phaseDirectoryContext>): RoadmapProgressRow[] {
   // Milestone-ATTRIBUTING shape first. Both shapes carry `Plans Complete`, so
   // probing that column first would pick a flat table appearing earlier in the
   // document over a milestone-grouped one later — every row would come back
@@ -156,7 +150,7 @@ function parseRoadmapProgressRows(roadmapPath: string): RoadmapProgressRow[] {
   if (!table) return [];
   const rows: RoadmapProgressRow[] = [];
   for (const row of table.rows) {
-    const key = phaseKeyFromProse(row['Phase']);
+    const key = phaseKeyFromProse(row['Phase'], directoryContext);
     if (key === null) continue;
     const cell = (row['Milestone'] ?? '').trim();
     rows.push({ key, version: /^v\d+(?:\.\d+)+$/.test(cell) ? cell : null });
@@ -542,13 +536,19 @@ function inspectWorkstream(cwd: string, name: string, options: InspectWorkstream
   const writeDiagnostic = options.writeDiagnostic ?? ((message: string) => process.stderr.write(message));
   const p = planningPaths(cwd, name);
   const phaseDirNames = readSubdirectories(p.phases);
+  let roadmap = '';
+  try { roadmap = fs.readFileSync(p.roadmap, 'utf8'); } catch { /* no roadmap */ }
+  const directoryContext = phaseDirectoryContext({
+    phase_naming: readScopedConfigValue(cwd, ['phase_naming'], name).value,
+    project_code: readScopedConfigValue(cwd, ['project_code'], name).value,
+  }, roadmap);
 
   // #2562: scope progress to the CURRENT milestone. Membership and the
   // denominator are derived in ONE key space (`phaseKeyFromDir` /
   // `phaseKeyFromProse`, both from the phase-id owner module) so the two sides
   // of the rollup cannot disagree.
   const currentVersion = readCurrentMilestoneVersion(p.state, p.roadmap);
-  const progressRows = parseRoadmapProgressRows(p.roadmap);
+  const progressRows = parseRoadmapProgressRows(roadmap, directoryContext);
 
   // Phase keys the ROADMAP attributes to the current milestone. A row whose
   // Milestone cell is blank or malformed is INCLUDED rather than dropped: a
@@ -625,7 +625,7 @@ function inspectWorkstream(cwd: string, name: string, options: InspectWorkstream
   const scoped = currentMilestoneKeys.size > 0 || headingScoped || currentMilestoneDeclaredEmpty;
   const isDirInCurrentMilestone = (dir: string): boolean => {
     if (!scoped) return true;
-    const key = phaseKeyFromDir(dir);
+    const key = phaseKeyFromDir(dir, undefined, directoryContext);
     if (currentMilestoneKeys.has(key)) return true;
     const parent = parentPhaseKey(key);
     if (parent !== null && currentMilestoneKeys.has(parent)) return true;
@@ -683,7 +683,7 @@ function inspectWorkstream(cwd: string, name: string, options: InspectWorkstream
     }
     return {
       directory: dir,
-      phaseKey: phaseKeyFromDir(dir),
+      phaseKey: phaseKeyFromDir(dir, undefined, directoryContext),
       mtimeMs: phaseDirMtime(phaseDir),
       planCount: counts.planCount,
       summaryCount: counts.summaryCount,

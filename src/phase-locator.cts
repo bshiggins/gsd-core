@@ -11,7 +11,8 @@
  *
  * Dependencies (leaf modules only — no loadConfig):
  *   - node:fs / node:path (stdlib)
- *   - ./phase-id.cjs       (normalizePhaseName, matchPhaseDirs, phaseNumberForMatch)
+ *   - ./phase-id.cjs       (phaseDirectoryContext, customPhaseQuery, customPhaseDirectoryParts,
+ *                           normalizePhaseName, matchPhaseDirs, phaseNumberForMatch)
  *   - ./core-utils.cjs     (readSubdirectories, getPhaseFileStats, extractCanonicalPlanId, toPosixPath)
  *   - ./planning-workspace.cjs (planningDir, readScopedConfigValue)
  */
@@ -261,7 +262,7 @@ function searchPhaseInDir(baseDir: string, relBase: string, normalized: string, 
     const match = matches[0];
 
     const custom = convention === 'bracket' ? null : customPhaseQuery(normalized, context?.roadmap ?? '', context);
-    const parts = custom ? customPhaseDirectoryParts(match, custom, dirs) : null;
+    const parts = custom ? customPhaseDirectoryParts(match, custom) : null;
     const phaseToken = parts?.id || phaseNumberForMatch(match, usedBareFallback);
     const phaseNumber = phaseToken || normalized;
     const afterToken = match.slice(phaseToken ? phaseToken.length : 0).replace(/^-/, '');
@@ -373,8 +374,10 @@ function searchPhaseInDir(baseDir: string, relBase: string, normalized: string, 
   }
 }
 
-function findPhaseInternal(cwd: string, phase: unknown, convention?: string | null, context = phaseDirectoryOptions(cwd)): PhaseSearchResult | null {
+function findPhaseInternal(cwd: string, phase: unknown, convention: string | null | undefined, context: ReturnType<typeof phaseDirectoryOptions>): PhaseSearchResult | null {
   if (!phase) return null;
+  // Legacy JavaScript callers have no typed context contract. Typed command readers supply it once.
+  context ??= phaseDirectoryOptions(cwd);
 
   const phasesDir = path.join(planningDir(cwd), 'phases');
   const query = typeof phase === 'string' ? phase : normalizePhaseName(phase);

@@ -30,6 +30,7 @@ const { toPosixPath, generateSlugInternal, extractOneLinerFromBody } = coreUtils
 import phaseIdMod = require('./phase-id.cjs');
 const {
   phaseDirectoryName,
+  PhaseDirectoryNameError,
   isCustomPhaseId,
   normalizePhaseName,
   comparePhaseNum,
@@ -2048,7 +2049,7 @@ function cmdCommit(cwd: string, message: string | undefined, files: string[] | u
       // phase — the phase arm must never branch-mutate for it (isSentinelPhaseId
       // is the invariant's single owner, src/phase-id.cts).
       if (phaseNum && !isSentinelPhaseId(phaseNum)) {
-        const phaseInfo = findPhaseInternal(cwd, phaseNum, undefined, phaseDirectoryOptions(cwd)) as Record<string, unknown> | null;
+        const phaseInfo = findPhaseInternal(cwd, phaseNum, undefined, phaseDirectoryOptions(cwd, config)) as Record<string, unknown> | null;
         if (phaseInfo) {
           // #4126: shared with init.cts's cmdInitExecutePhase branch_name field
           // via the one canonical renderer (src/phase-id.cts) so an undeliverable
@@ -3767,7 +3768,7 @@ function cmdScaffold(cwd: string, type: string, options: ScaffoldOptions, raw: b
   const today = realClock.localToday();
 
   // Find phase directory
-  const phaseInfo = phase ? findPhaseInternal(cwd, phase, undefined, phaseDirectoryOptions(cwd)) as Record<string, unknown> | null : null;
+  const phaseInfo = phase && type !== 'phase-dir' ? findPhaseInternal(cwd, phase, undefined, phaseDirectoryOptions(cwd)) as Record<string, unknown> | null : null;
   const phaseDir = phaseInfo ? path.join(cwd, phaseInfo['directory'] as string) : null;
 
   if (phase && !phaseDir && type !== 'phase-dir') {
@@ -3800,12 +3801,21 @@ function cmdScaffold(cwd: string, type: string, options: ScaffoldOptions, raw: b
       // #3287: apply project_code prefix to stay consistent with phase.add/phase.insert
       const scaffoldConfig = loadConfig(cwd);
       const scaffoldProjectCode = (scaffoldConfig['project_code'] as string) || '';
-      const dirName = phaseDirectoryName(
-        scaffoldConfig.phase_naming === 'custom' && isCustomPhaseId(phase) ? phase : padded, slug || '', scaffoldProjectCode,
-      );
+      let dirName: string;
+      try {
+        // Validate the raw ID before normalization can discard path components.
+        phaseDirectoryName(phase, '', scaffoldProjectCode);
+        dirName = phaseDirectoryName(
+          scaffoldConfig.phase_naming === 'custom' && isCustomPhaseId(phase) ? phase : padded, slug || '', scaffoldProjectCode,
+        );
+      } catch (cause) {
+        if (cause instanceof PhaseDirectoryNameError) error(cause.message, ERROR_REASON.USAGE);
+        throw cause;
+      }
       const phasesParent = planningPaths(cwd).phases;
       platformEnsureDir(phasesParent);
-      const dirPath = path.join(phasesParent, dirName);
+      const dirPath = path.resolve(phasesParent, dirName);
+      if (path.dirname(dirPath) !== path.resolve(phasesParent)) error('Phase directory escapes the phases directory', ERROR_REASON.USAGE);
       platformEnsureDir(dirPath);
       output({ created: true, directory: toPosixPath(path.relative(cwd, dirPath)), path: dirPath }, raw, dirPath);
       return;
