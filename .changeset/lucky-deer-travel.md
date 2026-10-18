@@ -2,4 +2,5 @@
 type: Fixed
 pr: 5509
 ---
-Phases created with custom IDs resolve to their directories in find-phase, planning initialization, and roadmap progress updates.
+
+**Custom phase IDs resolve to their directories** — phases created with `phase add --id` resolve consistently in planning, roadmap analysis and writers, milestone checks, and verification probes. (#5186)

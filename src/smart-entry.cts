@@ -29,6 +29,9 @@
  * translation, not a port.
  */
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import directoryLocatorMod = require('./phase-locator.cjs');
+const { phaseDirectoryOptions } = directoryLocatorMod;
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -58,7 +61,7 @@ import stateDocument = require('./state-document.cjs');
 const { stateFieldValue } = stateDocument;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseId = require('./phase-id.cjs');
-const { comparePhaseNum, extractPhaseToken, matchPhaseDirs, normalizePhaseName, parsePhaseFromProse, stripProjectCodePrefix } = phaseId;
+const { comparePhaseNum, extractPhaseToken, matchPhaseDirs, parsePhaseFromProse, stripProjectCodePrefix } = phaseId;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import stateMod = require('./state.cjs');
 const { readStateHeadFreshness } = stateMod;
@@ -333,10 +336,11 @@ function phaseTokenFromState(raw: string | null): string | null {
  */
 function detectVerifyFailed(cwd: string, currentPhaseRaw: string | null): boolean {
   const phasesDir = path.join(planningPaths(cwd).phases);
+  const directoryContext = phaseDirectoryOptions(cwd);
   let entries: string[] = [];
   try {
     entries = fs.readdirSync(phasesDir)
-      .map((name) => ({ name, phaseToken: phaseTokenFromDirName(name) }))
+      .map((name) => ({ name, phaseToken: directoryContext.phaseNaming === 'custom' ? name : phaseTokenFromDirName(name) }))
       .filter((entry): entry is { name: string; phaseToken: string } => entry.phaseToken !== null)
       .sort((a, b) => comparePhaseNum(a.phaseToken, b.phaseToken) || a.name.localeCompare(b.name))
       .map((entry) => entry.name);
@@ -345,10 +349,11 @@ function detectVerifyFailed(cwd: string, currentPhaseRaw: string | null): boolea
   }
   if (entries.length === 0) return false;
 
-  const phaseToken = phaseTokenFromState(currentPhaseRaw);
+  const phaseToken = directoryContext.phaseNaming === 'custom'
+    ? currentPhaseRaw?.trim().split(/\s+/)[0] ?? null
+    : phaseTokenFromState(currentPhaseRaw);
   let targetDir: string | undefined;
   if (phaseToken) {
-    const normalized = normalizePhaseName(phaseToken);
     // #2528: the fourth directory-resolution site, and the one where a miss is
     // silent — a phase whose directory cannot be found reports "not failed",
     // which reads identically to a healthy phase. It must therefore apply the
@@ -357,7 +362,7 @@ function detectVerifyFailed(cwd: string, currentPhaseRaw: string | null): boolea
     // surfaces its own failed verification. `entries` is already sorted, and
     // `matchPhaseDirs` filters without reordering, so taking the first match
     // preserves the previous `.find()` selection exactly.
-    const { matches } = matchPhaseDirs(entries, normalized);
+    const { matches } = matchPhaseDirs(entries, phaseToken, undefined, directoryContext);
     targetDir = matches[0];
     if (!targetDir) return false;
   } else {

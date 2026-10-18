@@ -98,7 +98,7 @@ const { harvestPriorVerifyCommands } = verifyCommandGrounding;
 const { output, error, ERROR_REASON, formatDiagnosticToken } = io;
 const { loadConfig, loadConfigResolved } = configLoader;
 const { resolveModelInternal, resolveGranularityInternal, assertValidGranularityOverride } = modelResolver;
-const { findPhaseInternal, listMilestonePhaseDirs, listAllPhaseDirs } = phaseLocator;
+const { phaseDirectoryOptions, findPhaseInternal, listMilestonePhaseDirs, listAllPhaseDirs } = phaseLocator;
 const {
   getRoadmapPhaseInternal,
   getMilestoneInfo,
@@ -109,7 +109,8 @@ const { pathExistsInternal, generateSlugInternal, toPosixPath } = coreUtils;
 const {
   comparePhaseNum,
   phaseDirectoryName,
-  isCustomPhaseId,
+  customPhaseQuery,
+  phaseDirectoryContext,
   normalizePhaseName,
   stripProjectCodePrefix,
   PHASE_NUMBER_TOKEN_SOURCE,
@@ -195,9 +196,9 @@ function guardedFindPhase(
   cwd: string,
   phase: string,
   projectCode: unknown,
-  phaseNaming?: unknown,
+  phaseNaming: unknown,
 ): Record<string, unknown> | null {
-  let phaseInfo = findPhaseInternal(cwd, phase, undefined, { phaseNaming, projectCode: projectCode as string | null }) as unknown as Record<string, unknown> | null;
+  let phaseInfo = findPhaseInternal(cwd, phase, undefined, phaseDirectoryOptions(cwd, { phase_naming: phaseNaming, project_code: projectCode })) as unknown as Record<string, unknown> | null;
   if (isForeignPrefixedPhaseQuery(phase, projectCode) && !phaseInfoMatchesExactPrefix(phaseInfo, phase)) {
     phaseInfo = null;
   }
@@ -1259,14 +1260,15 @@ function cmdInitPlanPhase(
   const phaseNamePlan = resolvePhaseDisplayName(phaseInfo, roadmapPhase);
   const rawProjectCodePlan = (config.project_code as string) || '';
   let expectedPhaseDirPlan: string | null = null;
-  const customNamingPlan = config.phase_naming === 'custom' && isCustomPhaseId(phase);
+  const namingContextPlan = phaseDirectoryContext(config);
+  const customNamingPlan = customPhaseQuery(phase, '', namingContextPlan) !== null;
   if ((!phaseDirPlan || customNamingPlan) && phaseNumberPlan && phaseNamePlan) {
     const paddedNum = normalizePhaseName(phaseNumberPlan);
     const expectedName = (roadmapPhase?.['phase_name'] as string | undefined) || phaseNamePlan;
     const slug = (generateSlugInternal(expectedName) || '').substring(0, 60);
     if (slug) {
       const dirName = phaseDirectoryName(
-        config.phase_naming === 'custom' && isCustomPhaseId(phaseNumberPlan) ? phaseNumberPlan : paddedNum, slug, rawProjectCodePlan,
+        customPhaseQuery(phaseNumberPlan, '', namingContextPlan) ? phaseNumberPlan : paddedNum, slug, rawProjectCodePlan,
       );
       // #2376: absolute — see comment on phase_dir below.
       expectedPhaseDirPlan = toPosixPath(path.join(planningPaths(cwd).phases, dirName));
@@ -3062,7 +3064,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
       // of reporting no_directory/phase_complete:false. Five other init
       // commands already route through this same primitive; this was the
       // holdout private copy (#4793-family declared-owner drift).
-      const located = findPhaseInternal(cwd, phaseNum, phaseIdConvention) as unknown as Record<string, unknown> | null;
+      const located = findPhaseInternal(cwd, phaseNum, phaseIdConvention, phaseDirectoryOptions(cwd)) as unknown as Record<string, unknown> | null;
       const dirMatch = located && located['found']
         ? path.posix.basename(String(located['directory']))
         : null;

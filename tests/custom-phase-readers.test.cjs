@@ -1,0 +1,219 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const fc = require('fast-check');
+// Twenty round trips each spawn add, find, and analyze commands.
+const ROUND_TRIP_TIMEOUT_MS = 120000;
+const { createTempProject, cleanup, runGsdTools, homeSandboxEnv } = require('./helpers.cjs');
+const locator = require('../gsd-core/bin/lib/phase-locator.cjs');
+
+function fixture(code, naming = 'custom') {
+  const cwd = fs.realpathSync(createTempProject());
+  fs.writeFileSync(path.join(cwd, '.planning/config.json'), JSON.stringify({phase_naming: naming, project_code: code}));
+  fs.writeFileSync(path.join(cwd, '.planning/ROADMAP.md'), '# Roadmap\n\n## Milestone v1.0: Test\n\n## Phases\n');
+  return cwd;
+}
+function run(cwd, args) {
+  const result = runGsdTools(args, cwd, homeSandboxEnv(cwd));
+  assert.equal(result.success, true, result.error || result.output);
+  return JSON.parse(result.output);
+}
+function add(cwd, id, title = 'Boundary', code = null) {
+  run(cwd, ['query', 'phase.add', title, '--id', id]);
+  return `.planning/phases/${code ? `${code}-` : ''}${id}-${title.toLowerCase().slice(0,60)}`;
+}
+function options(code, naming = 'custom') { return {phaseNaming: naming, projectCode: code}; }
+
+for (const code of [null, 'CCM']) {
+  test(`custom readers: roadmap analyze sees disk with code ${code} (#5509)`, () => {
+    const cwd = fixture(code);
+    try {
+      add(cwd, 'PRODUCT-BOUNDARY', 'Boundary', code);
+      const result = run(cwd, ['query', 'roadmap.analyze']);
+      const row = result.phases.find(p => p.number === 'PRODUCT-BOUNDARY' || p.id === 'PRODUCT-BOUNDARY');
+      assert.ok(row, JSON.stringify(result));
+      assert.notEqual(row.disk_status, 'no_directory');
+    } finally { cleanup(cwd); }
+  });
+  test(`custom readers: milestone complete checks directory with code ${code} (#5509)`, () => {
+    const cwd = fixture(code);
+    try {
+      add(cwd, 'PRODUCT-BOUNDARY', 'Boundary', code);
+      const roadmap = path.join(cwd, '.planning/ROADMAP.md');
+      fs.appendFileSync(roadmap, '\n### Phase MISSING: Missing\n');
+      const missing = runGsdTools(['milestone', 'complete', 'v1.0', '--dry-run'], cwd, homeSandboxEnv(cwd));
+      assert.equal(missing.success, false, 'a declared custom phase without a directory must block completion');
+      assert.match(missing.error, /Phase MISSING/);
+      assert.doesNotMatch(missing.error, /Phase PRODUCT-BOUNDARY/);
+      fs.writeFileSync(roadmap, fs.readFileSync(roadmap, 'utf8').replace('### Phase MISSING: Missing', ''));
+      assert.equal(run(cwd, ['milestone', 'complete', 'v1.0', '--dry-run']).dry_run, true);
+    } finally { cleanup(cwd); }
+  });
+  test(`custom readers: suffix is never a guessed project code with code ${code} (#5509)`, () => {
+    const cwd = fixture(code);
+    try {
+      add(cwd, 'PRODUCT-BOUNDARY', 'Boundary', code);
+      assert.equal(run(cwd, ['query', 'find-phase', 'BOUNDARY']).found, false);
+      assert.equal(locator.findPhaseInternal(cwd, 'BOUNDARY', undefined, options(code)), null);
+      // Legacy callers receive the configured policy without an override.
+      assert.equal(locator.findPhaseInternal(cwd, 'BOUNDARY'), null);
+    } finally { cleanup(cwd); }
+  });
+  for (const id of ['PRODUCT-BOUNDARY', 'SETUP-2']) for (const verb of ['roadmap.annotate-dependencies', 'verify-command-paths', 'verify-failure-directions', 'context-drift']) {
+    test(`custom readers: add then ${verb} ${id} with code ${code} (#5509)`, () => {
+      const cwd = fixture(code);
+      try {
+        const dir = add(cwd, id, 'Boundary', code);
+        fs.writeFileSync(path.join(cwd, dir, `${id}-01-PLAN.md`), `---\nphase: ${id}\nplan: 01\nwave: 1\n---\n# Plan\n`);
+        const roadmap = path.join(cwd, '.planning/ROADMAP.md');
+        fs.writeFileSync(roadmap, fs.readFileSync(roadmap, 'utf8').replace('- [ ] TBD', `- [ ] ${id}-01: Build boundary\n- [ ] ${id}-02: Finish boundary`));
+        fs.writeFileSync(path.join(cwd, dir, `${id}-02-PLAN.md`), `---\nphase: ${id}\nplan: 02\nwave: 2\n---\n# Plan\n`);
+        const args = verb.startsWith('roadmap.') ? ['query', verb, id]
+          : verb === 'context-drift' ? ['verify', verb, id] : ['check', verb, id];
+        const result = run(cwd, args);
+        if (verb.startsWith('roadmap.')) assert.equal(result.updated, true, JSON.stringify(result));
+        else if (verb === 'context-drift') assert.equal(result.reason, 'no-context-md');
+        else assert.notEqual(result.status, 'unresolvable', JSON.stringify(result));
+      } finally { cleanup(cwd); }
+    });
+  }
+  test(`custom controls: scaffold equals add with code ${code} (#5509)`, () => {
+    const cwd = fixture(code);
+    try {
+      const dir = add(cwd, 'mixed-2', 'Boundary', code);
+      cleanup(path.join(cwd, dir));
+      run(cwd, ['scaffold', 'phase-dir', '--phase', 'mixed-2', '--name', 'Boundary']);
+      assert.ok(fs.statSync(path.join(cwd, dir)).isDirectory());
+    } finally { cleanup(cwd); }
+  });
+}
+test('custom controls: numeric projects keep custom matching disabled (#5509)', () => {
+  const phaseId = require('../gsd-core/bin/lib/phase-id.cjs');
+  const context = {phaseNaming: 'custom', projectCode: 'CCM', roadmap: ''};
+  for (const id of ['CCM-03', 'CCM-03A', 'CCM-03.2']) {
+    assert.equal(phaseId.phaseMarkdownRegexSource(id, context), phaseId.phaseMarkdownRegexSource(id));
+  }
+  const cwd = fixture(null, 'sequential');
+  try {
+    fs.mkdirSync(path.join(cwd, '.planning/phases/PRODUCT-BOUNDARY-boundary'));
+    assert.equal(run(cwd, ['query', 'find-phase', 'BOUNDARY']).found, false);
+    assert.equal(locator.findPhaseInternal(cwd, 'BOUNDARY'), null);
+    fs.mkdirSync(path.join(cwd, '.planning/phases/03-numeric'));
+    assert.equal(run(cwd, ['query', 'find-phase', '3']).directory, '.planning/phases/03-numeric');
+    fs.writeFileSync(path.join(cwd, '.planning/config.json'), JSON.stringify({phase_naming: 'custom', project_code: 'CCM'}));
+    fs.renameSync(path.join(cwd, '.planning/phases/03-numeric'), path.join(cwd, '.planning/phases/CCM-03-numeric'));
+    fs.writeFileSync(path.join(cwd, '.planning/ROADMAP.md'), '# Roadmap\n\n### Phase 3: Numeric\n');
+    const bare = run(cwd, ['query', 'init.plan-phase', '3']);
+    const prefixed = run(cwd, ['query', 'init.plan-phase', 'CCM-03']);
+    assert.equal(prefixed.phase_dir, bare.phase_dir);
+    assert.equal(prefixed.expected_phase_dir, bare.expected_phase_dir);
+    assert.equal(bare.expected_phase_dir, null);
+  } finally { cleanup(cwd); }
+});
+for (const length of [59, 60, 61]) {
+  test(`custom controls: expected directory slug boundary ${length} (#5509)`, () => {
+    const cwd = fixture('CCM');
+    try {
+      const dir = add(cwd, 'BOUNDARY', 'a'.repeat(length), 'CCM');
+      const init = run(cwd, ['query', 'init.plan-phase', 'BOUNDARY']);
+      assert.equal(init.expected_phase_dir, path.join(cwd, dir));
+      assert.equal(init.phase_dir, init.expected_phase_dir);
+    } finally { cleanup(cwd); }
+  });
+}
+test('custom readers: fast-check prefix ids with small mixed alphabet (#5509)', {timeout: ROUND_TRIP_TIMEOUT_MS}, () => {
+  const segment = fc.tuple(
+    fc.constantFrom('A', 'b', 'c'),
+    fc.array(fc.constantFrom('A', 'b', 'c', '2'), {maxLength: 2}),
+  ).map(([head, tail]) => head + tail.join(''));
+  fc.assert(fc.property(segment, fc.constantFrom('2', 'b', 'Ab'), fc.boolean(), (id, suffix, prefixed) => {
+    const code = prefixed ? 'CCM' : null;
+    const cwd = fixture(code);
+    try {
+      const longer = `${id}-${suffix}`;
+      const shortDir = add(cwd, id, 'Boundary', code);
+      const longDir = add(cwd, longer, 'Boundary', code);
+      assert.equal(run(cwd, ['query', 'find-phase', id]).directory, shortDir);
+      assert.equal(run(cwd, ['query', 'find-phase', longer]).directory, longDir);
+      const rows = run(cwd, ['query', 'roadmap.analyze']).phases;
+      for (const token of [id, longer]) {
+        const row = rows.find(p => p.number === token || p.id === token);
+        assert.ok(row, JSON.stringify(rows));
+        assert.notEqual(row.disk_status, 'no_directory');
+      }
+    } finally { cleanup(cwd); }
+  }), {seed: 5509, numRuns: 20});
+});
+
+test('custom readers: canonical matcher owns the configured inverse (#5509)', () => {
+  const { matchPhaseDirs } = require('../gsd-core/bin/lib/phase-id.cjs');
+  const context = {phaseNaming: 'custom', projectCode: 'CCM', roadmap: '### Phase SETUP: Setup\n### Phase SETUP-2: Extra\n'};
+  const dirs = ['CCM-SETUP-setup', 'CCM-SETUP-2-extra'];
+  assert.deepEqual(matchPhaseDirs(dirs, 'SETUP', undefined, context).matches, [dirs[0]]);
+  assert.deepEqual(matchPhaseDirs(dirs, 'SETUP-2', undefined, context).matches, [dirs[1]]);
+});
+
+test('custom readers: smart-entry sees the current failed custom phase (#5509)', () => {
+  const cwd = fixture('CCM');
+  try {
+    const dir = add(cwd, 'PRODUCT-BOUNDARY', 'Boundary', 'CCM');
+    fs.writeFileSync(path.join(cwd, '.planning/STATE.md'), '---\ncurrent_phase: PRODUCT-BOUNDARY\nstatus: executing\n---\n# State\n');
+    fs.writeFileSync(path.join(cwd, dir, 'PRODUCT-BOUNDARY-VERIFICATION.md'), 'STATUS: failed\n');
+    const result = require('../gsd-core/bin/lib/smart-entry.cjs').classifyProject(cwd);
+    assert.equal(result.signals.verify_failed, true);
+  } finally { cleanup(cwd); }
+});
+
+test('custom readers: health rules claim directories and detect missing custom phases (#5509)', () => {
+  const cwd = fixture('CCM');
+  try {
+    add(cwd, 'PRODUCT-BOUNDARY', 'Boundary', 'CCM');
+    fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), '\n### Phase MISSING: Missing\n');
+    fs.writeFileSync(path.join(cwd, '.planning/STATE.md'), '---\nstatus: milestone complete\n---\n# State\n');
+    const configPath = path.join(cwd, '.planning/config.json');
+    const beforeConfig = JSON.stringify({phase_naming: 'custom', project_code: 'CCM', branching_strategy: 'bogus-strategy'});
+    fs.writeFileSync(configPath, beforeConfig);
+    const snapshot = require('../gsd-core/bin/lib/planning-snapshot.cjs').buildPlanningSnapshot(cwd);
+    assert.equal(fs.readFileSync(configPath, 'utf8'), beforeConfig);
+    const diskRules = require('../gsd-core/bin/lib/health-diagnostic-rules/roadmap-disk-consistency.cjs').RULES;
+    assert.deepEqual(diskRules.find(r => r.code === 'W007').check(snapshot), []);
+    const stateRules = require('../gsd-core/bin/lib/health-diagnostic-rules/state-consistency.cjs').RULES;
+    const warnings = stateRules.find(r => r.code === 'W026').check(snapshot);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0].message, /Phase MISSING/);
+    assert.doesNotMatch(warnings[0].message, /Phase PRODUCT-BOUNDARY/);
+  } finally { cleanup(cwd); }
+});
+
+test('custom readers: directory lookup bounds roadmap identity hints (#5509)', () => {
+  const cwd = fixture(null);
+  const originalReadFile = fs.readFileSync;
+  const originalRead = fs.readSync;
+  let bytes = 0;
+  let reading = false;
+  try {
+    add(cwd, 'PRODUCT-BOUNDARY');
+    const roadmap = path.join(cwd, '.planning/ROADMAP.md');
+    fs.appendFileSync(roadmap, 'x'.repeat(2 * 1024 * 1024));
+    fs.readFileSync = function(file, ...args) {
+      const value = originalReadFile.call(this, file, ...args);
+      if (reading && file === roadmap) bytes += Buffer.byteLength(value);
+      return value;
+    };
+    fs.readSync = function(...args) {
+      const count = originalRead.apply(this, args);
+      if (reading) bytes += count;
+      return count;
+    };
+    reading = true;
+    const context = locator.phaseDirectoryOptions ? locator.phaseDirectoryOptions(cwd, {phase_naming: 'custom'}) : options(null);
+    assert.equal(locator.findPhaseInternal(cwd, 'PRODUCT-BOUNDARY', undefined, context).found, true);
+    reading = false;
+    assert.ok(bytes > 0 && bytes <= 1024 * 1024, `roadmap read ${bytes} bytes`);
+  } finally {
+    fs.readFileSync = originalReadFile;
+    fs.readSync = originalRead;
+    cleanup(cwd);
+  }
+});

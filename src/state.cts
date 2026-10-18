@@ -85,7 +85,7 @@ const { SCOPE } = planningScopeMod;
 type Scope = planningScopeMod.Scope;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
-const { listMilestonePhaseDirs } = phaseLocatorMod;
+const { phaseDirectoryOptions, listMilestonePhaseDirs } = phaseLocatorMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import stateTransitionMod = require('./state-transition.cjs');
 // #3873 (ADR-3473 §8.8): FRONTMATTER_KEY_TO_BODY_LABEL below is now a
@@ -1037,11 +1037,11 @@ function unsummarizedPlansForPositionPhase(
   const candidateDirs = windowed.scope === SCOPE.COMPLETE ? windowed.value : [];
   // Canonical phase-token → directory matching (phase-id owner, #2562): both
   // sides of the comparison derived by the same function, never a local regex.
-  const { matches } = matchPhaseDirs(candidateDirs, positionPhase, convention);
+  const { matches } = matchPhaseDirs(candidateDirs, positionPhase, convention, phaseDirectoryOptions(cwd));
   if (matches.length > 0) return scanOutstanding(phasesDir, matches[0]);
   const unscoped = listMilestonePhaseDirs(phasesDir);
   if (unscoped.scope !== SCOPE.COMPLETE) return null;
-  const retry = matchPhaseDirs(unscoped.value, positionPhase, convention);
+  const retry = matchPhaseDirs(unscoped.value, positionPhase, convention, phaseDirectoryOptions(cwd));
   if (retry.matches.length === 0) return null;
   return scanOutstanding(phasesDir, retry.matches[0]);
 }
@@ -5687,7 +5687,7 @@ function cmdStateJson(cwd: string, raw: boolean): void {
  * phase locator's own rule, so this agrees with `init` and `phase-plan-index`.
  */
 function firstPlanToRun(cwd: string, phaseNumber: string | number): number | null {
-  const located = phaseLocatorMod.findPhaseInternal(cwd, String(phaseNumber));
+  const located = phaseLocatorMod.findPhaseInternal(cwd, String(phaseNumber), undefined, phaseDirectoryOptions(cwd));
   if (!located || !located.found) return null;
   const { plans, incomplete_plans: incomplete } = located;
   if (incomplete.length === 0 || incomplete.length === plans.length) return null;

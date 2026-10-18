@@ -63,7 +63,7 @@ import { declareGateExit } from './gate-exit.cjs';
 import { gateVerdict } from './gate-verdict.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-locator.cjs is an export= CommonJS module
 import phaseLocatorMod = require('./phase-locator.cjs');
-const { customPhaseQueryFor, findPhaseInternal, getArchivedPhaseDirs, listMilestonePhaseDirs, listAllPhaseDirs } = phaseLocatorMod;
+const { phaseDirectoryOptions, findPhaseInternal, getArchivedPhaseDirs, listMilestonePhaseDirs, listAllPhaseDirs } = phaseLocatorMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- planning-scope.cjs is an export= CommonJS module
 import planningScopeMod = require('./planning-scope.cjs');
 const { SCOPE } = planningScopeMod;
@@ -262,11 +262,10 @@ function cmdPhasesList(cwd: string, options: PhaseListOptions, raw: boolean): vo
     if (phase) {
       // LOOKUP (b): search the physical set, plus archived when asked.
       const lookupPool = [...readSubdirectories(phasesDir, true), ...archivedLabels];
-      const normalized = normalizePhaseName(phase);
       // The pool is #3185's (physical set + archived); the matcher is this
       // PR's. `dirs` is deliberately not read here: on this base it is not
       // assigned until the branch below picks a match.
-      const { matches } = matchPhaseDirs(lookupPool, normalized);
+      const { matches } = matchPhaseDirs(lookupPool, phase, undefined, phaseDirectoryOptions(cwd));
       const match = matches[0];
       if (!match) {
         output({ files: [], count: 0, phase_dir: null, error: 'Phase not found' }, raw, '');
@@ -354,7 +353,7 @@ function cmdPhaseNextDecimal(cwd: string, basePhase: string, raw: boolean): void
     if (fs.existsSync(phasesDir)) {
       const entries = fs.readdirSync(phasesDir, { withFileTypes: true });
       const dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
-      baseExists = matchPhaseDirs(dirs, normalized).matches.length > 0;
+      baseExists = matchPhaseDirs(dirs, basePhase, undefined, phaseDirectoryOptions(cwd)).matches.length > 0;
     }
 
     const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
@@ -541,8 +540,8 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
 
   const planBase = planningDir(cwd);
   const normalized = normalizePhaseName(phase);
-  const config = loadConfig(cwd);
-  const custom = customPhaseQueryFor(cwd, phase, { phaseNaming: config.phase_naming, projectCode: config.project_code as string | null });
+  const directoryContext = phaseDirectoryOptions(cwd);
+  const custom = phaseIdMod.customPhaseQuery(phase, directoryContext.roadmap ?? '', directoryContext);
   const notFound = {
     found: false,
     directory: null,
@@ -596,7 +595,7 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
       // #2528: selection delegates to the canonical two-pass matcher (exact
       // token match, then the bare-integer leading-digit-run fallback) shared
       // with the locator and the phase-plan-index scan.
-      const { matches } = matchPhaseDirs(dirs, normalized, undefined, custom);
+      const { matches } = matchPhaseDirs(dirs, phase, undefined, directoryContext);
       if (matches.length === 0) continue;
       if (matches.length > 1) {
         output({
@@ -862,8 +861,7 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
 
   const phasesDir = path.join(planningDir(cwd), 'phases');
   const normalized = normalizePhaseName(phase);
-  const config = loadConfig(cwd);
-  const custom = customPhaseQueryFor(cwd, phase, { phaseNaming: config.phase_naming, projectCode: config.project_code as string | null });
+  const directoryContext = phaseDirectoryOptions(cwd);
 
   let phaseDir: string | null = null;
   let phaseDirName: string | null = null;
@@ -878,7 +876,7 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
     // the locator and the find-phase scan (this site previously first-matched
     // with `.find()` and had no multi-match guard — the #2237 fail-loud rule
     // now applies here too, so the three resolution paths cannot disagree).
-    const { matches } = matchPhaseDirs(dirs, normalized, undefined, custom);
+    const { matches } = matchPhaseDirs(dirs, phase, undefined, directoryContext);
     if (matches.length > 1) {
       ambiguousMatches = matches;
     } else if (matches.length === 1) {
@@ -2586,7 +2584,7 @@ function cmdPhaseRemove(
   // taking `matches[0]` silently is strictly worse than anywhere else: it turns
   // "resolve nothing" into "delete one of two candidates, unrecoverably, and
   // renumber every phase after it". Refuse before any file is touched.
-  const { matches: phaseDirMatches } = matchPhaseDirs(subdirs, normalized);
+  const { matches: phaseDirMatches } = matchPhaseDirs(subdirs, targetPhase, undefined, phaseDirectoryOptions(cwd));
   if (phaseDirMatches.length > 1) {
     output(
       {
@@ -3730,7 +3728,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
   const phasesDir = path.join(planningDir(cwd), 'phases');
   const today = realClock.localToday();
 
-  const phaseInfoRaw = findPhaseInternal(cwd, phaseNum);
+  const phaseInfoRaw = findPhaseInternal(cwd, phaseNum, undefined, phaseDirectoryOptions(cwd));
   if (!phaseInfoRaw) {
     error(`Phase ${phaseNum} not found`);
   }
@@ -4958,7 +4956,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         let nextPhaseDisk: { status: ReturnType<typeof phaseStatus>['value']['status']; planCount: number; summaryCount: number } | null = null;
         if (nextPhaseNum && !isLastPhase) {
           try {
-            const nextInfo = findPhaseInternal(cwd, nextPhaseNum) as unknown as { found?: boolean; directory?: string } | null;
+            const nextInfo = findPhaseInternal(cwd, nextPhaseNum, undefined, phaseDirectoryOptions(cwd)) as unknown as { found?: boolean; directory?: string } | null;
             if (nextInfo && nextInfo.found && nextInfo.directory) {
               const { value } = phaseStatus(path.join(cwd, nextInfo.directory), {
                 convention: resolvePhaseIdConvention(cwd),
@@ -5210,7 +5208,7 @@ function cmdPhaseUatPassed(
     error('phase number required for phase uat-passed');
   }
 
-  const phaseInfoRaw = findPhaseInternal(cwd, phaseNum!);
+  const phaseInfoRaw = findPhaseInternal(cwd, phaseNum!, undefined, phaseDirectoryOptions(cwd));
   if (!phaseInfoRaw) {
     error(`Phase ${phaseNum} not found`);
   }
@@ -5237,7 +5235,7 @@ function cmdPhaseListPlans(cwd: string, phaseNum: string | undefined, raw: boole
     error('phase number required for phase list-plans');
   }
 
-  const phaseInfo = findPhaseInternal(cwd, phaseNum!);
+  const phaseInfo = findPhaseInternal(cwd, phaseNum!, undefined, phaseDirectoryOptions(cwd));
   if (!phaseInfo) {
     output({ phase: phaseNum, plan_count: 0, has_plans: false, plans: [], phase_dir: null }, raw);
     return;
