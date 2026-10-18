@@ -71,7 +71,7 @@ completed: YYYY-MM-DD
 status: complete
 ---
 
-# Phase [X]: [Name] Summary
+# {phase_display}: [Name] Summary
 
 **[Substantive one-liner describing outcome - NOT "phase complete" or "implementation finished"]**
 

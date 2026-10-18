@@ -681,3 +681,18 @@ test('#3430: planner depends_on docs show canonical in-phase plan ids', () => {
 });
   });
 }
+
+// #5027: prompt compression must retain authority and runtime conditions.
+test('planner keeps its persona and unconditional planning rule within authority limits', () => {
+  const prompt = fs.readFileSync(path.join(__dirname, '../agents/gsd-planner.md'), 'utf8');
+  assert.ok(prompt.includes('You are a GSD planner.'));
+  assert.ok(prompt.includes('If a feature has none of these three constraints, it gets planned. Period.'));
+});
+test('execute-plan resolves built-in-only dispatch and preserves persona regardless', () => {
+  const prompt = fs.readFileSync(path.join(__dirname, '../gsd-core/workflows/execute-plan.md'), 'utf8');
+  const start = prompt.indexOf('> **Runtime-aware dispatch');
+  const paragraph = prompt.slice(start, prompt.indexOf('\n', start));
+  assert.ok(paragraph.includes('Before dispatching on a built-in-only runtime'));
+  assert.ok(paragraph.includes('Named-dispatch') || paragraph.includes('named-dispatch'));
+  assert.ok(paragraph.includes('persona rides') && paragraph.includes('regardless'));
+});

@@ -476,19 +476,29 @@ function readBoundaryMoveTrailers({ baseRef, headRef = 'HEAD', cwd = REPO_ROOT, 
  *   filtered by the caller to `spineExists: true` entries.
  * @returns {Array<{splitName: string, detailPath: string, line: string}>}
  */
+function withoutCanonicalConvention(content) {
+  const gen = require('../../scripts/gen-phase-id-convention.cjs');
+  const { phaseIdConventionBlock } = require('../../gsd-core/bin/lib/phase-id-card.cjs');
+  const normalized = content.replace(/\r\n/g, '\n');
+  if (!normalized.includes(gen.START) && !normalized.includes(gen.END)) return content;
+  const region = gen.readRegion(normalized, { start: gen.START, end: gen.END }, 'partition input');
+  if (region.violation || region.body !== phaseIdConventionBlock()) throw new Error('Invalid convention region in partition input');
+  return normalized.split('\n').filter((_, i) => i < region.start || i > region.end).join('\n');
+}
+
 function checkDisjointness(splits) {
   const violations = [];
   const PER_SPLIT_CAP = 20;
 
   for (const split of splits) {
-    const spineLines = normalizeNonTrivialLines(fs.readFileSync(split.spinePath, 'utf8'))
+    const spineLines = normalizeNonTrivialLines(withoutCanonicalConvention(fs.readFileSync(split.spinePath, 'utf8')))
       .filter((l) => !isKnownSanctionedBoilerplate(l));
     const spineSet = new Set(spineLines);
 
     let reported = 0;
     for (const detailPath of split.detailPaths) {
       if (reported >= PER_SPLIT_CAP) break;
-      const detailLines = normalizeNonTrivialLines(fs.readFileSync(detailPath, 'utf8'))
+      const detailLines = normalizeNonTrivialLines(withoutCanonicalConvention(fs.readFileSync(detailPath, 'utf8')))
         .filter((l) => !isKnownSanctionedBoilerplate(l));
       for (const line of detailLines) {
         if (reported >= PER_SPLIT_CAP) break;

@@ -116,16 +116,30 @@ function buildTemplateRoadmap() {
   const templateContent = fs.readFileSync(templatePath, 'utf8');
   const block = extractFencedBlock(templateContent, 'markdown');
   assert.ok(block, 'gsd-core/templates/roadmap.md must still contain its fenced `markdown` roadmap example');
+  const phases = [
+    ['Phase 1', 'Alpha'], ['Phase 2', 'Beta'], ['Phase 2.1', 'Critical Fix (INSERTED)'],
+    ['Phase 3', 'Gamma'], ['Phase 4', 'Delta'],
+  ];
+  const main = phases.filter(([id]) => id !== 'Phase 2.1');
+  const plans = ['01-01', '01-02', '01-03', '02-01', '02-02', '02.1-01', '03-01', '03-02', '04-01'];
+  const dependencies = ['Phase 1', 'Phase 2', 'Phase 2', 'Phase 3'];
+  let checklist = 0, detail = 0, plan = 0, dependency = 0, progress = 0;
   return block
     .replaceAll('[Project Name]', 'Nimbus')
-    .replaceAll('Phase 1: [Name]', 'Phase 1: Alpha')
-    .replaceAll('Phase 2: [Name]', 'Phase 2: Beta')
-    .replaceAll('Phase 3: [Name]', 'Phase 3: Gamma')
-    .replaceAll('Phase 4: [Name]', 'Phase 4: Delta')
-    .replaceAll('| 1. [Name] |', '| 1. Alpha |')
-    .replaceAll('| 2. [Name] |', '| 2. Beta |')
-    .replaceAll('| 3. [Name] |', '| 3. Gamma |')
-    .replaceAll('| 4. [Name] |', '| 4. Delta |');
+    .replace(/^(- \[[ x]\] \*\*)\{phase_display\}: \[Name\]/gm, (_, prefix) => {
+      const [display, name] = main[checklist++];
+      return `${prefix}${display}: ${name}`;
+    })
+    .replace(/^### \{phase_display\}: .*$/gm, () => {
+      const [display, name] = phases[detail++];
+      return `### ${display}: ${name}`;
+    })
+    .replaceAll('{plan_display}', () => plans[plan++])
+    .replaceAll('{dependency_phase_display}', () => dependencies[dependency++])
+    .replaceAll('| {phase_display}. [Name] |', () => {
+      const [display, name] = main[progress++];
+      return `| ${display.slice('Phase '.length)}. ${name} |`;
+    });
 }
 
 function runBracketUpgrade(cwd, extraArgs = []) {

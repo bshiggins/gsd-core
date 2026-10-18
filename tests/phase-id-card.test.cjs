@@ -101,7 +101,7 @@ describe('#5027: convention regions fail closed and preserve surrounding bytes',
     assert.deepEqual(gen.write(root).changedFiles, []);
     const cli = runNode([path.join(__dirname, '../scripts/gen-phase-id-convention.cjs'), '--check', '--json', '--root', root], { timeoutMs: PROBE_TIMEOUT_MS });
     assert.equal(cli.exitCode, 0, cli.stderr);
-    assert.equal(JSON.parse(cli.stdout).targetCount, 143);
+    assert.equal(JSON.parse(cli.stdout).targetCount, 145);
   });
   for (const [reason, mutate] of [
     ['missing_file', (text, gen, target) => { fs.unlinkSync(target); return null; }],
@@ -234,7 +234,7 @@ describe('#5027: convention regions fail closed and preserve surrounding bytes',
   test('user-facing command output is explicitly outside selection and evidence scope', () => {
     const { gen, root } = fixture();
     assert.equal(gen.write(root).ok, true);
-    assert.equal(gen.TARGETS.length, 143);
+    assert.equal(gen.TARGETS.length, 145);
     assert.deepEqual(gen.EXCLUDED_USER_OUTPUT, [
       'gsd-core/workflows/help/modes/brief.md',
       'gsd-core/workflows/help/modes/default.md',

@@ -307,6 +307,7 @@ module.exports = {
   "tests/roadmap-upgrade-bracket.test.cjs",
   "tests/roadmap-upgrade.test.cjs",
   "tests/roadmap.test.cjs",
+  "tests/roadmapper-granularity.test.cjs",
   "tests/run-tests-accounting.test.cjs",
   "tests/run-tests-harness.test.cjs",
   "tests/run-tests-temp-root.test.cjs",

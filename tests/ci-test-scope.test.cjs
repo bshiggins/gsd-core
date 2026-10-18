@@ -1396,3 +1396,47 @@ describe('bug #1329 — ci-prepare-test-scope fallback never emits a deleted fil
 });
   });
 }
+
+
+describe('#5027: convention check selected on content-only changes', () => {
+  for (const file of [
+    'agents/gsd-verifier.md',
+    'gsd-core/workflows/discuss-phase/templates/context.md',
+    'gsd-core/templates/roadmap.md',
+    'gsd-core/references/phase-id-convention.md',
+    'src/phase-id-card.cts',
+    'scripts/gen-phase-id-convention.cjs',
+  ]) {
+    test(`selects the card/evidence suite for ${file}`, () => {
+      assert.ok(scopeFor([file]).targeted_tests.includes('tests/phase-id-card.test.cjs'));
+    });
+  }
+});
+
+  test('live full definitions have parity and independent evidence coverage', () => {
+    const gen = require('../scripts/gen-phase-id-convention.cjs');
+    // allow-test-rule: source-text-is-the-product (#5027 maintainer grep-evidence ruling)
+    assert.deepEqual(gen.checkEvidence(path.join(__dirname, '..')).violations, []);
+    assert.equal(gen.check(path.join(__dirname, '..')).ok, true);
+  });
+
+
+test('#5027: generated instruction regions preserve complete introductions', () => {
+  const gen = require('../scripts/gen-phase-id-convention.cjs');
+  const cases = [
+    ['gsd-core/workflows/plan-phase/steps/chunked-planning-mode.md', /per-plan\r?\nruns/],
+    ['gsd-core/workflows/plan-phase/steps/windows-troubleshooting.md', /due to\r?\nstdio/, 'before'],
+    ['gsd-core/workflows/autonomous/steps/converge-dispatch-inline.md', /If `PLAN_STRATEGY=converge`:/, 'before'],
+    ['gsd-core/workflows/autonomous/steps/converge-loop.md', /If `PLAN_STRATEGY=converge`, run the convergence loop:/, 'before'],
+    ['gsd-core/workflows/new-milestone/steps/reset-phase-safety.md', /If `--reset-phase-numbers` is active:/, 'before'],
+    ['gsd-core/workflows/execute-phase/steps/tdd-applicability-resolution.md', /composing\r?\nthat plan/],
+  ];
+  for (const [file, completeSentence, placement] of cases) {
+    // allow-test-rule: source-text-is-the-product (#5027 intact generated-region placement)
+    const text = fs.readFileSync(path.join(ROOT, file), 'utf8');
+    assert.match(text, completeSentence);
+    const sentenceAt = text.indexOf(text.match(completeSentence)[0]);
+    if (placement === 'before') assert.ok(text.indexOf(gen.END) < sentenceAt, file);
+    else assert.ok(text.indexOf(gen.START) > sentenceAt, file);
+  }
+});

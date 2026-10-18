@@ -35,7 +35,7 @@
  *     real tree happens to contain.
  */
 
-const { describe, test } = require('node:test');
+const { describe, test, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -43,7 +43,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const fc = require('fast-check');
 
-const { cleanup } = require('./helpers.cjs');
+const { cleanup, createTempDir } = require('./helpers.cjs');
 const { gitOrThrow, GIT_FIXTURE_TIMEOUT_MS } = require('./helpers/git-fixture.cjs');
 const { runGit, OUTCOME } = require('./helpers/process-seam.cjs');
 const { REPO_ROOT, GIT_TIMEOUT_MS, safeDirArgs, resolveBase } = require('./helpers/emitted-runtime.cjs');
@@ -447,6 +447,35 @@ describe('failing-first fixture: check 1 (completeness)', () => {
     });
     assert.deepStrictEqual(violations, []);
   });
+});
+
+describe('#5027: disjointness permits only the exact generated instruction region', () => {
+  const roots = [];
+  afterEach(() => roots.splice(0).forEach(root => cleanup(root)));
+  for (const variant of ['canonical', 'outside duplicate', 'stale region']) {
+    test(variant, () => {
+      const gen = require('../scripts/gen-phase-id-convention.cjs');
+      const { phaseIdConventionBlock } = require('../gsd-core/bin/lib/phase-id-card.cjs');
+      const root = createTempDir('gsd-5027-partition-');
+      roots.push(root);
+      {
+        const workflows = path.join(root, 'gsd-core/workflows');
+        fs.mkdirSync(path.join(workflows, 'dup/detail'), { recursive: true });
+        const region = `${gen.START}\n${phaseIdConventionBlock()}\n${gen.END}\n`;
+        const repeated = 'This substantive duplicate outside the generated region must still fail.';
+        const outside = variant === 'outside duplicate' ? repeated : '';
+        fs.writeFileSync(path.join(workflows, 'dup.md'), `${region}Spine text.\n${outside}\ngsd-core/workflows/dup/detail/part.md\n`);
+        fs.writeFileSync(path.join(workflows, 'dup/detail/part.md'), `${variant === 'stale region' ? region.replace('## Phase ID convention', '## Changed') : region}Detail text.\n${outside}\n`);
+        const splits = discoverRegisteredSplits(workflows).filter(split => split.spineExists);
+        if (variant === 'stale region') assert.throws(() => checkDisjointness(splits), /convention region/);
+        else {
+          const violations = checkDisjointness(splits);
+          if (variant === 'canonical') assert.deepEqual(violations, []);
+          else assert.ok(violations.some(v => v.line === repeated));
+        }
+      }
+    });
+  }
 });
 
 describe('failing-first fixture: check 2 (disjointness)', () => {

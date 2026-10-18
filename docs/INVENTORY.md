@@ -422,6 +422,8 @@ Full roster at `gsd-core/references/*.md`. References are shared knowledge docum
 | `api-coverage.md` | API-coverage gate reference (full-coverage-by-default) for the `ai-integration` capability's `verify:pre` blocking gate (#1562) — matrix format, trigger, tuning, detector CLI, and the seal-time outcome table naming every pass/block arm including `scope_unavailable` (#3909). |
 | `ai-frameworks.md` | AI framework decision-matrix reference for `gsd-framework-selector`. |
 | `executor-examples.md` | Worked examples for the gsd-executor agent. |
+| `executor-documentation-lookup.md` | Executor documentation lookup via Context7 MCP or the verified CLI fallback, loaded when documentation is needed. |
+| `execution-auth-gates.md` | Authentication checkpoint, credential verification, retry, and summary protocol, loaded on an authentication error. |
 | `plan-checker-examples.md` | Worked example for the gsd-plan-checker agent (Scope Exceeded), moved out of the inline `<examples>` block to keep worked examples structurally separate from the agent contract, matching the other agents' reference layout. `@`-inlined at load (eager), so this costs ~0.6 KB of runtime context versus keeping it inline — a readability trade, not a size-cap remedy (#3724). |
 | `doc-conflict-engine.md` | Shared conflict-detection contract for ingest/import workflows. |
 | `execute-mvp-tdd.md` | Runtime gate semantics for execute-phase under TDD mode — pre-task failing-test verification, end-of-phase blocking review. |

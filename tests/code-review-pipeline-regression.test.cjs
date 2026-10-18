@@ -3726,7 +3726,12 @@ describe('#3861 round 1 — finding-id prefix census', () => {
     // Label-equivalence paragraph — so it can acquire a member without this script
     // changing. An unlisted prefix is not mis-tiered, it is INVISIBLE: the finding
     // never enters the order list and gets no row at all.
-    const agent = fs.readFileSync(REVIEWER_AGENT_PATH, 'utf8');
+    const { normalizeEol, splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
+    const gen = require('../scripts/gen-phase-id-convention.cjs');
+    const source = normalizeEol(fs.readFileSync(REVIEWER_AGENT_PATH, 'utf8'));
+    const region = gen.readRegion(source, { start: gen.START, end: gen.END }, REVIEWER_AGENT_PATH);
+    assert.equal(region.violation, undefined);
+    const agent = splitLines(source).filter((_, i) => i < region.start || i > region.end).join('\n');
     // BOTH surfaces. The body template writes `### CR-01:` headings; the Label-equivalence
     // paragraph defines BL in PROSE and appears in no heading at all (`### BL-` occurs zero
     // times). A heading-only scan therefore passes today purely because BL happens to be
