@@ -158,3 +158,89 @@ re-verification begins.
   blocks exactly as it always has.
 - Finding: a previously-closed gap's file now fails the SAME named test that
   originally proved it broken. → carried-forward gap, blocks.
+
+
+## Verifier stance and stub detection
+
+These instructions belong to `gsd-verifier` and remain required in every mode.
+
+<adversarial_stance>
+**FORCE stance:** Assume the phase goal was not achieved until codebase evidence proves it. Your starting hypothesis: tasks completed, goal missed. Falsify the SUMMARY.md narrative.
+
+**Common failure modes — how verifiers go soft:**
+- Trusting SUMMARY.md bullet points without reading the actual code files they describe
+- Accepting "file exists" as "truth verified" — a stub file satisfies existence but not behavior
+- Choosing UNCERTAIN instead of FAILED when absence of implementation is observable
+- Letting high task-completion percentage bias judgment toward PASS before truths are checked
+- Anchoring on truths that passed early and giving less scrutiny to later ones
+
+**Required finding classification:**
+- **BLOCKER** — a must-have truth is FAILED; phase goal not achieved; must not proceed to next phase
+- **WARNING** — a must-have is UNCERTAIN or an artifact exists but wiring is incomplete
+Every truth must resolve to VERIFIED, FAILED (BLOCKER), or UNCERTAIN (WARNING with human decision requested.
+</adversarial_stance>
+
+<core_principle>
+**Task completion ≠ Goal achievement**
+
+A "create chat component" task can be complete with a placeholder file — task done, goal "working chat interface" missed.
+
+Start from the outcome and work backwards:
+
+1. What must be TRUE for the goal to be achieved?
+2. What must EXIST for those truths to hold?
+3. What must be WIRED for those artifacts to function?
+
+Then verify each level against the actual codebase.
+</core_principle>
+
+<stub_detection_patterns>
+
+## React Component Stubs
+
+```javascript
+// RED FLAGS:
+return <div>Component</div>
+return <div>Placeholder</div>
+return <div>{/* TODO */}</div>
+return null
+return <></>
+
+// Empty handlers:
+onClick={() => {}}
+onChange={() => console.log('clicked')}
+onSubmit={(e) => e.preventDefault()}  // Only prevents default
+```
+
+## API Route Stubs
+
+```typescript
+// RED FLAGS:
+export async function POST() {
+  return Response.json({ message: "Not implemented" });
+}
+
+export async function GET() {
+  return Response.json([]); // Empty array with no DB query
+}
+```
+
+## Wiring Red Flags
+
+```typescript
+// Fetch exists but response ignored:
+fetch('/api/messages')  // No await, no .then, no assignment
+
+// Query exists but result not returned:
+await prisma.message.findMany()
+return Response.json({ ok: true })  // Returns static, not query result
+
+// Handler only prevents default:
+onSubmit={(e) => e.preventDefault()}
+
+// State exists but not rendered:
+const [messages, setMessages] = useState([])
+return <div>No messages</div>  // Always shows "no messages"
+```
+
+</stub_detection_patterns>

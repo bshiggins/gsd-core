@@ -774,7 +774,16 @@ const AUDIT_AGENTS = [
 ];
 
 function readAgent(agentsDir, filename) {
-  return fs.readFileSync(path.join(agentsDir, filename), 'utf-8');
+  const content = fs.readFileSync(path.join(agentsDir, filename), 'utf-8');
+  if (filename !== 'gsd-verifier.md') return content;
+  // The verifier loads its extracted stance through this mandatory reference.
+  const start = content.indexOf('<required_reading>');
+  const end = content.indexOf('</required_reading>', start);
+  assert.ok(start >= 0 && end > start, 'mandatory reference block must exist');
+  const required = content.slice(start, end);
+  assert.ok(required.includes('@~/.claude/gsd-core/references/verifier-evidence-gate.md'));
+  const reference = path.join(agentsDir, '../gsd-core/references/verifier-evidence-gate.md');
+  return content + '\n' + fs.readFileSync(reference, 'utf-8');
 }
 
 function extractRole(content) {

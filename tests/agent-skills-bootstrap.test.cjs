@@ -203,3 +203,17 @@ describe('#5122 bootstrap states how to run the self-load and what each runtime 
       'bootstrap must explain why the type is not read from frontmatter');
   });
 });
+
+// #5027: UI pillars must load even when skill bootstrap self-load is skipped.
+test('UI audit pillars are an unconditional dedicated required reference', () => {
+  const root = path.join(__dirname, '..');
+  const agent = fs.readFileSync(path.join(root, 'agents/gsd-ui-auditor.md'), 'utf8');
+  const start = agent.indexOf('<required_reading>');
+  const end = agent.indexOf('</required_reading>', start);
+  assert.ok(start >= 0 && end > start);
+  assert.ok(agent.slice(start, end).includes('@~/.claude/gsd-core/references/ui-auditor-pillars.md'));
+  const bootstrap = fs.readFileSync(path.join(root, 'gsd-core/references/agent-skills-bootstrap.md'), 'utf8');
+  assert.ok(!bootstrap.includes('<audit_pillars>'));
+  const pillars = fs.readFileSync(path.join(root, 'gsd-core/references/ui-auditor-pillars.md'), 'utf8');
+  for (const heading of ['<audit_pillars>', '</audit_pillars>']) assert.ok(pillars.includes(heading));
+});

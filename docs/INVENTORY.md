@@ -346,7 +346,8 @@ Full roster at `gsd-core/references/*.md`. References are shared knowledge docum
 | `verification-patterns.md` | How to verify different artifact types. |
 | `verification-overrides.md` | Per-artifact verification override rules. |
 | `verifier-phase-gates.md` | Verifier-time gates eagerly imported by `gsd-verifier` (migrated from the retired `verify-phase` workflow, #1892): decision-coverage validation (#2492), test-quality audit, and infrastructure-phase human-verification scoping (#2504). |
-| `verifier-evidence-gate.md` | Re-verification convergence gate loaded by `gsd-verifier` (#3304): a Step 7 anti-pattern blocker that is neither a carried-forward gap nor a regression needs deterministic evidence to stay blocking, else it downgrades to advisory. |
+| `ui-auditor-pillars.md` | Unconditionally required six-pillar audit instructions for gsd-ui-auditor; independent of optional agent-skills self-load. |
+| `verifier-evidence-gate.md` | Required gsd-verifier guidance: adversarial stance, goal-backward evidence principle, stub-detection patterns and re-verification convergence gate (#3304). |
 | `planning-config.md` | Full config schema and behavior. |
 | `phase-id-convention.md` | Canonical bracket phase-ID grammar card and display/disk translation reference (ADR-612). |
 | `security-asvs-levels.md` | OWASP ASVS level definitions for GSD threat modeling — per-level planner disposition rigor and auditor verification depth (L1 opportunistic, L2 standard, L3 comprehensive). |
@@ -368,7 +369,7 @@ Full roster at `gsd-core/references/*.md`. References are shared knowledge docum
 | `verifier-wiring-patterns.md` | Data-flow trace procedure and the four wiring patterns (Component→API, API→Database, Form→Handler, State→Render) loaded by `gsd-verifier`. |
 | `mandatory-initial-read.md` | Shared required-reading boilerplate injected into agent prompts. |
 | `gsd-run-resolver.md` | Canonical `gsd_run` bootstrap resolver block; workflows reference this file instead of copying the shell probe. |
-| `agent-skills-bootstrap.md` | Shared agent_skills self-load contract (query + Read + dedup guard) injected into all 22 consumer agents. |
+| `agent-skills-bootstrap.md` | Shared agent_skills query, Read and dedup contract for full and compact consumer agents; skip self-load when the prompt supplies agent_skills. |
 | `project-skills-discovery.md` | Shared project-skills-discovery boilerplate injected into agent prompts. |
 | `research-documentation-lookup.md` | Shared documentation-lookup protocol (Context7 MCP + guarded CLI fallback) injected into all researcher agents. |
 | `research-philosophy.md` | Shared research philosophy (training-as-hypothesis, honest reporting, investigation-not-confirmation) injected into researcher agents. |
