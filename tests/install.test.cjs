@@ -8516,3 +8516,64 @@ describe('#4377: --relative-includes emits project-relative @ includes for a loc
     );
   });
 });
+
+// #5027: exercise the actual common completion seam, including early returns.
+describe('#5027: successful runtime completion displays the canonical card', () => {
+  const { finishInstall } = require('../bin/install.js');
+  const { phaseIdCard } = require('../gsd-core/bin/lib/phase-id-card.cjs');
+  let root, savedEnv;
+  beforeEach(() => {
+    root = createTempDir('gsd-5027-finish-');
+    savedEnv = Object.fromEntries(['HOME', 'USERPROFILE', 'GSD_HOME'].map(key => [key, process.env[key]]));
+    for (const key of Object.keys(savedEnv)) process.env[key] = root;
+  });
+  afterEach(() => {
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    cleanup(root);
+  });
+  function capture(runtime, isGlobal, options = {}) {
+    const calls = [];
+    const original = console.log;
+    console.log = (...args) => calls.push(args);
+    try {
+      finishInstall(path.join(root, 'settings.json'), {}, null, false, runtime, isGlobal, root, options);
+      return calls;
+    } finally { console.log = original; }
+  }
+  for (const isGlobal of [true, false]) for (const runtime of ['claude', 'kimi', 'kimi-code', 'opencode', 'windsurf']) {
+    test(`${runtime} ${isGlobal ? 'global' : 'local'} emits one unmodified card per successful invocation`, () => {
+      for (let invocation = 0; invocation < 2; invocation++) {
+        const calls = capture(runtime, isGlobal);
+        const cards = calls.filter(args => args.length === 1 && args[0] === phaseIdCard());
+        assert.equal(cards.length, 1);
+        const banner = calls.findIndex(args => typeof args[0] === 'string' && args[0].includes('Done!'));
+        assert.ok(banner > calls.indexOf(cards[0]), 'card precedes the completion banner');
+      }
+    });
+  }
+  for (const isGlobal of [true, false]) test(`settings-write failure (${isGlobal ? 'global' : 'local'}) emits no card`, () => {
+    const settingsPath = path.join(root, 'settings.json');
+    fs.mkdirSync(settingsPath); // A directory cannot be replaced by an atomic settings-file write.
+    const calls = [];
+    const original = console.log;
+    console.log = (...args) => calls.push(args);
+    try {
+      assert.throws(() => finishInstall(settingsPath, {}, null, false, 'claude', isGlobal, root));
+      assert.equal(calls.some(args => args[0] === phaseIdCard()), false);
+    } finally { console.log = original; }
+  });
+  test('entrypoint validation failure emits no success card', () => {
+    const calls = [];
+    const original = console.log;
+    console.log = (...args) => calls.push(args);
+    try {
+      assert.throws(() => finishInstall(path.join(root, 'settings.json'), {}, null, false, 'claude', true, root, {
+        configuredEntrypoints: [{ runtime: 'claude', role: 'hook', configPath: path.join(root, 'settings.json'), scriptPath: path.join(root, 'missing.cjs') }],
+      }), /Configured entrypoint validation failed/);
+      assert.equal(calls.some(args => args[0] === phaseIdCard()), false);
+      assert.equal(fs.existsSync(path.join(root, 'settings.json')), false);
+    } finally { console.log = original; }
+  });
+});

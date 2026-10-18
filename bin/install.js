@@ -5,6 +5,7 @@ const path = require('path');
 const os = require('os');
 const readline = require('readline');
 const crypto = require('crypto');
+const { phaseIdCard } = require('../gsd-core/bin/lib/phase-id-card.cjs');
 const {
   isManagedHookBasename,
   isManagedHookCommand,
@@ -14278,6 +14279,9 @@ function finishInstall(settingsPath, settings, statuslineCommand, shouldInstallS
   const noNewProject = advertised.kind === 'unregistered'
     ? `${program} registers no new-project command in this scope${advertised.nativeCommand ? ` (its native extension registers ${cyan}${advertised.nativeCommand}${reset})` : ''}.`
     : '';
+
+  // #5027: common success point, after validation and writes, before banner returns.
+  console.log(phaseIdCard());
 
   // Claude Code global installs use the skills/ format (CC 2.1.88+).
   // Restart is required for CC to pick up newly-installed skills, and the
