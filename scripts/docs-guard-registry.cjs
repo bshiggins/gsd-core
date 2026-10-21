@@ -157,6 +157,7 @@ function assertNoSuiteCollision(tests) {
  * unresolvable read is recorded as `'*'`, never a narrowed guess.
  */
 const DOCS_GUARD_TESTS = {
+  'tests/pi-unsupported-skill-docs.test.cjs': ['docs/how-to/start-a-gsd-workflow-from-pi.md'],
   'tests/adr-15-progress-converge.test.cjs': [
     'docs/COMMANDS.md',
     'docs/how-to/run-phases-autonomously.md',
@@ -338,6 +339,7 @@ const DOCS_GUARD_TESTS = {
   // (no-pending-3212-markers.test.cjs:37-46), which includes all of docs/ —
   // cannot be resolved to a fixed docs/ path set.
   'tests/no-pending-3212-markers.test.cjs': ['*'],
+  'tests/pause-work-improvements.test.cjs': ['docs/zh-CN/references/git-integration.md'],
   'tests/phase6-capability-docs.test.cjs': ['docs/how-to/develop-a-capability.md', 'docs/README.md'],
   'tests/phase6-review-capabilities.test.cjs': [
     'docs/reference/review-verification-capabilities.md',

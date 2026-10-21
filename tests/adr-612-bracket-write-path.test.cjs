@@ -1143,7 +1143,6 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
         '## [CK.03] Future (Phase Details)',
         '',
         '### [CK.03] 03: Future Three',
-        '',
         '**Goal:** untouched',
         '**Plans:** `03-01-PLAN.md`',
         '',
@@ -1889,8 +1888,9 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
   });
 });
 
+// #5165 keeps the original heading-to-goal junction untouched.
 const LEGACY_ROADMAP_BYTES = '# Roadmap\n\n'
-  + '### Phase 1: Foundation\n\n'
+  + '### Phase 1: Foundation\n'
   + '**Goal:** Existing\n\n'
   + '### Phase 01.1: Hotfix (INSERTED)\n\n'
   + '**Goal:** [Urgent work - to be planned]\n'
