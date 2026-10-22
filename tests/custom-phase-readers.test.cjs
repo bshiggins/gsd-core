@@ -483,16 +483,22 @@ test('custom naming policy: numeric display prefixes remain valid for sequential
 });
 
 test('custom ownership scope: active and archived directories with the same basename keep their own records (#5186)', () => {
-  const cwd = fixture(null);
+  const cwd = fixture('CCM');
   try {
-    const original = add(cwd, 'setup-extra', 'Widget');
+    const original = add(cwd, 'setup-extra', 'Widget', 'CCM');
     const archive = path.join(cwd, '.planning/milestones/v1.0-phases');
     fs.mkdirSync(archive, {recursive: true});
     const archived = path.join(archive, path.basename(original));
     fs.renameSync(path.join(cwd, original), archived);
-    const active = add(cwd, 'setup', 'Extra Widget');
+    const created = add(cwd, 'CCM-setup', 'Extra Widget', 'CCM');
+    // These IDs have no segment-prefix collision. The reader supports both
+    // configured-prefix and unprefixed legacy directory bodies, allowing the
+    // two physical pools to retain the same basename with different records.
+    const active = '.planning/phases/CCM-setup-extra-widget';
+    fs.renameSync(path.join(cwd, created), path.join(cwd, active));
+    assert.equal(path.basename(active), path.basename(archived));
     fs.writeFileSync(path.join(cwd, '.planning/ROADMAP.md'), '# Roadmap\n');
-    for (const [id, expected] of [['setup', active], ['setup-extra', path.relative(cwd, archived)]]) {
+    for (const [id, expected] of [['CCM-setup', active], ['setup-extra', path.relative(cwd, archived)]]) {
       assert.equal(run(cwd, ['query', 'find-phase', id]).directory, expected);
       assert.equal(locator.findPhaseInternal(cwd, id).directory, expected);
     }
