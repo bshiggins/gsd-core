@@ -389,7 +389,7 @@ test('custom controls: legacy numeric, suffix, decimal and bracket results stay 
   } finally { cleanup(cwd); }
 });
 
-for (const writer of ['add', 'batch', 'scaffold']) {
+for (const writer of ['add', 'batch']) {
   test(`custom naming policy: ${writer} refuses a custom ID shadowed by project config (#5186)`, () => {
     const cwd = fixture(null);
     try {
@@ -398,8 +398,7 @@ for (const writer of ['add', 'batch', 'scaffold']) {
       fs.writeFileSync(path.join(cwd, '.planning/config.json'), '{}');
       const before = fs.readFileSync(path.join(cwd, '.planning/ROADMAP.md'), 'utf8');
       const args = writer === 'add' ? ['query', 'phase.add', 'Boundary', '--id', 'PRODUCT-BOUNDARY']
-        : writer === 'batch' ? ['phase', 'add-batch', 'Boundary', '--id', 'PRODUCT-BOUNDARY']
-          : ['scaffold', 'phase-dir', '--phase', 'PRODUCT-BOUNDARY', '--name', 'Boundary'];
+        : ['phase', 'add-batch', 'Boundary', '--id', 'PRODUCT-BOUNDARY'];
       const result = runGsdTools(['--json-errors', ...args], cwd, {...homeSandboxEnv(cwd), GSD_HOME: cwd});
       assert.equal(result.success, false, result.output);
       assert.match(result.error, /"reason":"usage"/);
@@ -657,3 +656,15 @@ test('custom naming compatibility: changeset explains the non-custom phase.add -
     assert.match(changeset, /phase\.add --id.*usage error.*unresolvable/i);
   } finally { cleanup(cwd); }
 });
+
+for (const [id, directory] of [['M1-03', '03-boundary'], ['AUTH', 'AUTH-boundary']]) {
+  test(`legacy scaffold compatibility: non-custom project accepts ${id}`, () => {
+    const cwd = fixture(null, 'sequential');
+    try {
+      const created = run(cwd, ['scaffold', 'phase-dir', '--phase', id, '--name', 'Boundary']);
+      assert.equal(created.directory, `.planning/phases/${directory}`);
+      assert.equal(fs.statSync(path.join(cwd, created.directory)).isDirectory(), true);
+      assert.equal(fs.existsSync(path.join(cwd, created.directory, '.phase-id')), false);
+    } finally { cleanup(cwd); }
+  });
+}
