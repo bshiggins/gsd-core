@@ -2055,8 +2055,9 @@ function renameDecimalPhases(
   const renamedDirs: { from: string; to: string }[] = [];
   const renamedFiles: { from: string; to: string }[] = [];
   const decPattern = new RegExp(`^(0*${baseInt})\\.(\\d+)-(.+)$`);
-  // Recorded custom IDs are stable identities, never numeric renumber targets.
-  const dirs = readSubdirectories(phasesDir, true).filter(dir => !context.directoryIds?.[dir]);
+  // Recorded IDs and known markerless owners are stable custom identities.
+  const dirs = readSubdirectories(phasesDir, true).filter(dir =>
+    phaseIdMod.customDirectoryCandidates(dir, context).length === 0);
   const toRename: RenameDirInfo[] = dirs
     .map((dir) => {
       const m = dir.match(decPattern);
@@ -2123,8 +2124,9 @@ function renameIntegerPhases(
   const renamedDirs: { from: string; to: string }[] = [];
   const renamedFiles: { from: string; to: string }[] = [];
   const renamedFileCollisions: { from: string; to: string; displaced_to: string | null }[] = [];
-  // Recorded custom IDs are stable identities, never numeric renumber targets.
-  const dirs = readSubdirectories(phasesDir, true).filter(dir => !context.directoryIds?.[dir]);
+  // Recorded IDs and known markerless owners are stable custom identities.
+  const dirs = readSubdirectories(phasesDir, true).filter(dir =>
+    phaseIdMod.customDirectoryCandidates(dir, context).length === 0);
   const toRename: RenameIntInfo[] = dirs
     .map((dir) => {
       const m = dir.match(/^(\d+)([A-Z])?(?:\.(\d+))?-(.+)$/i);

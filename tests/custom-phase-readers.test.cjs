@@ -560,3 +560,19 @@ for (const removed of ['3', 'AUTH']) {
     } finally { cleanup(cwd); }
   });
 }
+
+for (const [removed, survivor] of [['1', '2024-Q1'], ['2.1', '2.2']]) {
+  test(`custom renumbering: removal of ${removed} preserves unmarked known owner ${survivor}`, () => {
+    const cwd = fixture(null);
+    try {
+      add(cwd, removed, 'Remove');
+      const dir = path.join(cwd, '.planning/phases', `${survivor}-plan`);
+      fs.mkdirSync(dir);
+      fs.writeFileSync(path.join(dir, 'keep.txt'), 'survivor bytes\n');
+      fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), `\n### Phase ${survivor}: Plan\n`);
+      const result = run(cwd, ['phase', 'remove', removed, '--force']);
+      assert.deepEqual(result.renamed_directories, []);
+      assert.equal(fs.readFileSync(path.join(dir, 'keep.txt'), 'utf8'), 'survivor bytes\n');
+    } finally { cleanup(cwd); }
+  });
+}
