@@ -1754,7 +1754,8 @@ function bracketDirNameOrRefuse(
  * recursive mkdir or child write can follow it. The canonical containment
  * predicate then resolves the existing path, or its nearest existing parent,
  * so a destination reached through a symlinked ancestor cannot escape the
- * planning phases directory either.
+ * planning phases directory either. Renumbering also refuses an occupied
+ * destination during the pre-mutation pass, before any earlier rename runs.
  */
 function assertPhaseDirectoryDestinationSafe(
   phasesDir: string,
@@ -1773,6 +1774,9 @@ function assertPhaseDirectoryDestinationSafe(
   }
   if (stat?.isSymbolicLink()) {
     error(`Cannot ${operation} phase directory "${dirName}": the destination is a symbolic link`);
+  }
+  if (stat && operation === 'renumber into') {
+    error(`Cannot ${operation} phase directory "${dirName}": the destination already exists`);
   }
   if (tryWithinRoot(destination, phasesDir, PathAcceptance.AbsoluteInsideRoot) === null) {
     error(`Cannot ${operation} phase directory "${dirName}": the destination resolves outside the planning phases directory`);

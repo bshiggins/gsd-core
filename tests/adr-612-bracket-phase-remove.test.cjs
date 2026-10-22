@@ -299,6 +299,17 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
   });
 
+  test('refuses an existing real directory at a later bracket rename destination before any rename', () => {
+    makePhaseDir('CK.02-03-four', ['orphan.md']);
+    const before = snapshotTree(planning());
+
+    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+
+    assert.equal(result.success, false, result.output);
+    assert.match(result.error, /Cannot renumber into phase directory "CK\.02-03-four": the destination already exists/);
+    assert.deepEqual(snapshotTree(planning()), before, 'all directories, artifacts, ROADMAP and STATE must stay unchanged');
+  });
+
   test('removes a bracket subphase and renumbers only later siblings', () => {
     const result = runGsdTools(['phase', 'remove', '01.01', '--force'], tmpDir);
     assert.equal(result.success, true, result.error || result.output);
