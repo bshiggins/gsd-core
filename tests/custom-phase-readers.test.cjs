@@ -645,3 +645,15 @@ for (const ambiguous of [false, true]) {
     } finally { cleanup(cwd); }
   });
 }
+
+test('custom naming compatibility: changeset explains the non-custom phase.add --id usage error', () => {
+  const cwd = fixture(null, 'sequential');
+  try {
+    const result = runGsdTools(['query', 'phase.add', 'Boundary', '--id', 'AUTH'], cwd, homeSandboxEnv(cwd));
+    assert.equal(result.success, false);
+    assert.match(result.error, /phase_naming is not custom/);
+    const active = path.join(__dirname, '../.changeset/lucky-deer-travel.md');
+    const changeset = fs.readFileSync(fs.existsSync(active) ? active : path.join(__dirname, '../.changeset/archived/lucky-deer-travel.md'), 'utf8');
+    assert.match(changeset, /phase\.add --id.*usage error.*unresolvable/i);
+  } finally { cleanup(cwd); }
+});
