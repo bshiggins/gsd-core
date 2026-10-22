@@ -628,3 +628,20 @@ test('custom insertion: records AUTH.1 and permits its removal', () => {
     assert.equal(run(cwd, ['query', 'find-phase', 'AUTH']).found, true);
   } finally { cleanup(cwd); }
 });
+
+for (const ambiguous of [false, true]) {
+  test(`custom ownership repair: markerless refusal explains repair with ambiguity ${ambiguous}`, () => {
+    const cwd = fixture(null);
+    try {
+      const id = ambiguous ? 'AUTH-EXTRA' : 'AUTH';
+      const dir = `${id}-legacy`;
+      fs.mkdirSync(path.join(cwd, '.planning/phases', dir));
+      fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), `\n### Phase AUTH: Auth\n${ambiguous ? '### Phase AUTH-EXTRA: Extra\n' : ''}`);
+      const result = runGsdTools(['--json-errors', 'phase', 'remove', id, '--force'], cwd, homeSandboxEnv(cwd));
+      assert.equal(result.success, false);
+      assert.match(result.error, /"reason":"usage"/);
+      assert.match(result.error, /write.*id/i);
+      assert.ok(result.error.includes(`${dir}/.phase-id`), result.error);
+    } finally { cleanup(cwd); }
+  });
+}

@@ -2050,7 +2050,7 @@ function assertUnambiguousCustomDirectories(dirs: string[], context: ReturnType<
   for (const dir of dirs) {
     const candidates = phaseIdMod.customDirectoryCandidates(dir, context);
     if (candidates.length > 1) {
-      error(`Ambiguous custom phase directory ${dir}; candidates: ${candidates.join(', ')}. Refusing removal or rename without ${CUSTOM_PHASE_ID_FILE}`, ERROR_REASON.USAGE);
+      error(`Ambiguous custom phase directory ${dir}; candidates: ${candidates.join(', ')}. Refusing removal or rename without ${CUSTOM_PHASE_ID_FILE}. Write the owning ID into ${dir}/${CUSTOM_PHASE_ID_FILE} and retry`, ERROR_REASON.USAGE);
     }
   }
 }
@@ -2669,7 +2669,7 @@ function cmdPhaseRemove(
   const targetDir = phaseDirMatches[0] || null;
   if (targetDir && directoryContext.phaseNaming === 'custom'
     && isCustomPhaseId(targetPhase) && !directoryContext.directoryIds?.[targetDir]) {
-    error(`Cannot prove ownership of custom phase directory ${targetDir}; refusing removal without ${CUSTOM_PHASE_ID_FILE}`, ERROR_REASON.USAGE);
+    error(`Cannot prove ownership of custom phase directory ${targetDir}; refusing removal without ${CUSTOM_PHASE_ID_FILE}. Write the owning ID into ${targetDir}/${CUSTOM_PHASE_ID_FILE} and retry`, ERROR_REASON.USAGE);
   }
 
   if (targetDir && !force) {
