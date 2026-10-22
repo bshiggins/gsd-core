@@ -124,7 +124,7 @@ for (const length of [59, 60, 61]) {
 }
 test('custom readers: fast-check prefix ids with small mixed alphabet (#5509)', {timeout: ROUND_TRIP_TIMEOUT_MS}, () => {
   const segment = fc.tuple(
-    fc.constantFrom('A', 'b', 'c'),
+    fc.constantFrom('A', 'b', 'c', '2A', '7b'),
     fc.array(fc.constantFrom('A', 'b', 'c', '2'), {maxLength: 2}),
   ).map(([head, tail]) => head + tail.join(''));
   fc.assert(fc.property(segment, fc.constantFrom('2', 'b', 'Ab'), fc.boolean(), fc.tuple(fc.constantFrom('2024', '3', 'Boundary', 'a2'), fc.constantFrom('roadmap', 'steps', 'Ab')).map(words => words.join(' ')), (id, suffix, prefixed, title) => {
@@ -143,7 +143,7 @@ test('custom readers: fast-check prefix ids with small mixed alphabet (#5509)', 
         assert.notEqual(row.disk_status, 'no_directory');
       }
     } finally { cleanup(cwd); }
-  }), {numRuns: 30, examples: [['A', '2', false, '2024 roadmap']]});
+  }), {numRuns: 30, seed: 5186, examples: [['2A', '2', false, '2024 roadmap'], ['7b', 'Ab', true, '3 steps'], ['A', '2', false, '2024 roadmap']]});
 });
 
 test('custom readers: canonical matcher owns the configured inverse (#5509)', () => {
@@ -217,3 +217,14 @@ test('custom readers: directory lookup bounds roadmap identity hints (#5509)', (
     cleanup(cwd);
   }
 });
+
+for (const id of ['2FA', '7B', '12AB', '2fa', '7b', '12ab']) for (const code of [null, 'CCM']) {
+  test(`custom readers: digit-leading ID ${id} round trips with code ${code} (#5186)`, () => {
+    const cwd = fixture(code);
+    try {
+      const dir = add(cwd, id, `T ${id}`, code);
+      assert.equal(run(cwd, ['query', 'find-phase', id]).directory, dir);
+      assert.equal(locator.findPhaseInternal(cwd, id).directory, dir);
+    } finally { cleanup(cwd); }
+  });
+}

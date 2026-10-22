@@ -1438,13 +1438,10 @@ type CustomPhaseQuery = { id: string; listed: boolean; projectCode?: string | nu
 
 /** Custom heading IDs are identity hints only; titles never locate directories. */
 function customPhaseQuery(id: string, roadmap: string, options: PhaseDirectoryContext): CustomPhaseQuery | null {
-  if (options?.phaseNaming !== 'custom' || !isCustomPhaseId(id)) return null;
+  if (options?.phaseNaming !== 'custom' || id.startsWith('[')) return null;
   if (UNSAFE_PHASE_DIRECTORY_PART_RE.test(id)) return null;
   const prefix = options.projectCode ? `${options.projectCode}-` : '';
   const body = prefix && id.startsWith(prefix) ? id.slice(prefix.length) : id;
-  // Reuse the numeric tokenizer so directory-name queries retain legacy resolution.
-  const numeric = derivePhaseTokenSegments(body);
-  if (!numeric.prefix && numeric.tokenSegments.length > 0 && LEADING_DIGIT_RUN_PREFIX_RE.test(body)) return null;
   const headingId = /^Phase[ \t]+([^ \t:\n]+)(?:[ \t]+\([^)\n]*\))?[ \t]*:/;
   const knownIds = tokenizeHeadings(roadmap)
     .filter(heading => heading.level >= 2 && heading.level <= 4)
@@ -1453,6 +1450,10 @@ function customPhaseQuery(id: string, roadmap: string, options: PhaseDirectoryCo
       return match ? [match[1]] : [];
     });
   const listed = [...new Set([...knownIds, ...options.knownIds ?? []])].sort((a, b) => b.length - a.length);
+  if (!isCustomPhaseId(id) && !(listed.includes(id) && /[a-z]/i.test(id))) return null;
+  // Only a complete legacy segment identifies a numeric directory. Digit-leading
+  // custom IDs such as 2FA must not collapse to their leading digit run.
+  if (!listed.includes(id) && body.includes('-') && LEGACY_PHASE_ID_RE.test(body.split('-')[0])) return null;
   // Listed identities outrank the query; a directory's slug never invents an ID.
   return {
     id, listed: listed.includes(id), projectCode: options.projectCode,
@@ -1563,7 +1564,14 @@ function matchPhaseDirs(dirs: string[], query: string, convention: string | null
     // A full directory name is an existing lookup form, distinct from an ID prefix.
     const exact = dirs.filter(d => d === custom.id);
     if (exact.length > 0) return { matches: exact, usedBareFallback: false };
-    return { matches: dirs.filter(d => customPhaseDirectoryParts(d, custom) !== null), usedBareFallback: false };
+    const matches = dirs.filter(d => customPhaseDirectoryParts(d, custom) !== null);
+    if (matches.length > 0 || isCustomPhaseId(query)) return { matches, usedBareFallback: false };
+  }
+  // Custom writers preserve an explicit ID's spelling, including an unpadded
+  // letter suffix (7B). Prefer that literal token before the legacy padded form.
+  if (context?.phaseNaming === 'custom' && convention !== 'bracket' && query !== normalized) {
+    const literal = dirs.filter(d => phaseTokenMatches(d, query, convention));
+    if (literal.length > 0) return { matches: literal, usedBareFallback: false };
   }
   const primary = dirs.filter(d => phaseTokenMatches(d, normalized, convention));
   if (primary.length > 0) return { matches: primary, usedBareFallback: false };

@@ -17568,8 +17568,10 @@ describe('custom phase add-then-resolve regressions (#5186)', () => {
   });
 
   test('fast-check custom phase add-then-resolve round trip (#5186)', () => {
-    const word = fc.array(fc.constantFrom(...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'), { minLength: 2, maxLength: 8 })
-      .map(chars => chars.join(''));
+    const word = fc.tuple(
+      fc.constantFrom(...'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'),
+      fc.array(fc.constantFrom(...'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'), { minLength: 1, maxLength: 7 }),
+    ).map(([head, tail]) => head + tail.join(''));
     fc.assert(fc.property(word, word, fc.boolean(), fc.tuple(fc.constantFrom('2024', '3', 'Property', 'a2'), fc.constantFrom('roadmap', 'steps', 'Boundary')).map(words => words.join(' ')), (head, tail, prefixed, title) => {
       const code = prefixed ? 'CCM' : null;
       const cwd = fixture(code);
@@ -17580,7 +17582,7 @@ describe('custom phase add-then-resolve regressions (#5186)', () => {
         assert.equal(found.found, true, id);
         assert.equal(found.directory, dir);
       } finally { cleanup(cwd); }
-    }), { numRuns: 30, examples: [['AB', 'CD', false, '2024 roadmap']] });
+    }), { numRuns: 30, seed: 5186, examples: [['2FA', 'bc', false, '2024 roadmap'], ['ab', 'cd', true, '3 steps']] });
   });
 });
 
