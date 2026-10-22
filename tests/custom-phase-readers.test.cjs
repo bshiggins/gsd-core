@@ -420,3 +420,12 @@ test('custom mutation safety: numeric removal preserves recorded sibling IDs (#5
     assert.equal(fs.readFileSync(path.join(cwd, dir, '.phase-id'), 'utf8').trim(), '3A');
   } finally { cleanup(cwd); }
 });
+
+test('custom naming policy: numeric display prefixes remain valid for sequential scaffold (#5186)', () => {
+  const cwd = fixture('CCM', 'sequential');
+  try {
+    for (const [id, dir] of [['CCM-03', 'CCM-03-numeric'], ['CCM-04A', 'CCM-04A-numeric'], ['CCM-05.2', 'CCM-05.2-numeric']]) {
+      assert.equal(run(cwd, ['scaffold', 'phase-dir', '--phase', id, '--name', 'Numeric']).directory, `.planning/phases/${dir}`);
+    }
+  } finally { cleanup(cwd); }
+});

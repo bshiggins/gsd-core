@@ -1459,7 +1459,7 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
   assertDescriptionPreservesMilestoneScope(cwd, description, 'phase add');
 
   const naming = phaseDirectoryOptions(cwd, undefined, '');
-  if (customId !== undefined) {
+  if (customId != null) {
     const usage = phaseLocatorMod.customPhaseNamingUsage(cwd, naming);
     if (usage) error(usage, ERROR_REASON.USAGE);
   }

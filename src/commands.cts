@@ -33,6 +33,7 @@ const {
   CUSTOM_PHASE_ID_FILE,
   PhaseDirectoryNameError,
   isCustomPhaseId,
+  stripConfiguredProjectCodePrefix,
   normalizePhaseName,
   comparePhaseNum,
   extractPhaseToken,
@@ -3801,7 +3802,7 @@ function cmdScaffold(cwd: string, type: string, options: ScaffoldOptions, raw: b
       const slug = generateSlugInternal(name);
       // #3287: apply project_code prefix to stay consistent with phase.add/phase.insert
       const scaffoldConfig = phaseDirectoryOptions(cwd, undefined, '');
-      if (isCustomPhaseId(phase)) {
+      if (isCustomPhaseId(stripConfiguredProjectCodePrefix(phase, scaffoldConfig.projectCode))) {
         const usage = phaseLocatorMod.customPhaseNamingUsage(cwd, scaffoldConfig);
         if (usage) error(usage, ERROR_REASON.USAGE);
       }
