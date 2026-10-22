@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createTempProject, cleanup, toPosixPath } = require('./helpers.cjs');
-const { have } = require('./helpers/bash-probe.cjs');
+const { have, skipUnless } = require('./helpers/bash-probe.cjs');
 const { runHook, OUTCOME } = require('./helpers/process-seam.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const { collectSection, scanFencedBlocks } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
@@ -46,7 +46,7 @@ function runArtifactBlock(t, shell, files) {
 }
 
 describe('plan-checker discovers research and summary artifacts (#5178)', {
-  skip: have('bash') ? false : 'bash is not installed; the artifact-loop tests require bash',
+  skip: skipUnless('bash'),
 }, () => {
   // Run bash and zsh deliberately because sh would not expand the braces.
   for (const shell of ['bash', 'zsh']) {
