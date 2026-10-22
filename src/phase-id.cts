@@ -1437,7 +1437,7 @@ function phaseScanTokenSource(context: PhaseDirectoryContext): string {
 }
 type CustomPhaseQuery = { id: string; listed: boolean; projectCode?: string | null; prefixes: { id: string; prefix: string }[]; directoryIds?: Record<string, string> };
 
-type CustomIdentityIndex = { roadmap: string; knownIds: string[]; ids: Set<string>; prefixes: {id: string; prefix: string}[] };
+type CustomIdentityIndex = { roadmap: string; knownIds: string[]; ids: Set<string>; recorded: Set<string>; prefixes: {id: string; prefix: string}[] };
 const customIdentityIndexes = new WeakMap<PhaseDirectoryContext, CustomIdentityIndex>();
 
 /** Custom heading IDs are identity hints only; titles never locate directories. */
@@ -1452,9 +1452,10 @@ function customPhaseQuery(id: string, options: PhaseDirectoryContext): CustomPha
     const headings = tokenizeHeadings(options.roadmap ?? '')
       .filter(heading => heading.level >= 2 && heading.level <= 4)
       .flatMap(heading => heading.text.match(headingId)?.[1] ?? []);
-    const ids = new Set([...headings, ...options.knownIds ?? [], ...Object.values(options.directoryIds ?? {})]);
+    const recorded = new Set(Object.values(options.directoryIds ?? {}));
+    const ids = new Set([...headings, ...options.knownIds ?? [], ...recorded]);
     index = {
-      roadmap: options.roadmap, knownIds: options.knownIds, ids,
+      roadmap: options.roadmap, knownIds: options.knownIds, ids, recorded,
       prefixes: [...ids].filter(token => token && !UNSAFE_PHASE_DIRECTORY_PART_RE.test(token))
         .sort((a, b) => b.length - a.length)
         .map(token => ({id: token, prefix: phaseDirectoryName(token, '')})),
@@ -1462,6 +1463,10 @@ function customPhaseQuery(id: string, options: PhaseDirectoryContext): CustomPha
     customIdentityIndexes.set(options, index);
   }
   const listed = index.ids.has(id);
+  // Legacy numeric tokens (including configured display prefixes) keep their
+  // reading unless a writer explicitly recorded this exact ID. That record
+  // also distinguishes an unpadded 2A from the custom continuation 2A-2.
+  if (!index.recorded.has(id) && !body.includes('-') && LEGACY_PHASE_ID_RE.test(body)) return null;
   if (!isCustomPhaseId(id) && !(listed && /[a-z]/i.test(id))) return null;
   // Only a complete legacy segment identifies a numeric directory. Digit-leading
   // custom IDs such as 2FA must not collapse to their leading digit run.

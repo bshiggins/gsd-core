@@ -317,3 +317,21 @@ test('custom context: roadmap read buffer follows file size and stays bounded (#
     }
   } finally { fs.readSync = original; cleanup(cwd); }
 });
+
+test('custom controls: legacy numeric, suffix, decimal and bracket results stay unchanged (#5186)', () => {
+  const cwd = fixture('CCM', 'sequential');
+  const phaseId = require('../gsd-core/bin/lib/phase-id.cjs');
+  try {
+    for (const dir of ['CCM-03-number', 'CCM-04A-suffix', 'CCM-05.2-decimal', 'GSD.02-06-bracket']) {
+      fs.mkdirSync(path.join(cwd, '.planning/phases', dir));
+    }
+    const queries = ['3', 'CCM-03', '4A', 'CCM-04A', '5.2', 'CCM-05.2'];
+    const before = queries.map(id => run(cwd, ['query', 'find-phase', id]));
+    const bracketBefore = locator.findPhaseInternal(cwd, 'GSD.02-06', 'bracket');
+    fs.writeFileSync(path.join(cwd, '.planning/config.json'), JSON.stringify({phase_naming: 'custom', project_code: 'CCM'}));
+    assert.deepEqual(queries.map(id => run(cwd, ['query', 'find-phase', id])), before);
+    assert.deepEqual(locator.findPhaseInternal(cwd, 'GSD.02-06', 'bracket'), bracketBefore);
+    const context = locator.phaseDirectoryOptions(cwd);
+    for (const id of queries) assert.equal(phaseId.phaseMarkdownRegexSource(id, context), phaseId.phaseMarkdownRegexSource(id));
+  } finally { cleanup(cwd); }
+});
