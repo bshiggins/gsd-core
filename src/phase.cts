@@ -1486,6 +1486,14 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
     if (naming.phaseNaming === 'custom') {
       _newPhaseId = customId || slug.toUpperCase();
       if (!_newPhaseId) error('--id required when phase_naming is "custom"');
+      const foldedId = String(_newPhaseId).toLowerCase();
+      const collision = naming.knownIds.find(id => {
+        const recorded = id.toLowerCase();
+        return foldedId.startsWith(`${recorded}-`) || recorded.startsWith(`${foldedId}-`);
+      });
+      if (collision) {
+        error(`Custom ID ${_newPhaseId} has a segment-prefix collision with recorded ID ${collision}; choose a distinct ID`, ERROR_REASON.USAGE);
+      }
       try { _dirName = phaseDirectoryName(String(_newPhaseId), slug, projectCode); }
       catch (cause) {
         if (cause instanceof PhaseDirectoryNameError) error(cause.message, ERROR_REASON.USAGE);

@@ -17412,6 +17412,17 @@ describe('custom phase add-then-resolve regressions (#5186)', () => {
     return dir;
   }
 
+  // Existing installations may already contain prefix-related IDs. Scaffold
+  // them to test read compatibility independently of phase.add's collision guard.
+  function scaffoldExisting(cwd, id, title, code) {
+    const result = runGsdTools(['scaffold', 'phase-dir', '--phase', id, '--name', title], cwd, homeSandboxEnv(cwd));
+    assert.equal(result.success, true, result.error || result.output);
+    fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), `\n### Phase ${id}: ${title}\n`);
+    const directory = JSON.parse(result.output).directory;
+    assert.equal(directory, `.planning/phases/${code ? `${code}-` : ''}${id}-${title.toLowerCase().replaceAll(' ', '-')}`);
+    return directory;
+  }
+
   for (const code of ['CCM', null]) {
     test(`find-phase resolves a newly added custom ID with project code ${code} (#5186)`, () => {
       const cwd = fixture(code);
@@ -17466,7 +17477,7 @@ describe('custom phase add-then-resolve regressions (#5186)', () => {
           ['BUILD', 'Extra Widget Other'], ['BUILD-EXTRA', 'Widget'],
           ['mixed.id+tag', 'Mixed Case'],
         ];
-        const dirs = cases.map(([id, title]) => add(cwd, id, title, code));
+        const dirs = cases.map(([id, title]) => scaffoldExisting(cwd, id, title, code));
         for (const [i, [id]] of cases.entries()) {
           const found = query(cwd, ['find-phase', id]);
           assert.equal(found.found, true, id);
@@ -17524,7 +17535,7 @@ describe('custom phase add-then-resolve regressions (#5186)', () => {
       const cwd = fixture(code);
       try {
         const short = add(cwd, 'SETUP', 'Initial Setup', code);
-        const long = add(cwd, 'SETUP-2', 'Second Setup', code);
+        const long = scaffoldExisting(cwd, 'SETUP-2', 'Second Setup', code);
         fs.writeFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), '# Roadmap\n');
         const locator = require('../gsd-core/bin/lib/phase-locator.cjs');
         // Exercise the production context: no injected identity hints.
@@ -17541,7 +17552,7 @@ describe('custom phase add-then-resolve regressions (#5186)', () => {
     const cwd = fixture('CCM');
     try {
       const short = add(cwd, 'setup', 'Initial Setup', 'CCM');
-      const long = add(cwd, 'setup-extra', 'Final Setup', 'CCM');
+      const long = scaffoldExisting(cwd, 'setup-extra', 'Final Setup', 'CCM');
       assert.equal(query(cwd, ['find-phase', 'setup']).directory, short);
       assert.equal(query(cwd, ['find-phase', 'setup-extra']).directory, long);
     } finally { cleanup(cwd); }

@@ -23,6 +23,14 @@ function add(cwd, id, title = 'Boundary', code = null) {
   run(cwd, ['query', 'phase.add', title, '--id', id]);
   return `.planning/phases/${code ? `${code}-` : ''}${id}-${title.toLowerCase().replaceAll(' ', '-').slice(0,60)}`;
 }
+// Import existing prefix-related IDs through the production scaffold path;
+// phase.add now refuses creating new segment-prefix collisions.
+function scaffoldExisting(cwd, id, title, code) {
+  const dir = run(cwd, ['scaffold', 'phase-dir', '--phase', id, '--name', title]).directory;
+  fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), `\n### Phase ${id}: ${title}\n`);
+  assert.equal(dir, `.planning/phases/${code ? `${code}-` : ''}${id}-${title.toLowerCase().replaceAll(' ', '-')}`);
+  return dir;
+}
 function options(code, naming = 'custom') { return {phaseNaming: naming, projectCode: code}; }
 
 for (const code of [null, 'CCM']) {
@@ -122,7 +130,7 @@ for (const length of [59, 60, 61]) {
     } finally { cleanup(cwd); }
   });
 }
-test('custom readers: fast-check prefix ids with small mixed alphabet (#5509)', {timeout: ROUND_TRIP_TIMEOUT_MS}, () => {
+test('custom add collision: fast-check refuses segment extensions with mixed-case and digit-leading ids', {timeout: ROUND_TRIP_TIMEOUT_MS}, () => {
   const segment = fc.tuple(
     fc.constantFrom('A', 'b', 'c', '2A', '7b'),
     fc.array(fc.constantFrom('A', 'b', 'c', '2'), {maxLength: 2}),
@@ -133,15 +141,11 @@ test('custom readers: fast-check prefix ids with small mixed alphabet (#5509)', 
     try {
       const longer = `${id}-${suffix}`;
       const shortDir = add(cwd, id, title, code);
-      const longDir = add(cwd, longer, title, code);
+      const result = runGsdTools(['query', 'phase.add', title, '--id', longer], cwd, homeSandboxEnv(cwd));
+      assert.equal(result.success, false);
+      assert.match(result.error, /segment-prefix collision/);
       assert.equal(run(cwd, ['query', 'find-phase', id]).directory, shortDir);
-      assert.equal(run(cwd, ['query', 'find-phase', longer]).directory, longDir);
-      const rows = run(cwd, ['query', 'roadmap.analyze']).phases;
-      for (const token of [id, longer]) {
-        const row = rows.find(p => p.number === token || p.id === token);
-        assert.ok(row, JSON.stringify(rows));
-        assert.notEqual(row.disk_status, 'no_directory');
-      }
+      assert.equal(run(cwd, ['query', 'find-phase', longer]).found, false);
     } finally { cleanup(cwd); }
   }), {numRuns: 30, seed: 5186, examples: [['2A', '2', false, '2024 roadmap'], ['7b', 'Ab', true, '3 steps'], ['A', '2', false, '2024 roadmap']]});
 });
@@ -259,7 +263,7 @@ for (const code of [null, 'CCM']) {
     const cwd = fixture(code);
     try {
       const short = add(cwd, 'A', 'First', code);
-      const long = add(cwd, 'A-B', 'Second', code);
+      const long = scaffoldExisting(cwd, 'A-B', 'Second', code);
       fs.writeFileSync(path.join(cwd, '.planning/ROADMAP.md'), '# Roadmap\n## Phases\n### Phase A: First\n');
       run(cwd, ['phase', 'remove', 'A', '--force']);
       assert.equal(fs.existsSync(path.join(cwd, short)), false);
@@ -271,7 +275,7 @@ for (const code of [null, 'CCM']) {
   test(`custom ownership: headings cannot reassign a directory with code ${code} (#5186)`, () => {
     const cwd = fixture(code);
     try {
-      const long = add(cwd, 'A-B', 'Second', code);
+      const long = scaffoldExisting(cwd, 'A-B', 'Second', code);
       fs.writeFileSync(path.join(cwd, '.planning/ROADMAP.md'), '# Roadmap\n## Phases\n### Phase A: First\n');
       run(cwd, ['phase', 'remove', 'A', '--force']);
       assert.equal(fs.existsSync(path.join(cwd, long)), true);
@@ -427,7 +431,7 @@ for (const target of ['A', 'A-B']) for (const code of [null, 'CCM']) {
     const cwd = fixture(code);
     try {
       const short = add(cwd, 'A', 'First', code);
-      const long = add(cwd, 'A-B', 'Second', code);
+      const long = scaffoldExisting(cwd, 'A-B', 'Second', code);
       fs.unlinkSync(path.join(cwd, long, '.phase-id'));
       const roadmap = fs.readFileSync(path.join(cwd, '.planning/ROADMAP.md'), 'utf8');
       const result = runGsdTools(['--json-errors', 'phase', 'remove', target, '--force'], cwd, homeSandboxEnv(cwd));
@@ -573,6 +577,24 @@ for (const [removed, survivor] of [['1', '2024-Q1'], ['2.1', '2.2']]) {
       const result = run(cwd, ['phase', 'remove', removed, '--force']);
       assert.deepEqual(result.renamed_directories, []);
       assert.equal(fs.readFileSync(path.join(dir, 'keep.txt'), 'utf8'), 'survivor bytes\n');
+    } finally { cleanup(cwd); }
+  });
+}
+
+for (const [first, second] of [['3', '3-2'], ['3-2', '3'], ['setup', 'setup-extra'], ['setup-extra', 'setup']]) {
+  test(`custom add collision: ${second} cannot extend recorded ${first} or its parent`, () => {
+    const cwd = fixture(null);
+    try {
+      add(cwd, first);
+      const roadmap = path.join(cwd, '.planning/ROADMAP.md');
+      const before = fs.readFileSync(roadmap, 'utf8');
+      const dirs = fs.readdirSync(path.join(cwd, '.planning/phases'));
+      const result = runGsdTools(['query', 'phase.add', 'Collision', '--id', second], cwd, homeSandboxEnv(cwd));
+      assert.equal(result.success, false);
+      assert.match(result.error, /recorded.*(?:segment|prefix)|(?:segment|prefix).*recorded/i);
+      assert.match(result.error, new RegExp(first));
+      assert.equal(fs.readFileSync(roadmap, 'utf8'), before);
+      assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), dirs);
     } finally { cleanup(cwd); }
   });
 }
