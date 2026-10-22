@@ -870,3 +870,27 @@ test('legacy removal identity: removing a recorded numeric target leaves legacy 
     for (const id of ['2', '3']) assert.equal(run(cwd, ['query', 'find-phase', id]).directory, `.planning/phases/0${id}-legacy`);
   } finally { cleanup(cwd); }
 });
+
+for (const code of [null, 'CCM']) {
+  test(`recorded numeric aliases: inserted 03.1 resolves and removes as 3.1 with code ${code}`, () => {
+    const cwd = fixture(code);
+    try {
+      fs.mkdirSync(path.join(cwd, '.planning/phases', `${code ? `${code}-` : ''}03-base`));
+      fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), '\n### Phase 3: Base\n');
+      const inserted = run(cwd, ['phase', 'insert', '3', 'Hot']);
+      assert.equal(inserted.phase_number, '03.1');
+      assert.equal(run(cwd, ['query', 'find-phase', '3.1']).directory, inserted.directory);
+      const removed = run(cwd, ['phase', 'remove', '3.1', '--force']);
+      assert.equal(removed.directory_deleted, path.basename(inserted.directory));
+      assert.equal(fs.existsSync(path.join(cwd, inserted.directory)), false);
+      assert.equal(run(cwd, ['roadmap', 'get-phase', '03.1']).found, false);
+    } finally { cleanup(cwd); }
+  });
+  test(`recorded numeric aliases: scaffold 7 resolves as 07 with code ${code}`, () => {
+    const cwd = fixture(code);
+    try {
+      const created = run(cwd, ['scaffold', 'phase-dir', '--phase', '7', '--name', 'A']);
+      for (const query of ['7', '07', ...(code ? [`${code}-07`] : [])]) assert.equal(run(cwd, ['query', 'find-phase', query]).directory, created.directory);
+    } finally { cleanup(cwd); }
+  });
+}

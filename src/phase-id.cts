@@ -1463,7 +1463,7 @@ function customIdentityIndex(options: PhaseDirectoryContext): CustomIdentityInde
     const recorded = new Set(Object.values(options.directoryIds ?? {}));
     const ids = new Set([...headings, ...options.knownIds ?? [], ...recorded]);
     index = {
-      roadmap: options.roadmap, knownIds: options.knownIds, explicitIds: new Set(options.knownIds ?? []), ids, recorded, recordedByFold: new Map([...recorded].map(id => [id.toLowerCase(), id])), order: new Map([...ids].map((id, i) => [id, i])),
+      roadmap: options.roadmap, knownIds: options.knownIds, explicitIds: new Set(options.knownIds ?? []), ids, recorded, recordedByFold: new Map([...recorded].map(id => [(LEGACY_PHASE_ID_RE.test(id) ? normalizePhaseName(id) : id).toLowerCase(), id])), order: new Map([...ids].map((id, i) => [id, i])),
       prefixes: [...ids].filter(token => token && !UNSAFE_PHASE_DIRECTORY_PART_RE.test(token))
         .sort((a, b) => b.length - a.length)
         .map(token => ({id: token, prefix: phaseDirectoryName(token, '')})),
@@ -1480,8 +1480,9 @@ function customPhaseQuery(id: string, options: PhaseDirectoryContext): CustomPha
   const prefix = options.projectCode ? `${options.projectCode}-` : '';
   const body = prefix && id.toLowerCase().startsWith(prefix.toLowerCase()) ? id.slice(prefix.length) : id;
   const index = customIdentityIndex(options);
-  // A marker is authoritative, including numeric IDs and their exact padding.
-  const recorded = index.recordedByFold.get(body.toLowerCase());
+  // Markers are authoritative; only legacy-shaped IDs share their ordinary
+  // numeric padding normalization. Custom digit-leading IDs never collapse.
+  const recorded = index.recordedByFold.get((LEGACY_PHASE_ID_RE.test(body) ? normalizePhaseName(body) : body).toLowerCase());
   if (recorded !== undefined) id = recorded;
   const listed = index.ids.has(id);
   // Legacy numeric tokens (including configured display prefixes) keep their
@@ -1519,8 +1520,8 @@ function customDirectoryOwner(dir: string, query: CustomPhaseQuery): { id: strin
     if (UNSAFE_PHASE_DIRECTORY_PART_RE.test(recordedId)) return null;
     const prefixes = [phaseDirectoryName(recordedId, '')];
     // Scaffold retains legacy numeric directory padding while recording the
-    // requested ID. Padding affects the shape only; queries still name the
-    // recorded ID exactly, so 7 cannot select a directory recorded as 007.
+    // requested ID. Resolve its directory shape independently of the query
+    // normalization above; a digit-leading custom ID still owns its full token.
     if (LEGACY_PHASE_ID_RE.test(recordedId)) prefixes.push(phaseDirectoryName(normalizePhaseName(recordedId), ''));
     for (const prefix of prefixes) {
       const body = customDirectoryBodies(dir, query.projectCode).find(body => body.startsWith(prefix));
