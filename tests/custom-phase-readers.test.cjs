@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const fc = require('fast-check');
+const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 // Generated round trips each spawn add, find, and analyze commands.
 const ROUND_TRIP_TIMEOUT_MS = 120000;
 const { createTempProject, cleanup, runGsdTools, homeSandboxEnv } = require('./helpers.cjs');
@@ -194,6 +195,9 @@ test('custom readers: directory lookup bounds roadmap identity hints (#5509)', (
   const cwd = fixture(null);
   const originalReadFile = fs.readFileSync;
   const originalRead = fs.readSync;
+  const originalOpen = fs.openSync;
+  const originalClose = fs.closeSync;
+  const roadmapDescriptors = new Set();
   let bytes = 0;
   let reading = false;
   try {
@@ -205,9 +209,18 @@ test('custom readers: directory lookup bounds roadmap identity hints (#5509)', (
       if (reading && file === roadmap) bytes += Buffer.byteLength(value);
       return value;
     };
+    fs.openSync = function(file, ...args) {
+      const fd = originalOpen.call(this, file, ...args);
+      if (reading && file === roadmap) roadmapDescriptors.add(fd);
+      return fd;
+    };
+    fs.closeSync = function(fd) {
+      roadmapDescriptors.delete(fd);
+      return originalClose.call(this, fd);
+    };
     fs.readSync = function(...args) {
       const count = originalRead.apply(this, args);
-      if (reading) bytes += count;
+      if (reading && roadmapDescriptors.has(args[0])) bytes += count;
       return count;
     };
     reading = true;
@@ -218,6 +231,8 @@ test('custom readers: directory lookup bounds roadmap identity hints (#5509)', (
   } finally {
     fs.readFileSync = originalReadFile;
     fs.readSync = originalRead;
+    fs.openSync = originalOpen;
+    fs.closeSync = originalClose;
     cleanup(cwd);
   }
 });
@@ -701,10 +716,10 @@ for (const kind of ['oversized', 'symlink', 'fifo']) {
         const target = path.join(cwd, 'identity.txt');
         fs.writeFileSync(target, 'AUTH');
         fs.symlinkSync(target, marker);
-      } else require('node:child_process').execFileSync('mkfifo', [marker]);
+      } else require('node:child_process').execFileSync('mkfifo', [marker], {timeout: PROBE_TIMEOUT_MS});
       const script = `const locator = require(${JSON.stringify(require.resolve('../gsd-core/bin/lib/phase-locator.cjs'))}); process.stdout.write(JSON.stringify(locator.phaseDirectoryOptions(process.cwd(), {phase_naming:'custom'}, '').directoryIds));`;
       const result = require('./helpers/process-seam.cjs').runNode(['-e', script], {
-        cwd, env: {...process.env, ...homeSandboxEnv(cwd)}, timeoutMs: 5000,
+        cwd, env: {...process.env, ...homeSandboxEnv(cwd)}, timeoutMs: PROBE_TIMEOUT_MS,
       });
       assert.equal(result.exitCode, 0, JSON.stringify(result));
       assert.deepEqual(JSON.parse(result.stdout), {});
@@ -766,7 +781,7 @@ test('read-only naming: two-key projection agrees with loadConfig across resolut
           fs.mkdirSync(dir, {recursive: true});
           fs.writeFileSync(path.join(dir, 'config.json'), typeof value === 'string' ? value : JSON.stringify(value));
         };
-        if (scenario.noPlanning) fs.rmSync(path.join(cwd, '.planning'), {recursive: true});
+        if (scenario.noPlanning) cleanup(path.join(cwd, '.planning'));
         else {
           writeConfig(path.join(cwd, '.planning'), scenario.root);
           if (scenario.project) {
