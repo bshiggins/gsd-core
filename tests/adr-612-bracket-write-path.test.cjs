@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { runGsdTools, createTempProject, cleanup, toPosixPath } = require('./helpers.cjs');
 const { createFixture } = require('./fixtures/index.cjs');
+const { gitOrThrow } = require('./helpers/git-fixture.cjs');
 const { extractCurrentMilestone } = require('../gsd-core/bin/lib/roadmap-parser.cjs');
 const { tokenizeHeadings } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
@@ -791,13 +792,12 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.equal(out.directory, '.planning/phases/CK.02-01-foundation');
     const roadmap = fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8');
     assert.equal(roadmap.includes('### [CK.02] 01: Foundation'), true);
-    // The first phase has no predecessor: no Depends on line, never a
-    // phantom [CK.02] 00 the manager could never satisfy.
+    // The first phase explicitly has no prerequisite, never a phantom phase 00.
     assert.equal(roadmap.includes('[CK.02] 00'), false);
-    assert.equal(roadmap.includes('**Depends on:**'), false);
+    assert.equal(roadmap.includes('**Depends on:** Nothing'), true);
   });
 
-  test('phase add-batch omits the dependency line only for the first bracket phase of an empty milestone', () => {
+  test('phase add-batch writes Nothing for the first bracket phase and chains the next item', () => {
     const dir = project('adr-612-first-bracket-batch-');
     writeEmptyBracketFixture(dir);
 
@@ -805,7 +805,8 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
 
     const roadmap = fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8');
     assert.equal(roadmap.includes('[CK.02] 00'), false);
-    assert.equal((roadmap.match(/\*\*Depends on:\*\*/g) ?? []).length, 1);
+    assert.equal((roadmap.match(/\*\*Depends on:\*\*/g) ?? []).length, 2);
+    assert.equal(roadmap.includes('**Depends on:** Nothing'), true);
     assert.equal(roadmap.includes('**Depends on:** [CK.02] 01'), true);
   });
 
@@ -2053,4 +2054,50 @@ test('#4304 byte identity: non-bracket phase-plan-index and init execute-phase o
 
   assert.deepEqual(outputs[1], outputs[0]);
   assert.deepEqual(outputs[2], outputs[0]);
+});
+
+
+describe('#4304 M-1 bracket dependencies use declared milestone phases', () => {
+  for (const command of ['add', 'add-batch']) {
+    for (const scenario of ['orphan-directory', 'sibling-worktree reservation', 'gap', 'no declared phases']) {
+      test(`${command}: ${scenario} writes the nearest declared dependency`, () => {
+        const dir = scenario === 'sibling-worktree reservation'
+          ? gitProject('adr-612-dependency-sibling-')
+          : project('adr-612-dependency-');
+        writeEmptyBracketFixture(dir);
+        const declared = scenario === 'no declared phases' ? [] : scenario === 'gap' ? ['03', '01'] : ['01', '02'];
+        fs.appendFileSync(
+          planning(dir, 'ROADMAP.md'),
+          declared.map((num) => `\n### [CK.02] ${num}: Existing ${num}\n`).join(''),
+        );
+        // Other milestones, fenced examples and sentinels cannot supply the dependency.
+        fs.appendFileSync(planning(dir, 'ROADMAP.md'),
+          '\n```md\n### [CK.02] 04: Example\n```\n\n### [CK.02] 999: Icebox\n\n## [CK.03] v3.0 — Future\n\n### [CK.03] 05: Future\n');
+        let reservationDir = dir;
+        if (scenario === 'sibling-worktree reservation') {
+          reservationDir = path.join(dir, 'sibling');
+          gitOrThrow(['worktree', 'add', '--detach', reservationDir, 'HEAD'], { cwd: dir });
+          writeEmptyBracketFixture(reservationDir);
+          fs.appendFileSync(planning(reservationDir, 'ROADMAP.md'), '\n### [CK.02] 05: Reserved\n');
+        } else {
+          fs.mkdirSync(planning(reservationDir, 'phases', 'CK.02-05-reserved'), { recursive: true });
+        }
+
+        const args = command === 'add'
+          ? ['phase', 'add', 'New Work']
+          : ['phase', 'add-batch', '--descriptions', '["New Work","Following Work"]'];
+        const out = run(args, dir);
+        const phases = command === 'add' ? [out] : out.phases;
+        assert.deepEqual(phases.map((phase) => phase.phase_number), command === 'add' ? [6] : [6, 7]);
+        const roadmap = fs.readFileSync(planning(dir, 'ROADMAP.md'), 'utf8');
+        const first = roadmap.split('### [CK.02] 06: New Work')[1].split('\n### ')[0];
+        const dependency = declared.length === 0 ? 'Nothing' : scenario === 'gap' ? '[CK.02] 03' : '[CK.02] 02';
+        assert.ok(first.includes(`**Depends on:** ${dependency}\n`), first);
+        if (command === 'add-batch') {
+          const second = roadmap.split('### [CK.02] 07: Following Work')[1].split('\n### ')[0];
+          assert.ok(second.includes('**Depends on:** [CK.02] 06\n'), second);
+        }
+      });
+    }
+  }
 });
