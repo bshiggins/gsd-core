@@ -372,3 +372,51 @@ test('custom naming policy: explicit project naming and project code agree at ev
     assert.equal(run(cwd, ['query', 'find-phase', 'BATCH-BOUNDARY']).directory, '.planning/phases/LOCAL-BATCH-BOUNDARY-batch-boundary');
   } finally { cleanup(cwd); }
 });
+
+for (const target of ['A', 'A-B']) for (const code of [null, 'CCM']) {
+  test(`custom mutation safety: markerless prefix owners refuse removing ${target} with code ${code} (#5186)`, () => {
+    const cwd = fixture(code);
+    try {
+      const short = add(cwd, 'A', 'First', code);
+      const long = add(cwd, 'A-B', 'Second', code);
+      fs.unlinkSync(path.join(cwd, long, '.phase-id'));
+      const roadmap = fs.readFileSync(path.join(cwd, '.planning/ROADMAP.md'), 'utf8');
+      const result = runGsdTools(['--json-errors', 'phase', 'remove', target, '--force'], cwd, homeSandboxEnv(cwd));
+      assert.equal(result.success, false, result.output);
+      assert.match(result.error, /"reason":"usage"/);
+      assert.match(result.error, /candidates: A-B, A/);
+      assert.equal(fs.existsSync(path.join(cwd, short)), true);
+      assert.equal(fs.existsSync(path.join(cwd, long)), true);
+      assert.equal(fs.readFileSync(path.join(cwd, '.planning/ROADMAP.md'), 'utf8'), roadmap);
+    } finally { cleanup(cwd); }
+  });
+}
+for (const [target, ids, dir] of [['2', ['03', '03-2'], '03-2-second'], ['2.1', ['02.2', '02.2-extra'], '02.2-extra-second']]) {
+  test(`custom mutation safety: markerless ambiguity refuses renumbering after ${target} (#5186)`, () => {
+    const cwd = fixture(null);
+    try {
+      const targetDir = target === '2' ? '02-first' : '02.1-first';
+      fs.mkdirSync(path.join(cwd, '.planning/phases', targetDir));
+      fs.mkdirSync(path.join(cwd, '.planning/phases', dir));
+      fs.writeFileSync(path.join(cwd, '.planning/ROADMAP.md'), `# Roadmap\n## Phases\n### Phase ${target}: First\n${ids.map(id => `### Phase ${id}: Second\n`).join('')}`);
+      const roadmap = fs.readFileSync(path.join(cwd, '.planning/ROADMAP.md'), 'utf8');
+      const result = runGsdTools(['--json-errors', 'phase', 'remove', target, '--force'], cwd, homeSandboxEnv(cwd));
+      assert.equal(result.success, false, result.output);
+      assert.match(result.error, /"reason":"usage"/);
+      for (const id of ids) assert.ok(result.error.includes(id), result.error);
+      assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')).sort(), [targetDir, dir].sort());
+      assert.equal(fs.readFileSync(path.join(cwd, '.planning/ROADMAP.md'), 'utf8'), roadmap);
+    } finally { cleanup(cwd); }
+  });
+}
+
+test('custom mutation safety: numeric removal preserves recorded sibling IDs (#5186)', () => {
+  const cwd = fixture(null);
+  try {
+    fs.mkdirSync(path.join(cwd, '.planning/phases/02-first'));
+    const dir = add(cwd, '3A', 'Boundary');
+    run(cwd, ['phase', 'remove', '2', '--force']);
+    assert.equal(run(cwd, ['query', 'find-phase', '3A']).directory, dir);
+    assert.equal(fs.readFileSync(path.join(cwd, dir, '.phase-id'), 'utf8').trim(), '3A');
+  } finally { cleanup(cwd); }
+});

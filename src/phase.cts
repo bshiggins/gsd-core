@@ -2033,15 +2033,27 @@ interface RenameIntInfo {
   slug: string;
 }
 
+/** Refuse every ambiguous owner before deletion or the first sibling rename. */
+function assertUnambiguousCustomDirectories(dirs: string[], context: ReturnType<typeof phaseDirectoryOptions>): void {
+  for (const dir of dirs) {
+    const candidates = phaseIdMod.customDirectoryCandidates(dir, context);
+    if (candidates.length > 1) {
+      error(`Ambiguous custom phase directory ${dir}; candidates: ${candidates.join(', ')}. Refusing removal or rename without ${CUSTOM_PHASE_ID_FILE}`, ERROR_REASON.USAGE);
+    }
+  }
+}
+
 function renameDecimalPhases(
   phasesDir: string,
   baseInt: number,
   removedDecimal: number,
+  context: ReturnType<typeof phaseDirectoryOptions>,
 ): { renamedDirs: { from: string; to: string }[]; renamedFiles: { from: string; to: string }[] } {
   const renamedDirs: { from: string; to: string }[] = [];
   const renamedFiles: { from: string; to: string }[] = [];
   const decPattern = new RegExp(`^(0*${baseInt})\\.(\\d+)-(.+)$`);
-  const dirs = readSubdirectories(phasesDir, true);
+  // Recorded custom IDs are stable identities, never numeric renumber targets.
+  const dirs = readSubdirectories(phasesDir, true).filter(dir => !context.directoryIds?.[dir]);
   const toRename: RenameDirInfo[] = dirs
     .map((dir) => {
       const m = dir.match(decPattern);
@@ -2052,6 +2064,7 @@ function renameDecimalPhases(
     .filter((item): item is RenameDirInfo => item !== null && item.oldDecimal > removedDecimal)
     .sort((a, b) => b.oldDecimal - a.oldDecimal);
 
+  assertUnambiguousCustomDirectories(toRename.map(item => item.dir), context);
   for (const item of toRename) {
     const newDecimal = item.oldDecimal - 1;
     const oldPhaseId = `${baseInt}.${item.oldDecimal}`;
@@ -2098,6 +2111,7 @@ function findOrphanedDisplacementName(dir: string, fileName: string): string | n
 function renameIntegerPhases(
   phasesDir: string,
   removedInt: number,
+  context: ReturnType<typeof phaseDirectoryOptions>,
 ): {
   renamedDirs: { from: string; to: string }[];
   renamedFiles: { from: string; to: string }[];
@@ -2106,7 +2120,8 @@ function renameIntegerPhases(
   const renamedDirs: { from: string; to: string }[] = [];
   const renamedFiles: { from: string; to: string }[] = [];
   const renamedFileCollisions: { from: string; to: string; displaced_to: string | null }[] = [];
-  const dirs = readSubdirectories(phasesDir, true);
+  // Recorded custom IDs are stable identities, never numeric renumber targets.
+  const dirs = readSubdirectories(phasesDir, true).filter(dir => !context.directoryIds?.[dir]);
   const toRename: RenameIntInfo[] = dirs
     .map((dir) => {
       const m = dir.match(/^(\d+)([A-Z])?(?:\.(\d+))?-(.+)$/i);
@@ -2128,6 +2143,7 @@ function renameIntegerPhases(
       a.oldInt !== b.oldInt ? b.oldInt - a.oldInt : (b.decimal || 0) - (a.decimal || 0),
     );
 
+  assertUnambiguousCustomDirectories(toRename.map(item => item.dir), context);
   for (const item of toRename) {
     const newInt = item.oldInt - 1;
     const newPadded = String(newInt).padStart(2, '0');
@@ -2605,6 +2621,12 @@ function cmdPhaseRemove(
   // "resolve nothing" into "delete one of two candidates, unrecoverably, and
   // renumber every phase after it". Refuse before any file is touched.
   const directoryContext = phaseDirectoryOptions(cwd);
+  const mutationCandidates = subdirs.filter(dir => {
+    const owners = phaseIdMod.customDirectoryCandidates(dir, directoryContext);
+    return dir === targetPhase || owners.includes(targetPhase)
+      || (!isCustomPhaseId(targetPhase) && Number.parseFloat(dir) > Number.parseFloat(normalized));
+  });
+  assertUnambiguousCustomDirectories(mutationCandidates, directoryContext);
   const { matches: phaseDirMatches } = matchPhaseDirs(subdirs, targetPhase, undefined, directoryContext);
   if (phaseDirMatches.length > 1) {
     output(
@@ -2673,11 +2695,12 @@ function cmdPhaseRemove(
         phasesDir,
         parseInt(normalized.split('.')[0], 10),
         parseInt(normalized.split('.')[1], 10),
+        directoryContext,
       );
       renamedDirs = renamed.renamedDirs;
       renamedFiles = renamed.renamedFiles;
     } else {
-      const renamed = renameIntegerPhases(phasesDir, parseInt(normalized, 10));
+      const renamed = renameIntegerPhases(phasesDir, parseInt(normalized, 10), directoryContext);
       renamedDirs = renamed.renamedDirs;
       renamedFiles = renamed.renamedFiles;
       renamedFileCollisions = renamed.renamedFileCollisions;

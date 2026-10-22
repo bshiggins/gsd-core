@@ -1440,12 +1440,7 @@ type CustomPhaseQuery = { id: string; listed: boolean; projectCode?: string | nu
 type CustomIdentityIndex = { roadmap: string; knownIds: string[]; ids: Set<string>; recorded: Set<string>; prefixes: {id: string; prefix: string}[] };
 const customIdentityIndexes = new WeakMap<PhaseDirectoryContext, CustomIdentityIndex>();
 
-/** Custom heading IDs are identity hints only; titles never locate directories. */
-function customPhaseQuery(id: string, options: PhaseDirectoryContext): CustomPhaseQuery | null {
-  if (options?.phaseNaming !== 'custom' || id.startsWith('[')) return null;
-  if (UNSAFE_PHASE_DIRECTORY_PART_RE.test(id)) return null;
-  const prefix = options.projectCode ? `${options.projectCode}-` : '';
-  const body = prefix && id.startsWith(prefix) ? id.slice(prefix.length) : id;
+function customIdentityIndex(options: PhaseDirectoryContext): CustomIdentityIndex {
   let index = customIdentityIndexes.get(options);
   if (!index || index.roadmap !== options.roadmap || index.knownIds !== options.knownIds) {
     const headingId = /^Phase[ \t]+([^ \t:\n]+)(?:[ \t]+\([^)\n]*\))?[ \t]*:/;
@@ -1462,6 +1457,16 @@ function customPhaseQuery(id: string, options: PhaseDirectoryContext): CustomPha
     };
     customIdentityIndexes.set(options, index);
   }
+  return index;
+}
+
+/** Custom heading IDs are identity hints only; titles never locate directories. */
+function customPhaseQuery(id: string, options: PhaseDirectoryContext): CustomPhaseQuery | null {
+  if (options?.phaseNaming !== 'custom' || id.startsWith('[')) return null;
+  if (UNSAFE_PHASE_DIRECTORY_PART_RE.test(id)) return null;
+  const prefix = options.projectCode ? `${options.projectCode}-` : '';
+  const body = prefix && id.startsWith(prefix) ? id.slice(prefix.length) : id;
+  const index = customIdentityIndex(options);
   const listed = index.ids.has(id);
   // Legacy numeric tokens (including configured display prefixes) keep their
   // reading unless a writer explicitly recorded this exact ID. That record
@@ -1470,7 +1475,7 @@ function customPhaseQuery(id: string, options: PhaseDirectoryContext): CustomPha
   if (!isCustomPhaseId(id) && !(listed && /[a-z]/i.test(id))) return null;
   // Only a complete legacy segment identifies a numeric directory. Digit-leading
   // custom IDs such as 2FA must not collapse to their leading digit run.
-  if (!listed && body.includes('-') && LEGACY_PHASE_ID_RE.test(body.split('-')[0])) return null;
+  if (!listed && !options.directoryIds?.[id] && body.includes('-') && LEGACY_PHASE_ID_RE.test(body.split('-')[0])) return null;
   // Listed identities outrank the query; a directory's slug never invents an ID.
   return {
     id, listed: listed, projectCode: options.projectCode, directoryIds: options.directoryIds,
@@ -1505,6 +1510,20 @@ function customDirectoryOwner(dir: string, query: CustomPhaseQuery): { id: strin
     if (owner) return {id: owner.id, slug: body.slice(owner.prefix.length)};
   }
   return null;
+}
+
+/** All plausible owners of a markerless directory, for destructive preflight. */
+function customDirectoryCandidates(dir: string, context: PhaseDirectoryContext): string[] {
+  if (context.phaseNaming !== 'custom') return [];
+  const recorded = context.directoryIds?.[dir];
+  if (recorded !== undefined) {
+    if (!recorded || UNSAFE_PHASE_DIRECTORY_PART_RE.test(recorded)) return [];
+    return customDirectoryBodies(dir, context.projectCode).some(body => body.startsWith(phaseDirectoryName(recorded, '')))
+      ? [recorded] : [];
+  }
+  const prefixes = customIdentityIndex(context).prefixes;
+  return [...new Set(customDirectoryBodies(dir, context.projectCode).flatMap(body =>
+    prefixes.filter(candidate => body.startsWith(candidate.prefix)).map(candidate => candidate.id)))];
 }
 
 function customPhaseDirectoryParts(dir: string, query: CustomPhaseQuery): { id: string; slug: string } | null {
@@ -1962,6 +1981,7 @@ export = {
   customPhaseQuery,
   customPhaseDirectoryParts,
   customDirectoryOwner,
+  customDirectoryCandidates,
   CUSTOM_PHASE_ID_FILE,
   isCustomPhaseId,
   phaseNumberForMatch,
