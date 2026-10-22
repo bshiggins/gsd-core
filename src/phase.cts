@@ -48,7 +48,7 @@ const {
   comparePhaseNum,
   matchPhaseDirs,
   phaseDirectoryName,
-  validateCustomPhaseId,
+  validateCustomPhaseIds,
   PhaseDirectoryNameError,
   customPhaseDirectoryParts,
   customDirectoryOwner,
@@ -1487,16 +1487,8 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
     if (naming.phaseNaming === 'custom') {
       _newPhaseId = customId || slug.toUpperCase();
       if (!_newPhaseId) error('--id required when phase_naming is "custom"');
-      const foldedId = String(_newPhaseId).toLowerCase();
-      const collision = naming.knownIds.find(id => {
-        const recorded = id.toLowerCase();
-        return foldedId.startsWith(`${recorded}-`) || recorded.startsWith(`${foldedId}-`);
-      });
-      if (collision) {
-        error(`Custom ID ${_newPhaseId} has a segment-prefix collision with recorded ID ${collision}; choose a distinct ID`, ERROR_REASON.USAGE);
-      }
       try {
-        validateCustomPhaseId(String(_newPhaseId));
+        validateCustomPhaseIds([String(_newPhaseId)], {...naming, roadmap: rawContent});
         _dirName = phaseDirectoryName(String(_newPhaseId), slug, projectCode);
       }
       catch (cause) {
@@ -1684,7 +1676,7 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
     }
     const prepared = descriptions.map(description => ({description, slug: generateSlugInternal(description) || ''}));
     if (naming.phaseNaming === 'custom') {
-      try { for (const {slug} of prepared) validateCustomPhaseId(slug.toUpperCase()); }
+      try { validateCustomPhaseIds(prepared.map(({slug}) => slug.toUpperCase()), {...naming, roadmap: rawContent}); }
       catch (cause) {
         if (cause instanceof PhaseDirectoryNameError) error(cause.message, ERROR_REASON.USAGE);
         throw cause;

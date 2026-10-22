@@ -24,12 +24,13 @@ function add(cwd, id, title = 'Boundary', code = null) {
   run(cwd, ['query', 'phase.add', title, '--id', id]);
   return `.planning/phases/${code ? `${code}-` : ''}${id}-${title.toLowerCase().replaceAll(' ', '-').slice(0,60)}`;
 }
-// Import existing prefix-related IDs through the production scaffold path;
-// phase.add now refuses creating new segment-prefix collisions.
-function scaffoldExisting(cwd, id, title, code) {
-  const dir = run(cwd, ['scaffold', 'phase-dir', '--phase', id, '--name', title]).directory;
+// Model existing installations that predate collision checks. Readers discover
+// ownership from real marker files and roadmap entries, never injected IDs.
+function existingCustomDirectory(cwd, id, title, code) {
+  const dir = `.planning/phases/${code ? `${code}-` : ''}${id}-${title.toLowerCase().replaceAll(' ', '-')}`;
+  fs.mkdirSync(path.join(cwd, dir));
+  fs.writeFileSync(path.join(cwd, dir, '.phase-id'), id);
   fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), `\n### Phase ${id}: ${title}\n`);
-  assert.equal(dir, `.planning/phases/${code ? `${code}-` : ''}${id}-${title.toLowerCase().replaceAll(' ', '-')}`);
   return dir;
 }
 function options(code, naming = 'custom') { return {phaseNaming: naming, projectCode: code}; }
@@ -278,7 +279,7 @@ for (const code of [null, 'CCM']) {
     const cwd = fixture(code);
     try {
       const short = add(cwd, 'A', 'First', code);
-      const long = scaffoldExisting(cwd, 'A-B', 'Second', code);
+      const long = existingCustomDirectory(cwd, 'A-B', 'Second', code);
       fs.writeFileSync(path.join(cwd, '.planning/ROADMAP.md'), '# Roadmap\n## Phases\n### Phase A: First\n');
       run(cwd, ['phase', 'remove', 'A', '--force']);
       assert.equal(fs.existsSync(path.join(cwd, short)), false);
@@ -290,7 +291,7 @@ for (const code of [null, 'CCM']) {
   test(`custom ownership: headings cannot reassign a directory with code ${code} (#5186)`, () => {
     const cwd = fixture(code);
     try {
-      const long = scaffoldExisting(cwd, 'A-B', 'Second', code);
+      const long = existingCustomDirectory(cwd, 'A-B', 'Second', code);
       fs.writeFileSync(path.join(cwd, '.planning/ROADMAP.md'), '# Roadmap\n## Phases\n### Phase A: First\n');
       run(cwd, ['phase', 'remove', 'A', '--force']);
       assert.equal(fs.existsSync(path.join(cwd, long)), true);
@@ -445,7 +446,7 @@ for (const target of ['A', 'A-B']) for (const code of [null, 'CCM']) {
     const cwd = fixture(code);
     try {
       const short = add(cwd, 'A', 'First', code);
-      const long = scaffoldExisting(cwd, 'A-B', 'Second', code);
+      const long = existingCustomDirectory(cwd, 'A-B', 'Second', code);
       fs.unlinkSync(path.join(cwd, long, '.phase-id'));
       const roadmap = fs.readFileSync(path.join(cwd, '.planning/ROADMAP.md'), 'utf8');
       const result = runGsdTools(['--json-errors', 'phase', 'remove', target, '--force'], cwd, homeSandboxEnv(cwd));
@@ -903,6 +904,44 @@ for (const id of ['[CCM.01-01]', '[CCM]-01']) {
       const created = run(cwd, ['scaffold', 'phase-dir', '--phase', id, '--name', 'A']);
       assert.equal(fs.statSync(path.join(cwd, created.directory)).isDirectory(), true);
       assert.equal(fs.existsSync(path.join(cwd, created.directory, '.phase-id')), false);
+    } finally { cleanup(cwd); }
+  });
+}
+
+for (const writer of ['add', 'batch', 'scaffold']) for (const owner of ['recorded', 'markerless', 'roadmap']) {
+  test(`shared custom collision guard: ${writer} refuses an extension of ${owner} AUTH`, () => {
+    const cwd = fixture(null);
+    try {
+      if (owner === 'recorded') add(cwd, 'AUTH', 'Existing');
+      else if (owner === 'markerless') fs.mkdirSync(path.join(cwd, '.planning/phases/AUTH-legacy'));
+      else fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), '\n### Phase AUTH: Declared\n');
+      const roadmap = path.join(cwd, '.planning/ROADMAP.md');
+      const before = fs.readFileSync(roadmap, 'utf8');
+      const dirs = fs.readdirSync(path.join(cwd, '.planning/phases'));
+      const args = writer === 'add' ? ['query', 'phase.add', 'New', '--id', 'AUTH-EXTRA']
+        : writer === 'batch' ? ['phase', 'add-batch', 'Auth Extra']
+          : ['scaffold', 'phase-dir', '--phase', 'AUTH-EXTRA', '--name', 'New'];
+      const result = runGsdTools(['--json-errors', ...args], cwd, homeSandboxEnv(cwd));
+      assert.equal(result.success, false, result.output);
+      assert.match(result.error, /"reason":"usage"/);
+      assert.match(result.error, /segment-prefix collision/);
+      assert.equal(fs.readFileSync(roadmap, 'utf8'), before);
+      assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), dirs);
+    } finally { cleanup(cwd); }
+  });
+}
+for (const descriptions of [['Auth', 'Auth Extra'], ['Auth Extra', 'Auth']]) {
+  test(`shared custom collision guard: batch refuses its own prefixes in order ${descriptions.join(', ')}`, () => {
+    const cwd = fixture(null);
+    try {
+      const roadmap = path.join(cwd, '.planning/ROADMAP.md');
+      const before = fs.readFileSync(roadmap, 'utf8');
+      const result = runGsdTools(['--json-errors', 'phase', 'add-batch', ...descriptions], cwd, homeSandboxEnv(cwd));
+      assert.equal(result.success, false, result.output);
+      assert.match(result.error, /"reason":"usage"/);
+      assert.match(result.error, /segment-prefix collision/);
+      assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), []);
+      assert.equal(fs.readFileSync(roadmap, 'utf8'), before);
     } finally { cleanup(cwd); }
   });
 }

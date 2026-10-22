@@ -244,11 +244,14 @@ function phaseDirectoryOptions(cwd: string, config?: Record<string, unknown>, ro
   // Old directories have no marker: reads retain heading hints, but removal
   // refuses to infer their ownership from a mutable roadmap or slug.
   context.directoryIdsByRoot = Object.create(null) as Record<string, Record<string, string>>;
+  const unmarkedDirectories: string[] = [];
+  context.unmarkedDirectories = unmarkedDirectories;
   const roots = [path.join(planningDir(cwd, ws), 'phases'), ...listArchiveVersionDirs(cwd, ws).map(entry => entry.archivePath)];
   for (const root of roots) {
     const ids = Object.create(null) as Record<string, string>;
     context.directoryIdsByRoot[root] = ids;
-    for (const dir of readSubdirectories(root, true)) {
+    const directories = readSubdirectories(root, true);
+    for (const dir of directories) {
       let identityFd: number | undefined;
       try {
         const markerPath = path.join(root, dir, CUSTOM_PHASE_ID_FILE);
@@ -269,6 +272,7 @@ function phaseDirectoryOptions(cwd: string, config?: Record<string, unknown>, ro
       } catch { /* An absent or unusable marker supplies no ownership proof. */ }
       finally { if (identityFd !== undefined) fs.closeSync(identityFd); }
     }
+    unmarkedDirectories.push(...directories.filter(dir => ids[dir] === undefined));
   }
   // Basenames can repeat across milestones with different ID/slug boundaries.
   // Identity hints span the scope; authoritative records belong to one pool.

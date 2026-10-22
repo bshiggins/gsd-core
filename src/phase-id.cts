@@ -1448,7 +1448,7 @@ function recordedPhaseKey(id: string): string {
 }
 
 const CUSTOM_PHASE_ID_FILE = '.phase-id';
-type PhaseDirectoryContext = { phaseNaming: unknown; projectCode: string | null; roadmap: string; knownIds: string[]; directoryIds?: Record<string, string>; directoryIdsByRoot?: Record<string, Record<string, string>> };
+type PhaseDirectoryContext = { phaseNaming: unknown; projectCode: string | null; roadmap: string; knownIds: string[]; directoryIds?: Record<string, string>; unmarkedDirectories?: string[]; directoryIdsByRoot?: Record<string, Record<string, string>> };
 
 /** Naming policy is supplied by the config owner; grammar remains pure. */
 function phaseDirectoryContext(config: Record<string, unknown>, roadmap = '', knownIds: string[] = []): PhaseDirectoryContext {
@@ -1482,6 +1482,41 @@ function customIdentityIndex(options: PhaseDirectoryContext): CustomIdentityInde
     customIdentityIndexes.set(options, index);
   }
   return index;
+}
+
+/** Preflight every custom writer, including all IDs in a batch, before writes. */
+function validateCustomPhaseIds(ids: string[], context: PhaseDirectoryContext): void {
+  const index = customIdentityIndex(context);
+  const known = new Set(index.ids);
+  const collides = (id: string, other: string): boolean => {
+    const a = id.toLowerCase();
+    const b = other.toLowerCase();
+    return a.startsWith(`${b}-`) || b.startsWith(`${a}-`);
+  };
+  for (const id of ids) {
+    validateCustomPhaseId(id);
+    const collision = [...known].find(other => collides(id, other));
+    if (collision) {
+      const source = index.recorded.has(collision) || index.explicitIds.has(collision) ? 'recorded' : 'declared or pending';
+      throw new PhaseDirectoryNameError(`Custom ID ${id} has a segment-prefix collision with ${source} ID ${collision}; choose a distinct ID`);
+    }
+    for (const dir of context.unmarkedDirectories ?? []) {
+      if (customDirectoryCandidates(dir, context).length > 0) continue;
+      // Without a marker or a declared owner, every segment boundary before
+      // the final slug is plausible. Refuse an uncertain collision; recording
+      // the true owner lets later writes use that exact ID instead of guessing.
+      for (const body of customDirectoryBodies(dir, context.projectCode)) {
+        const segments = body.split('-');
+        for (let end = 1; end < segments.length; end++) {
+          const candidate = segments.slice(0, end).join('-');
+          if (collides(id, candidate)) {
+            throw new PhaseDirectoryNameError(`Custom ID ${id} has a segment-prefix collision with possible markerless ID ${candidate} in ${dir}; write the owning ID into ${dir}/${CUSTOM_PHASE_ID_FILE} and retry`);
+          }
+        }
+      }
+    }
+    known.add(id);
+  }
 }
 
 /** Custom heading IDs are identity hints only; titles never locate directories. */
@@ -2027,6 +2062,7 @@ export = {
   phaseScanTokenSource,
   phaseDirectoryName,
   validateCustomPhaseId,
+  validateCustomPhaseIds,
   PhaseDirectoryNameError,
   customPhaseQuery,
   customPhaseDirectoryParts,

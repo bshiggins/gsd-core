@@ -17412,14 +17412,13 @@ describe('custom phase add-then-resolve regressions (#5186)', () => {
     return dir;
   }
 
-  // Existing installations may already contain prefix-related IDs. Scaffold
-  // them to test read compatibility independently of phase.add's collision guard.
-  function scaffoldExisting(cwd, id, title, code) {
-    const result = runGsdTools(['scaffold', 'phase-dir', '--phase', id, '--name', title], cwd, homeSandboxEnv(cwd));
-    assert.equal(result.success, true, result.error || result.output);
+  // Model existing directories created before prefix-collision checks. The
+  // production locator discovers their real marker files without injected IDs.
+  function existingCustomDirectory(cwd, id, title, code) {
+    const directory = `.planning/phases/${code ? `${code}-` : ''}${id}-${title.toLowerCase().replaceAll(' ', '-')}`;
+    fs.mkdirSync(path.join(cwd, directory));
+    fs.writeFileSync(path.join(cwd, directory, '.phase-id'), id);
     fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), `\n### Phase ${id}: ${title}\n`);
-    const directory = JSON.parse(result.output).directory;
-    assert.equal(directory, `.planning/phases/${code ? `${code}-` : ''}${id}-${title.toLowerCase().replaceAll(' ', '-')}`);
     return directory;
   }
 
@@ -17478,7 +17477,7 @@ describe('custom phase add-then-resolve regressions (#5186)', () => {
           ['BUILD', 'Extra Widget Other'], ['BUILD-EXTRA', 'Widget'],
           ['mixed.id+tag', 'Mixed Case'],
         ];
-        const dirs = cases.map(([id, title]) => scaffoldExisting(cwd, id, title, code));
+        const dirs = cases.map(([id, title]) => existingCustomDirectory(cwd, id, title, code));
         for (const [i, [id]] of cases.entries()) {
           const found = query(cwd, ['find-phase', id]);
           assert.equal(found.found, true, id);
@@ -17536,7 +17535,7 @@ describe('custom phase add-then-resolve regressions (#5186)', () => {
       const cwd = fixture(code);
       try {
         const short = add(cwd, 'SETUP', 'Initial Setup', code);
-        const long = scaffoldExisting(cwd, 'SETUP-2', 'Second Setup', code);
+        const long = existingCustomDirectory(cwd, 'SETUP-2', 'Second Setup', code);
         fs.writeFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), '# Roadmap\n');
         const locator = require('../gsd-core/bin/lib/phase-locator.cjs');
         // Exercise the production context: no injected identity hints.
@@ -17553,7 +17552,7 @@ describe('custom phase add-then-resolve regressions (#5186)', () => {
     const cwd = fixture('CCM');
     try {
       const short = add(cwd, 'setup', 'Initial Setup', 'CCM');
-      const long = scaffoldExisting(cwd, 'setup-extra', 'Final Setup', 'CCM');
+      const long = existingCustomDirectory(cwd, 'setup-extra', 'Final Setup', 'CCM');
       assert.equal(query(cwd, ['find-phase', 'setup']).directory, short);
       assert.equal(query(cwd, ['find-phase', 'setup-extra']).directory, long);
     } finally { cleanup(cwd); }
