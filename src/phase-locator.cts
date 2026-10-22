@@ -177,7 +177,7 @@ function listArchiveVersionDirs(cwd: string, wsOverride?: string | null): Archiv
   // tree (root + each workstream) rather than widening this scope — the
   // #2855 no-leak contract for findPhaseInternal/getArchivedPhaseDirs is
   // preserved untouched.
-  const milestonesDir = path.join(planningDir(cwd, wsOverride), 'milestones');
+  const milestonesDir = path.join(planningDir(cwd, wsOverride ?? undefined), 'milestones');
   const out: ArchiveVersionDir[] = [];
   const seen = new Set<string>();
   const pushVersion = (version: string, archivePath: string): void => {

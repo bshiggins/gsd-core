@@ -498,7 +498,7 @@ test('custom ownership scope: active and archived directories with the same base
     }
   } finally { cleanup(cwd); }
 });
-test('custom ownership scope: explicit root context excludes an ambient workstream archive (#5186)', () => {
+test('custom ownership scope: root active identities stay separate from the ambient workstream archive (#5186)', () => {
   const cwd = fixture(null);
   const previous = process.env.GSD_WORKSTREAM;
   try {
@@ -510,6 +510,7 @@ test('custom ownership scope: explicit root context excludes an ambient workstre
     process.env.GSD_WORKSTREAM = 'alpha';
     const root = locator.phaseDirectoryOptions(cwd, undefined, '', null);
     assert.equal(root.directoryIds['ARCHIVE-boundary'], undefined);
+    assert.equal(root.directoryIdsByRoot[path.dirname(archived)]['ARCHIVE-boundary'], 'ARCHIVE');
     assert.equal(locator.findPhaseInternal(cwd, 'ARCHIVE').directory, path.relative(cwd, archived));
   } finally {
     if (previous === undefined) delete process.env.GSD_WORKSTREAM;
@@ -691,3 +692,27 @@ for (const kind of ['oversized', 'symlink', 'fifo']) {
     } finally { cleanup(cwd); }
   });
 }
+
+test('archive scope compatibility: null workstream retains the environment fallback', () => {
+  const cwd = fixture(null);
+  const previous = process.env.GSD_WORKSTREAM;
+  try {
+    const ws = path.join(cwd, '.planning/workstreams/alpha');
+    const archive = path.join(ws, 'milestones/v1.0-phases');
+    const archived = path.join(archive, 'AUTH-boundary');
+    fs.mkdirSync(archived, {recursive: true});
+    fs.writeFileSync(path.join(archived, '.phase-id'), 'AUTH');
+    fs.writeFileSync(path.join(ws, 'config.json'), JSON.stringify({phase_naming: 'custom'}));
+    process.env.GSD_WORKSTREAM = 'alpha';
+    const result = runGsdTools(['query', 'find-phase', 'AUTH'], cwd, {...homeSandboxEnv(cwd), GSD_WORKSTREAM: 'alpha'});
+    assert.equal(result.success, true, result.error || result.output);
+    assert.equal(JSON.parse(result.output).directory, path.relative(cwd, archived));
+    // The exported archive reader forwards null to the private enumeration seam.
+    const phases = locator.getArchivedPhaseDirs(cwd, null);
+    assert.ok(phases.some(entry => entry.fullPath === archived), JSON.stringify(phases));
+  } finally {
+    if (previous === undefined) delete process.env.GSD_WORKSTREAM;
+    else process.env.GSD_WORKSTREAM = previous;
+    cleanup(cwd);
+  }
+});
