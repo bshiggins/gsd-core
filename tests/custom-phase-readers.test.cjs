@@ -598,3 +598,18 @@ for (const [first, second] of [['3', '3-2'], ['3-2', '3'], ['setup', 'setup-extr
     } finally { cleanup(cwd); }
   });
 }
+
+for (const id of [' A', 'B ', '[Z]', 'A B', 'A\tB', 'A:B']) {
+  test(`custom ID validation: rejects unreadable ID ${JSON.stringify(id)}`, () => {
+    const cwd = fixture(null);
+    try {
+      const roadmap = path.join(cwd, '.planning/ROADMAP.md');
+      const before = fs.readFileSync(roadmap, 'utf8');
+      const result = runGsdTools(['--json-errors', 'query', 'phase.add', 'Invalid', '--id', id], cwd, homeSandboxEnv(cwd));
+      assert.equal(result.success, false);
+      assert.match(result.error, /"reason":"usage"/);
+      assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), []);
+      assert.equal(fs.readFileSync(roadmap, 'utf8'), before);
+    } finally { cleanup(cwd); }
+  });
+}
