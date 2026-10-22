@@ -9,12 +9,13 @@
  * location; only the module boundary moved. The core.cjs re-export spine
  * was retired in epic #1267; callers import phase-locator helpers directly.
  *
- * Dependencies (leaf modules only — no loadConfig):
+ * Dependencies:
  *   - node:fs / node:path (stdlib)
  *   - ./phase-id.cjs       (phaseDirectoryContext, customPhaseQuery, customPhaseDirectoryParts,
  *                           normalizePhaseName, matchPhaseDirs, phaseNumberForMatch)
  *   - ./core-utils.cjs     (readSubdirectories, getPhaseFileStats, extractCanonicalPlanId, toPosixPath)
- *   - ./planning-workspace.cjs (planningDir, readScopedConfigValue)
+ *   - ./planning-workspace.cjs (planningDir)
+ *   - ./config-loader.cjs (loadConfig, read-only resolution)
  */
 
 import fs from 'node:fs';
@@ -27,7 +28,13 @@ import coreUtilsModule = require('./core-utils.cjs');
 const { readSubdirectories, getPhaseFileStats, extractCanonicalPlanId, toPosixPath, findUnsummarizedPlans } = coreUtilsModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
-const { planningDir, planningRoot, readScopedConfigValue } = planningWorkspace;
+const { planningDir, planningRoot } = planningWorkspace;
+// Naming readers and writers share effective loader precedence. Read-only
+// resolution keeps lookups from normalizing or rewriting project config.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import configLoaderModule = require('./config-loader.cjs');
+const { loadConfig } = configLoaderModule;
+import { resolveGsdHome } from './runtime-homes.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatterModule = require('./frontmatter.cjs');
 const { extractFrontmatter } = frontmatterModule;
@@ -205,12 +212,9 @@ function listArchiveVersionDirs(cwd: string, wsOverride?: string | null): Archiv
   return out;
 }
 
-/** Naming-only reads are silent and never migrate config. Roadmap hints are bounded. */
+/** Effective naming uses the shared loader without write-back. Roadmap hints are bounded. */
 function phaseDirectoryOptions(cwd: string, config?: Record<string, unknown>, roadmap?: string) {
-  const naming = config ?? {
-    phase_naming: readScopedConfigValue(cwd, ['phase_naming']).value,
-    project_code: readScopedConfigValue(cwd, ['project_code']).value,
-  };
+  const naming = config ?? loadConfig(cwd, {persist: false});
   const context = phaseDirectoryContext(naming, roadmap ?? '');
   if (naming.phase_naming !== 'custom') return context;
   // Load directory-owned IDs once for this scope, including archive fallback.
@@ -233,6 +237,20 @@ function phaseDirectoryOptions(cwd: string, config?: Record<string, unknown>, ro
     return {...context, ...phaseDirectoryContext(naming, buffer.toString('utf8', 0, count))};
   } catch { return context; }
   finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+
+/** Usage guidance for every custom-ID writer, using the resolved naming policy. */
+function customPhaseNamingUsage(cwd: string, context: ReturnType<typeof phaseDirectoryOptions>): string | null {
+  if (context.phaseNaming === 'custom') return null;
+  let message = 'phase_naming is not custom for this project; configure phase_naming as "custom" before using a custom ID';
+  try {
+    const defaultsPath = path.join(resolveGsdHome(), '.gsd', 'defaults.json');
+    const defaults = JSON.parse(fs.readFileSync(defaultsPath, 'utf8')) as Record<string, unknown>;
+    if (defaults.phase_naming === 'custom' && fs.existsSync(path.join(planningDir(cwd), 'config.json'))) {
+      message += `; project config shadows phase_naming from ${defaultsPath}`;
+    }
+  } catch { /* Missing/unusable defaults do not change effective naming. */ }
+  return message;
 }
 
 function searchPhaseInDir(baseDir: string, relBase: string, normalized: string, convention: string | null | undefined, context: ReturnType<typeof phaseDirectoryOptions>): PhaseSearchResult | null {
@@ -628,6 +646,7 @@ function getAllArchivedPhaseDirs(cwd: string): ArchivedPhaseDir[] {
 
 export = {
   phaseDirectoryOptions,
+  customPhaseNamingUsage,
   searchPhaseInDir,
   findPhaseInternal,
   getArchivedPhaseDirs,

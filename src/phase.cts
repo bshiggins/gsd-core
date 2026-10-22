@@ -1458,7 +1458,11 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
   }
   assertDescriptionPreservesMilestoneScope(cwd, description, 'phase add');
 
-  const config = loadConfig(cwd);
+  const naming = phaseDirectoryOptions(cwd, undefined, '');
+  if (customId !== undefined) {
+    const usage = phaseLocatorMod.customPhaseNamingUsage(cwd, naming);
+    if (usage) error(usage, ERROR_REASON.USAGE);
+  }
   const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
   if (!fs.existsSync(roadmapPath)) {
     error('ROADMAP.md not found');
@@ -1470,13 +1474,13 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
     const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
     const content = extractCurrentMilestone(rawContent, cwd);
 
-    const projectCode = (config.project_code as string) || '';
+    const projectCode = (naming.projectCode as string) || '';
     const prefix = projectCode ? `${projectCode}-` : '';
 
     let _newPhaseId: number | string;
     let _dirName: string;
 
-    if (customId || config.phase_naming === 'custom') {
+    if (naming.phaseNaming === 'custom') {
       _newPhaseId = customId || slug.toUpperCase();
       if (!_newPhaseId) error('--id required when phase_naming is "custom"');
       try { _dirName = phaseDirectoryName(String(_newPhaseId), slug, projectCode); }
@@ -1551,10 +1555,10 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
 
     platformEnsureDir(dirPath);
     platformWriteSync(path.join(dirPath, '.gitkeep'), '');
-    if (config.phase_naming === 'custom') platformWriteSync(path.join(dirPath, CUSTOM_PHASE_ID_FILE), String(_newPhaseId));
+    if (naming.phaseNaming === 'custom') platformWriteSync(path.join(dirPath, CUSTOM_PHASE_ID_FILE), String(_newPhaseId));
 
     const dependsOn =
-      config.phase_naming === 'custom' ? '' : dependsOnLine(_newPhaseId, roadmapDeclaredPhaseNums(rawContent));
+      naming.phaseNaming === 'custom' ? '' : dependsOnLine(_newPhaseId, roadmapDeclaredPhaseNums(rawContent));
     const phaseEntry =
       `\n### Phase ${_newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${_newPhaseId} to break down)\n`;
 
@@ -1576,7 +1580,7 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
     directory: toPosixPath(
       path.join(path.relative(cwd, planningDir(cwd)), 'phases', dirName),
     ),
-    naming_mode: config.phase_naming,
+    naming_mode: naming.phaseNaming,
   };
   if (titleWarning) result['warning'] = titleWarning;
 
@@ -1605,19 +1609,22 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
   for (const description of descriptions) {
     assertDescriptionPreservesMilestoneScope(cwd, description, 'phase add-batch');
   }
-  const config = loadConfig(cwd);
+  const naming = phaseDirectoryOptions(cwd, undefined, '');
+  if (descriptions.includes('--id')) {
+    error(phaseLocatorMod.customPhaseNamingUsage(cwd, naming) ?? '--id is not supported by phase add-batch', ERROR_REASON.USAGE);
+  }
   const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
   if (!fs.existsSync(roadmapPath)) {
     error('ROADMAP.md not found');
   }
-  const projectCode = (config.project_code as string) || '';
+  const projectCode = (naming.projectCode as string) || '';
   const prefix = projectCode ? `${projectCode}-` : '';
 
   const results = withPlanningLock(cwd, () => {
     let rawContent = fs.readFileSync(roadmapPath, 'utf-8');
     const content = extractCurrentMilestone(rawContent, cwd);
     let maxPhase = 0;
-    if (config.phase_naming !== 'custom') {
+    if (naming.phaseNaming !== 'custom') {
       // Same three cwd-scoped sources as cmdPhaseAdd (#1229): headers, roadmap
       // bullets, on-disk dirs. The bullet scan was missing here — a bullet-only
       // `Phase N` row was invisible to batch allocation (#3849 secondary).
@@ -1665,7 +1672,7 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
       const slug = generateSlugInternal(description) || '';
       let newPhaseId: number | string;
       let dirName: string;
-      if (config.phase_naming === 'custom') {
+      if (naming.phaseNaming === 'custom') {
         newPhaseId = slug.toUpperCase();
         dirName = `${prefix}${newPhaseId}-${slug}`;
       } else {
@@ -1676,9 +1683,9 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
       const dirPath = path.join(planningDir(cwd), 'phases', dirName);
       platformEnsureDir(dirPath);
       platformWriteSync(path.join(dirPath, '.gitkeep'), '');
-      if (config.phase_naming === 'custom') platformWriteSync(path.join(dirPath, CUSTOM_PHASE_ID_FILE), String(newPhaseId));
+      if (naming.phaseNaming === 'custom') platformWriteSync(path.join(dirPath, CUSTOM_PHASE_ID_FILE), String(newPhaseId));
       const dependsOn =
-        config.phase_naming === 'custom' ? '' : dependsOnLine(newPhaseId, roadmapDeclaredPhaseNums(rawContent));
+        naming.phaseNaming === 'custom' ? '' : dependsOnLine(newPhaseId, roadmapDeclaredPhaseNums(rawContent));
       const phaseEntry =
         `\n### Phase ${newPhaseId}: ${description}\n\n**Goal:** [To be planned]\n**Requirements**: TBD${dependsOn}\n**Plans:** 0 plans\n\nPlans:\n- [ ] TBD (run ${formatGsdSlash('plan-phase', resolveRuntime(cwd)) as string} ${newPhaseId} to break down)\n`;
       const insertAt = phaseEntryInsertOffset(rawContent, cwd);
@@ -1692,7 +1699,7 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
         directory: toPosixPath(
           path.join(path.relative(cwd, planningDir(cwd)), 'phases', dirName),
         ),
-        naming_mode: config.phase_naming,
+        naming_mode: naming.phaseNaming,
       });
     }
     platformWriteSync(roadmapPath, rawContent, { verbatim: true });

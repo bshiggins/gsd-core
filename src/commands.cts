@@ -3800,14 +3800,18 @@ function cmdScaffold(cwd: string, type: string, options: ScaffoldOptions, raw: b
       }
       const slug = generateSlugInternal(name);
       // #3287: apply project_code prefix to stay consistent with phase.add/phase.insert
-      const scaffoldConfig = loadConfig(cwd);
-      const scaffoldProjectCode = (scaffoldConfig['project_code'] as string) || '';
+      const scaffoldConfig = phaseDirectoryOptions(cwd, undefined, '');
+      if (isCustomPhaseId(phase)) {
+        const usage = phaseLocatorMod.customPhaseNamingUsage(cwd, scaffoldConfig);
+        if (usage) error(usage, ERROR_REASON.USAGE);
+      }
+      const scaffoldProjectCode = (scaffoldConfig.projectCode as string) || '';
       let dirName: string;
       try {
         // Validate the raw ID before normalization can discard path components.
         phaseDirectoryName(phase, '', scaffoldProjectCode);
         dirName = phaseDirectoryName(
-          scaffoldConfig.phase_naming === 'custom' && isCustomPhaseId(phase) ? phase : padded, slug || '', scaffoldProjectCode,
+          scaffoldConfig.phaseNaming === 'custom' && isCustomPhaseId(phase) ? phase : padded, slug || '', scaffoldProjectCode,
         );
       } catch (cause) {
         if (cause instanceof PhaseDirectoryNameError) error(cause.message, ERROR_REASON.USAGE);
@@ -3818,7 +3822,7 @@ function cmdScaffold(cwd: string, type: string, options: ScaffoldOptions, raw: b
       const dirPath = path.resolve(phasesParent, dirName);
       if (path.dirname(dirPath) !== path.resolve(phasesParent)) error('Phase directory escapes the phases directory', ERROR_REASON.USAGE);
       platformEnsureDir(dirPath);
-      if (scaffoldConfig.phase_naming === 'custom') platformWriteSync(path.join(dirPath, CUSTOM_PHASE_ID_FILE), phase);
+      if (scaffoldConfig.phaseNaming === 'custom') platformWriteSync(path.join(dirPath, CUSTOM_PHASE_ID_FILE), phase);
       output({ created: true, directory: toPosixPath(path.relative(cwd, dirPath)), path: dirPath }, raw, dirPath);
       return;
     }

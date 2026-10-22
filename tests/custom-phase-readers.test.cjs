@@ -335,3 +335,40 @@ test('custom controls: legacy numeric, suffix, decimal and bracket results stay 
     for (const id of queries) assert.equal(phaseId.phaseMarkdownRegexSource(id, context), phaseId.phaseMarkdownRegexSource(id));
   } finally { cleanup(cwd); }
 });
+
+for (const writer of ['add', 'batch', 'scaffold']) {
+  test(`custom naming policy: ${writer} refuses a custom ID shadowed by project config (#5186)`, () => {
+    const cwd = fixture(null);
+    try {
+      fs.mkdirSync(path.join(cwd, '.gsd'));
+      fs.writeFileSync(path.join(cwd, '.gsd/defaults.json'), JSON.stringify({phase_naming: 'custom', project_code: 'GLOBAL'}));
+      fs.writeFileSync(path.join(cwd, '.planning/config.json'), '{}');
+      const before = fs.readFileSync(path.join(cwd, '.planning/ROADMAP.md'), 'utf8');
+      const args = writer === 'add' ? ['query', 'phase.add', 'Boundary', '--id', 'PRODUCT-BOUNDARY']
+        : writer === 'batch' ? ['phase', 'add-batch', 'Boundary', '--id', 'PRODUCT-BOUNDARY']
+          : ['scaffold', 'phase-dir', '--phase', 'PRODUCT-BOUNDARY', '--name', 'Boundary'];
+      const result = runGsdTools(['--json-errors', ...args], cwd, {...homeSandboxEnv(cwd), GSD_HOME: cwd});
+      assert.equal(result.success, false, result.output);
+      assert.match(result.error, /"reason":"usage"/);
+      assert.match(result.error, /phase_naming is not custom for this project/);
+      assert.match(result.error, /project config shadows.*defaults\.json/);
+      assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), []);
+      assert.equal(fs.readFileSync(path.join(cwd, '.planning/ROADMAP.md'), 'utf8'), before);
+      assert.equal(fs.readFileSync(path.join(cwd, '.planning/config.json'), 'utf8'), '{}');
+    } finally { cleanup(cwd); }
+  });
+}
+test('custom naming policy: explicit project naming and project code agree at every writer and reader (#5186)', () => {
+  const cwd = fixture('LOCAL');
+  try {
+    fs.mkdirSync(path.join(cwd, '.gsd'));
+    fs.writeFileSync(path.join(cwd, '.gsd/defaults.json'), JSON.stringify({phase_naming: 'sequential', project_code: 'GLOBAL'}));
+    const added = add(cwd, 'PRODUCT-BOUNDARY', 'Boundary', 'LOCAL');
+    assert.equal(run(cwd, ['query', 'find-phase', 'PRODUCT-BOUNDARY']).directory, added);
+    assert.equal(locator.findPhaseInternal(cwd, 'PRODUCT-BOUNDARY').directory, added);
+    run(cwd, ['scaffold', 'phase-dir', '--phase', 'SCAFFOLD', '--name', 'Other']);
+    assert.equal(run(cwd, ['query', 'find-phase', 'SCAFFOLD']).directory, '.planning/phases/LOCAL-SCAFFOLD-other');
+    run(cwd, ['phase', 'add-batch', 'Batch Boundary']);
+    assert.equal(run(cwd, ['query', 'find-phase', 'BATCH-BOUNDARY']).directory, '.planning/phases/LOCAL-BATCH-BOUNDARY-batch-boundary');
+  } finally { cleanup(cwd); }
+});
