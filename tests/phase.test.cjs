@@ -17527,9 +17527,8 @@ describe('custom phase add-then-resolve regressions (#5186)', () => {
         const long = add(cwd, 'SETUP-2', 'Second Setup', code);
         fs.writeFileSync(path.join(cwd, '.planning', 'ROADMAP.md'), '# Roadmap\n');
         const locator = require('../gsd-core/bin/lib/phase-locator.cjs');
-        // With headings absent, supply explicit identity hints rather than infer IDs from slugs.
-        const context = {...locator.phaseDirectoryOptions(cwd), knownIds: ['SETUP', 'SETUP-2']};
-        const locate = id => locator.findPhaseInternal(cwd, id, undefined, context);
+        // Exercise the production context: no injected identity hints.
+        const locate = id => locator.findPhaseInternal(cwd, id);
         assert.equal(locate('SETUP').directory, short);
         assert.equal(locate('SETUP-2').directory, long);
         cleanup(path.join(cwd, short));
