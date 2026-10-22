@@ -228,7 +228,7 @@ function phaseDirectoryOptions(cwd: string, config?: Record<string, unknown>, ro
   let fd: number | undefined;
   try {
     fd = fs.openSync(path.join(planningDir(cwd), 'ROADMAP.md'), 'r');
-    const buffer = Buffer.alloc(1024 * 1024);
+    const buffer = Buffer.alloc(Math.min(fs.fstatSync(fd).size, 1024 * 1024));
     const count = fs.readSync(fd, buffer, 0, buffer.length, 0);
     return {...context, ...phaseDirectoryContext(naming, buffer.toString('utf8', 0, count))};
   } catch { return context; }

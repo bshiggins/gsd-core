@@ -298,3 +298,22 @@ test('custom context: one heading scan serves all phase key and directory matche
     assert.equal(scans, 1, `heading scans for one context: ${scans}`);
   } finally { parser.tokenizeHeadings = original; }
 });
+
+test('custom context: roadmap read buffer follows file size and stays bounded (#5186)', () => {
+  const cwd = fixture(null);
+  const original = fs.readSync;
+  const reads = [];
+  fs.readSync = function(fd, buffer, ...args) {
+    reads.push(buffer.length);
+    return original.call(this, fd, buffer, ...args);
+  };
+  try {
+    const roadmap = path.join(cwd, '.planning/ROADMAP.md');
+    for (const text of ['', '# Roadmap\n### Phase AUTH: Sign in\n', 'x'.repeat(2 * 1024 * 1024)]) {
+      fs.writeFileSync(roadmap, text);
+      reads.length = 0;
+      locator.phaseDirectoryOptions(cwd, {phase_naming: 'custom'});
+      assert.deepEqual(reads, [Math.min(Buffer.byteLength(text), 1024 * 1024)]);
+    }
+  } finally { fs.readSync = original; cleanup(cwd); }
+});
