@@ -670,6 +670,19 @@ for (const [id, directory] of [['M1-03', '03-boundary'], ['AUTH', 'AUTH-boundary
   });
 }
 
+for (const command of [['query', 'progress.json'], ['query', 'roadmap.analyze'], ['query', 'find-phase', '1']]) {
+  test(`read-only naming: invalid config stays silent for ${command[1]}`, () => {
+    const cwd = fixture(null, 'sequential');
+    try {
+      fs.writeFileSync(path.join(cwd, '.planning/config.json'), '{ invalid-config.json');
+      const result = require('./helpers/process-seam.cjs').runNode([path.join(__dirname, '../gsd-core/bin/gsd-tools.cjs'), ...command], {cwd, env: {...process.env, ...homeSandboxEnv(cwd)}});
+      assert.equal(result.exitCode, 0, result.stderr || result.stdout);
+      assert.equal(result.stderr, '');
+      assert.equal(fs.readFileSync(path.join(cwd, '.planning/config.json'), 'utf8'), '{ invalid-config.json');
+    } finally { cleanup(cwd); }
+  });
+}
+
 for (const kind of ['oversized', 'symlink', 'fifo']) {
   test(`identity marker safety: ignores ${kind} without an unbounded read`, {skip: kind === 'fifo' && process.platform === 'win32'}, () => {
     const cwd = fixture(null);
@@ -714,5 +727,60 @@ test('archive scope compatibility: null workstream retains the environment fallb
     if (previous === undefined) delete process.env.GSD_WORKSTREAM;
     else process.env.GSD_WORKSTREAM = previous;
     cleanup(cwd);
+  }
+});
+
+test('read-only naming: two-key projection agrees with loadConfig across resolution branches', () => {
+  const loader = require('../gsd-core/bin/lib/config-loader.cjs');
+  const cases = [
+    {name: 'project shadows global', root: {}},
+    {name: 'root custom', root: {phase_naming: 'custom', project_code: 'ROOT'}},
+    {name: 'workstream inherits root', root: {phase_naming: 'custom', project_code: 'ROOT'}, ws: {}},
+    {name: 'workstream overrides root', root: {phase_naming: 'sequential', project_code: 'ROOT'}, ws: {phase_naming: 'custom', project_code: 'WS'}},
+    {name: 'workstream null uses builtins', root: {phase_naming: 'custom', project_code: 'ROOT'}, ws: {phase_naming: null, project_code: null}},
+    {name: 'broken workstream falls back', root: {phase_naming: 'custom', project_code: 'ROOT'}, ws: 'invalid'},
+    {name: 'absent workstream falls back', root: {phase_naming: 'custom', project_code: 'ROOT'}, ws: undefined, ambient: 'alpha'},
+    {name: 'broken root with usable workstream', root: 'invalid', ws: {phase_naming: 'custom', project_code: 'WS'}},
+    {name: 'project-scoped workstream inherits flat root', root: {phase_naming: 'custom', project_code: 'ROOT'}, project: {phase_naming: 'sequential', project_code: 'PROJECT'}, ws: {}},
+    {name: 'project-scoped broken workstream falls back to project', root: {phase_naming: 'custom', project_code: 'ROOT'}, project: {phase_naming: 'custom', project_code: 'PROJECT'}, ws: 'invalid'},
+    {name: 'explicit null ignores ambient workstream', root: {phase_naming: 'custom', project_code: 'ROOT'}, ws: {phase_naming: 'sequential', project_code: 'WS'}, override: null},
+    {name: 'no planning ignores global naming', noPlanning: true},
+  ];
+  const saved = Object.fromEntries(['GSD_HOME', 'GSD_PROJECT', 'GSD_WORKSTREAM'].map(key => [key, process.env[key]]));
+  try {
+    for (const scenario of cases) {
+      const cwd = fixture(null);
+      try {
+        process.env.GSD_HOME = cwd;
+        delete process.env.GSD_PROJECT;
+        delete process.env.GSD_WORKSTREAM;
+        fs.mkdirSync(path.join(cwd, '.gsd'));
+        fs.writeFileSync(path.join(cwd, '.gsd/defaults.json'), JSON.stringify({phase_naming: 'custom', project_code: 'GLOBAL'}));
+        const writeConfig = (dir, value) => {
+          fs.mkdirSync(dir, {recursive: true});
+          fs.writeFileSync(path.join(dir, 'config.json'), typeof value === 'string' ? value : JSON.stringify(value));
+        };
+        if (scenario.noPlanning) fs.rmSync(path.join(cwd, '.planning'), {recursive: true});
+        else {
+          writeConfig(path.join(cwd, '.planning'), scenario.root);
+          if (scenario.project) {
+            process.env.GSD_PROJECT = 'project';
+            writeConfig(path.join(cwd, '.planning/project'), scenario.project);
+          }
+          if (scenario.ws !== undefined || scenario.ambient) {
+            process.env.GSD_WORKSTREAM = 'alpha';
+            if (scenario.ws !== undefined) writeConfig(path.join(cwd, '.planning', scenario.project ? 'project' : '', 'workstreams/alpha'), scenario.ws);
+          }
+        }
+        const expected = loader.loadConfig(cwd, {persist: false, ...(scenario.override !== undefined ? {workstream: scenario.override} : {})});
+        const context = locator.phaseDirectoryOptions(cwd, undefined, '', scenario.override);
+        assert.deepEqual([context.phaseNaming, context.projectCode], [expected.phase_naming, expected.project_code], scenario.name);
+      } finally { cleanup(cwd); }
+    }
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   }
 });

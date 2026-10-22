@@ -1889,8 +1889,8 @@ function cmdPhaseInsert(
       const siblingNextDecimal = siblingDecimalSet.size === 0 ? 1 : Math.max(...siblingDecimalSet) + 1;
       _decimalPhase = `${parentBase}.${siblingNextDecimal}`;
     }
-    const insertConfig = loadConfig(cwd);
-    const projectCode = (insertConfig.project_code as string) || '';
+    const insertConfig = phaseDirectoryOptions(cwd, undefined, '');
+    const projectCode = (insertConfig.projectCode as string) || '';
     const pfx = projectCode ? `${projectCode}-` : '';
     const _dirName = `${pfx}${_decimalPhase}-${slug}`;
     const phasesRoot = path.resolve(planningDir(cwd), 'phases');
@@ -1899,7 +1899,7 @@ function cmdPhaseInsert(
 
     platformEnsureDir(dirPath);
     platformWriteSync(path.join(dirPath, '.gitkeep'), '');
-    if (insertConfig.phase_naming === 'custom') platformWriteSync(path.join(dirPath, CUSTOM_PHASE_ID_FILE), _decimalPhase);
+    if (insertConfig.phaseNaming === 'custom') platformWriteSync(path.join(dirPath, CUSTOM_PHASE_ID_FILE), _decimalPhase);
 
     let updatedContent: string;
 

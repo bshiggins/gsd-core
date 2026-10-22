@@ -15,7 +15,7 @@
  *                           normalizePhaseName, matchPhaseDirs, phaseNumberForMatch)
  *   - ./core-utils.cjs     (readSubdirectories, getPhaseFileStats, extractCanonicalPlanId, toPosixPath)
  *   - ./planning-workspace.cjs (planningDir)
- *   - ./config-loader.cjs (loadConfig, read-only resolution)
+ *   - ./config-loader.cjs (CONFIG_DEFAULTS, naming defaults)
  */
 
 import fs from 'node:fs';
@@ -28,12 +28,11 @@ import coreUtilsModule = require('./core-utils.cjs');
 const { readSubdirectories, getPhaseFileStats, extractCanonicalPlanId, toPosixPath, findUnsummarizedPlans } = coreUtilsModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
-const { planningDir, planningRoot } = planningWorkspace;
-// Naming readers and writers share effective loader precedence. Read-only
-// resolution keeps lookups from normalizing or rewriting project config.
+const { planningDir, planningRoot, resolveEnvWorkstream } = planningWorkspace;
+// Naming readers and writers share the loader's scoped-key precedence and defaults.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import configLoaderModule = require('./config-loader.cjs');
-const { loadConfig } = configLoaderModule;
+const { CONFIG_DEFAULTS, _deepMergeConfig, _getConfigValue } = configLoaderModule;
 import { resolveGsdHome } from './runtime-homes.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import frontmatterModule = require('./frontmatter.cjs');
@@ -212,9 +211,33 @@ function listArchiveVersionDirs(cwd: string, wsOverride?: string | null): Archiv
   return out;
 }
 
-/** Effective naming uses the shared loader without write-back. Roadmap hints are bounded. */
+/** Effective naming is a silent projection; roadmap and marker reads are bounded. */
 function phaseDirectoryOptions(cwd: string, config?: Record<string, unknown>, roadmap?: string, ws?: string | null) {
-  const naming = config ?? loadConfig(cwd, {persist: false, ...(ws !== undefined ? {workstream: ws} : {})});
+  // These two flat keys have no legacy aliases and are not inherited from
+  // global defaults by loadConfig. Mirror only its file-selection branches,
+  // reusing its merge, value and default owners without warnings or write-back.
+  // Replace this projection if the loader gains a quiet option; parity tests
+  // guard workstream, project, corrupt-file and global-default precedence.
+  let naming = config;
+  if (naming === undefined) {
+    const readConfig = (file: string): Record<string, unknown> | null => {
+      try {
+        const value: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
+        return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+      } catch { return null; }
+    };
+    const activeWs = ws === undefined ? resolveEnvWorkstream() : ws?.trim() || null;
+    const root = activeWs ? readConfig(path.join(planningRoot(cwd), 'config.json')) : null;
+    const scoped = readConfig(path.join(planningDir(cwd, activeWs), 'config.json'));
+    // A missing/broken workstream with a usable root recurses with ws:null in
+    // loadConfig, including GSD_PROJECT's own config rather than the flat root.
+    const parsed = scoped ? (root ? _deepMergeConfig(root, scoped) : scoped)
+      : root ? readConfig(path.join(planningDir(cwd, null), 'config.json')) : null;
+    naming = {
+      phase_naming: _getConfigValue(parsed ?? {}, 'phase_naming') ?? CONFIG_DEFAULTS.phase_naming,
+      project_code: _getConfigValue(parsed ?? {}, 'project_code') ?? CONFIG_DEFAULTS.project_code,
+    };
+  }
   const context = phaseDirectoryContext(naming, roadmap ?? '');
   if (naming.phase_naming !== 'custom') return context;
   // Load directory-owned IDs once for this scope, including archive fallback.
