@@ -535,3 +535,28 @@ test('recorded identity: case-insensitive configured prefix resolves the exact I
     assert.equal(run(cwd, ['phase', 'remove', 'CCM-3-q1', '--force']).directory_deleted, dir.split('/').at(-1));
   } finally { cleanup(cwd); }
 });
+
+for (const removed of ['3', 'AUTH']) {
+  test(`custom removal: removing ${removed} preserves surviving roadmap identities and ordinals`, () => {
+    const cwd = fixture(null);
+    try {
+      const ids = ['3', '4', 'AUTH', '5'];
+      for (const id of ids) add(cwd, id, `X${id}`);
+      const roadmap = path.join(cwd, '.planning/ROADMAP.md');
+      fs.appendFileSync(roadmap, '\n## Progress\n\n| Phase | Plans | Status |\n| --- | --- | --- |\n' + ids.map(id => `| ${id}. X${id} | 0/1 | Pending |`).join('\n') + '\n');
+      const before = fs.readFileSync(roadmap, 'utf8');
+      run(cwd, ['phase', 'remove', removed, '--force']);
+      const after = fs.readFileSync(roadmap, 'utf8');
+      assert.doesNotMatch(after, new RegExp(`Phase ${removed}:`));
+      assert.ok(!after.includes(`| ${removed}. X${removed} |`));
+      for (const id of ids.filter(id => id !== removed)) {
+        assert.equal(run(cwd, ['query', 'find-phase', id]).found, true, id);
+        const section = run(cwd, ['roadmap', 'get-phase', id]);
+        assert.equal(section.found, true, JSON.stringify(section));
+        assert.equal(section.phase_name, `X${id}`);
+        const row = `| ${id}. X${id} | 0/1 | Pending |`;
+        assert.ok(before.includes(row) && after.includes(row), `surviving row ${row}`);
+      }
+    } finally { cleanup(cwd); }
+  });
+}

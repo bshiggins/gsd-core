@@ -2297,6 +2297,7 @@ function updateRoadmapAfterPhaseRemoval(
   isDecimal: boolean,
   removedInt: number,
   cwd: string,
+  context: ReturnType<typeof phaseDirectoryOptions>,
 ): boolean {
   return withPlanningLock(cwd, () => {
     const originalContent = fs.readFileSync(roadmapPath, 'utf-8');
@@ -2309,7 +2310,8 @@ function updateRoadmapAfterPhaseRemoval(
     // makes the token padding-insensitive in both directions without widening
     // to other ids: the token stays anchored between `Phase\s+`/line-start and
     // `:`/whitespace/end, so `0*2` still never matches `Phase 12:`.
-    const padTolerant = `0*${escaped}`;
+    const customNaming = context.phaseNaming === 'custom';
+    const padTolerant = customNaming ? escaped : `0*${escaped}`;
 
     // SECTION-DELETION (not a section-body edit) — removes the phase's ENTIRE
     // detail section INCLUDING its own heading line. Migrated onto deleteSection
@@ -2361,6 +2363,9 @@ function updateRoadmapAfterPhaseRemoval(
 
       const matchRemovedProgressRow = (row: Record<string, string>): boolean => {
         const firstCellRaw = (Object.values(row)[0] ?? '').trim();
+        if (customNaming) {
+          return new RegExp(`^${escaped}\\.?(?:\\s|$)`, 'i').test(firstCellRaw);
+        }
         if (isDecimal) {
           return new RegExp(`^${padTolerant}\\.?(?:\\s|$)`, 'i').test(firstCellRaw);
         }
@@ -2375,7 +2380,7 @@ function updateRoadmapAfterPhaseRemoval(
       }
     }
 
-    if (!isDecimal) {
+    if (!isDecimal && !customNaming) {
       // #1729: fold an optional pre-colon ( ) tag into the suffix capture so it
       // is re-emitted verbatim — a tagged later phase still gets renumbered.
       // #5007 (Phase 6 / ADR-4910 §8): composes phaseHeadingPrefixSrcFor
@@ -2724,10 +2729,11 @@ function cmdPhaseRemove(
 
   const roadmapUpdated = updateRoadmapAfterPhaseRemoval(
     roadmapPath,
-    targetPhase,
+    directoryContext.directoryIds?.[targetDir ?? ''] ?? targetPhase,
     isDecimal,
     parseInt(normalized, 10),
     cwd,
+    directoryContext,
   );
 
   const statePath = path.join(planningDir(cwd), 'STATE.md');
