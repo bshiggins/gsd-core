@@ -1616,7 +1616,8 @@ function customPhaseDirectoryParts(dir: string, query: CustomPhaseQuery): { id: 
  * here because the surrounding scan/ambiguity/shaping code exists per site and
  * had already diverged; the selection itself must not.
  *
- * Naming context is required at every typed reader. Configured custom IDs
+ * Readers supply their naming context; legacy direct callers default to the
+ * context-free numeric policy. Configured custom IDs
  * resolve through the inverse of phaseDirectoryName before normalization can
  * collapse an ID such as A-2 into a numeric query. Other queries retain the
  * legacy two passes:
@@ -1679,7 +1680,7 @@ function customPhaseDirectoryParts(dir: string, query: CustomPhaseQuery): { id: 
  * the directory's leading digit run instead of `extractPhaseToken` (whose
  * token for these dirs is the mis-absorbed multi-segment form).
  */
-function matchPhaseDirs(dirs: string[], query: string, convention: string | null | undefined, context: PhaseDirectoryContext): { matches: string[]; usedBareFallback: boolean } {
+function matchPhaseDirs(dirs: string[], query: string, convention?: string | null, context: PhaseDirectoryContext = phaseDirectoryContext({})): { matches: string[]; usedBareFallback: boolean } {
   const custom = convention === 'bracket' ? null : customPhaseQuery(query, context);
   const normalized = normalizePhaseName(query);
   // Recorded directories never enter legacy token or bare-number fallback for

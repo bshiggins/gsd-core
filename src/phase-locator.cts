@@ -316,7 +316,7 @@ function customPhaseNamingUsage(cwd: string, context: ReturnType<typeof phaseDir
   return message;
 }
 
-function searchPhaseInDir(baseDir: string, relBase: string, normalized: string, convention: string | null | undefined, context: ReturnType<typeof phaseDirectoryOptions>): PhaseSearchResult | null {
+function searchPhaseInDir(baseDir: string, relBase: string, normalized: string, convention?: string | null, context: ReturnType<typeof phaseDirectoryOptions> = phaseDirectoryContext({})): PhaseSearchResult | null {
   context = phaseDirectoryContextForRoot(context, baseDir);
   try {
     const dirs = readSubdirectories(baseDir, true);
