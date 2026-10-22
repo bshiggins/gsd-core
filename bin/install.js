@@ -929,8 +929,10 @@ function preflightInstallSymlinkDestinations(runtime, configDir, scope, installM
   const standaloneAgents = shouldInstallStandaloneAgents(Boolean(behaviors.pluginOnlyInstall), skillsRuntime);
 
   for (const kind of layout.kinds) {
-    // Combined-family commands have no write-time trust check to front-run.
+    // These flat writers have no write-time trust check to front-run.
+    // Keep their existing behavior here; a new refusal needs separate approval.
     if (combinedFamily && kind.kind === 'commands') continue;
+    if (legacyFlatLocal && (kind.kind === 'commands' || kind.kind === 'skills')) continue;
     const installRoot = resolveRuntimeArtifactInstallRoot(configDir, kind);
     const dest = resolveRuntimeArtifactDestination(configDir, kind);
     if (hasExistingSymlinkBetween(path.resolve(installRoot), dest, { allowOptInFollow: isSymlinkedDestOptIn() })) {
@@ -939,9 +941,6 @@ function preflightInstallSymlinkDestinations(runtime, configDir, scope, installM
       }
       if ((standaloneAgents || combinedFamily) && kind.kind === 'agents') {
         throw new Error(installAgentsKindStandaloneSymlinkRefusalMessage(dest, installRoot));
-      }
-      if (legacyFlatLocal && (kind.kind === 'commands' || kind.kind === 'skills')) {
-        throw new Error(copyWithPathReplacementSymlinkRefusalMessage(dest, configDir));
       }
       throw new Error(installRuntimeArtifactsSymlinkRefusalMessage(dest, installRoot));
     }

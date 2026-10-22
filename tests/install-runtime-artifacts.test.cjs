@@ -8732,7 +8732,6 @@ describe('#5179 preflight branch coverage', () => {
     { branch: 'a Codex agent toml is symlinked', runtime: 'codex', destination: 'agents/gsd-planner.toml', refusal: /installCodexConfig: agent toml path/ },
     { branch: 'combined-family skills are symlinked', runtime: 'opencode', destination: 'skills', refusal: /installOpencodeFamilySkills: destDir/ },
     { branch: 'combined-family agents are symlinked', runtime: 'opencode', destination: 'agents', refusal: /installAgentsKindStandalone: destDir/ },
-    { branch: 'legacy-flat local commands are symlinked', scope: 'local', destination: 'commands', refusal: /copyWithPathReplacement: destDir/ },
   ];
   for (const row of branches) {
     test(`preserves the previous install when ${row.branch}`, (t) => {
@@ -8740,6 +8739,14 @@ describe('#5179 preflight branch coverage', () => {
       if (fixture) assertInstallSymlinkBranchPreserved(fixture, row.refusal);
     });
   }
+
+  test('does not newly refuse symlinked legacy-flat local commands', (t) => {
+    const fixture = prepareInstallSymlinkBranchUpgrade(t, { scope: 'local', destination: 'commands' });
+    if (!fixture) return;
+    assert.equal(fixture.result.exitCode, 0, fixture.output);
+    assert.equal(fs.lstatSync(fixture.dest).isSymbolicLink(), true);
+    assert.ok(fs.existsSync(path.join(fixture.dest, 'gsd-help.md')), 'the flat writer must install commands through the symlink');
+  });
 
   test('does not refuse a trusted non-symlinked layout', (t) => {
     const root = createTempDir('gsd-5179-trusted-');
