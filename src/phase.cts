@@ -2424,7 +2424,14 @@ function activeBracketInsertHeading(
       for (const nextHeading of liveHeadings.slice(headingIndex + 1)) {
         const nextLine = lineByStart.get(nextHeading.offset);
         if (!nextLine) continue;
-        if (classifyBracketOwnedLine(nextLine.text).kind !== 'heading') continue;
+        const nextOwned = classifyBracketOwnedLine(nextLine.text);
+        if (nextOwned.kind !== 'heading') continue;
+        // #5599: bracket ids have one subphase level, so both nested and
+        // sibling allocations append after this phase's existing children.
+        if (nextOwned.id
+          && nextOwned.id.project === targetId.project
+          && nextOwned.id.milestone === targetId.milestone
+          && isPhaseTokenWithin(bracketArtifactToken(nextOwned.id), targetId.phase)) continue;
         insertAt = nextHeading.offset;
         break;
       }
@@ -2438,6 +2445,21 @@ function activeBracketInsertHeading(
     }
   }
   return null;
+}
+
+/**
+ * #5599: true when `token` (a heading/bullet phase number such as "13.1.2") is
+ * a STRICT descendant of `ancestor` ("13"). Compared segment-wise so "130" is
+ * not inside "13", and digit segments compare numerically so a zero-padded
+ * "05.1" matches "5".
+ */
+function isPhaseTokenWithin(token: string, ancestor: string): boolean {
+  const t = token.split('.');
+  const a = ancestor.split('.');
+  if (t.length <= a.length) return false;
+  // Zero padding is not significant ("05" = "5", "03A" = "3A"); case is not either.
+  const canon = (segment: string): string => segment.replace(/^0+(?=\d)/, '').toLowerCase();
+  return a.every((segment, i) => canon(segment) === canon(t[i]));
 }
 
 function cmdPhaseInsert(
@@ -2589,6 +2611,12 @@ function cmdPhaseInsert(
       ? bracketPhaseId(bracketContext, selectedBase, selectedNextDecimal)
       : null;
     if (bracketId) _decimalPhase = bracketArtifactToken(bracketId);
+    // #5599: the family whose subtree the new entry must land at the end of —
+    // the parent for a sibling allocation, the target itself for a nested one.
+    const subtreeRoot =
+      allocation === 'sibling' && lastDotIndex !== -1
+        ? normalizedBase.slice(0, lastDotIndex)
+        : normalizedBase;
     const projectCode = (insertConfig.project_code as string) || '';
     const pfx = projectCode ? `${projectCode}-` : '';
     // #4304: route the bracket directory-name allocation
@@ -2642,13 +2670,17 @@ function cmdPhaseInsert(
       const bulletLineEnd =
         rawContent.indexOf(bulletMatchResult![0]) + bulletMatchResult![0].length;
       const afterBullet = rawContent.slice(bulletLineEnd);
-      const nextBulletMatch = afterBullet.match(/\r?\n-\s*\[[ x]\]\s*(?:\*\*)?Phase\s+\d/i);
-
-      let insertIdx: number;
-      if (nextBulletMatch) {
-        insertIdx = bulletLineEnd + (nextBulletMatch.index as number);
-      } else {
-        insertIdx = bulletLineEnd;
+      // #5599: land after the last bullet inside the allocation family's
+      // subtree, not before the first following bullet of any number (which is
+      // the target's own later decimal child when one exists).
+      const bulletRe = /\r?\n-\s*\[[ x]\]\s*(?:\*\*)?Phase\s+(?<tok>\d[^\s:*]*)[^\r\n]*/gi;
+      let insertIdx = bulletLineEnd;
+      for (const m of afterBullet.matchAll(bulletRe)) {
+        if (!isPhaseTokenWithin(m.groups!.tok, subtreeRoot)) {
+          insertIdx = bulletLineEnd + m.index;
+          break;
+        }
+        insertIdx = bulletLineEnd + m.index + m[0].length;
       }
 
       updatedContent =
@@ -2722,21 +2754,22 @@ function cmdPhaseInsert(
       }
 
       const headerIdx = searchStart;
-      let insertIdx: number;
-      if (bracketHeading) {
-        insertIdx = bracketHeading.insertAt;
-      } else {
+      let insertIdx = bracketHeading?.insertAt ?? searchEnd;
+      if (!bracketHeading) {
         const afterHeader = rawContent.slice(headerIdx + headerLength, searchEnd);
         const nextPhaseHeadingPrefix = `#{2,4}\\s+${phaseHeadingPrefixSrcFor(
           PHASE_HEADING_BASELINE.LABEL_ONLY,
           insertConvention,
         )}`;
-        const nextPhaseMatch = afterHeader.match(
-          new RegExp(`\\r?\\n${nextPhaseHeadingPrefix}\\d[\\d.]*`, 'i'),
-        );
-        insertIdx = nextPhaseMatch
-          ? headerIdx + headerLength + (nextPhaseMatch.index as number)
-          : searchEnd;
+        // #5599: legacy insertion lands after the allocation family's entire
+        // subtree; bracket insertion keeps its fence-aware, milestone-scoped boundary.
+        const nextPhaseRe = new RegExp(`\\r?\\n${nextPhaseHeadingPrefix}(?<tok>\\d[^\\s:]*)`, 'gi');
+        for (const m of afterHeader.matchAll(nextPhaseRe)) {
+          if (!isPhaseTokenWithin(m.groups!.tok, subtreeRoot)) {
+            insertIdx = headerIdx + headerLength + m.index;
+            break;
+          }
+        }
       }
 
       updatedContent =
