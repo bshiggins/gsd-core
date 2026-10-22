@@ -613,3 +613,18 @@ for (const id of [' A', 'B ', '[Z]', 'A B', 'A\tB', 'A:B']) {
     } finally { cleanup(cwd); }
   });
 }
+
+test('custom insertion: records AUTH.1 and permits its removal', () => {
+  const cwd = fixture(null);
+  try {
+    add(cwd, 'AUTH', 'Sign In');
+    const inserted = run(cwd, ['phase', 'insert', 'AUTH', 'Extra']);
+    const marker = path.join(cwd, inserted.directory, '.phase-id');
+    assert.equal(fs.existsSync(marker), true);
+    assert.equal(fs.readFileSync(marker, 'utf8').trim(), 'AUTH.1');
+    assert.equal(run(cwd, ['query', 'find-phase', 'AUTH.1']).directory, inserted.directory);
+    run(cwd, ['phase', 'remove', 'AUTH.1', '--force']);
+    assert.equal(fs.existsSync(path.join(cwd, inserted.directory)), false);
+    assert.equal(run(cwd, ['query', 'find-phase', 'AUTH']).found, true);
+  } finally { cleanup(cwd); }
+});

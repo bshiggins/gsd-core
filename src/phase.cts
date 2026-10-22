@@ -1899,6 +1899,7 @@ function cmdPhaseInsert(
 
     platformEnsureDir(dirPath);
     platformWriteSync(path.join(dirPath, '.gitkeep'), '');
+    if (insertConfig.phase_naming === 'custom') platformWriteSync(path.join(dirPath, CUSTOM_PHASE_ID_FILE), _decimalPhase);
 
     let updatedContent: string;
 
