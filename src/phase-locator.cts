@@ -226,10 +226,25 @@ function phaseDirectoryOptions(cwd: string, config?: Record<string, unknown>, ro
     const ids = Object.create(null) as Record<string, string>;
     context.directoryIdsByRoot[root] = ids;
     for (const dir of readSubdirectories(root, true)) {
+      let identityFd: number | undefined;
       try {
-        const id = fs.readFileSync(path.join(root, dir, CUSTOM_PHASE_ID_FILE), 'utf8').trim();
-        if (id) ids[dir] = id;
-      } catch { /* A legacy directory has no recorded identity. */ }
+        const markerPath = path.join(root, dir, CUSTOM_PHASE_ID_FILE);
+        const marker = fs.lstatSync(markerPath);
+        if (!marker.isFile() || marker.size > 1024) continue;
+        // Nonblocking/no-follow open also bounds a replacement between lstat and
+        // open; fstat validates the actual descriptor before reading at most 1 KiB.
+        identityFd = fs.openSync(markerPath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW);
+        const opened = fs.fstatSync(identityFd);
+        if (!opened.isFile() || opened.size > 1024) continue;
+        const buffer = Buffer.alloc(opened.size);
+        const count = fs.readSync(identityFd, buffer, 0, buffer.length, 0);
+        const id = buffer.toString('utf8', 0, count).trim();
+        if (id) {
+          phaseIdModule.phaseDirectoryName(id, '');
+          ids[dir] = id;
+        }
+      } catch { /* An absent or unusable marker supplies no ownership proof. */ }
+      finally { if (identityFd !== undefined) fs.closeSync(identityFd); }
     }
   }
   // Basenames can repeat across milestones with different ID/slug boundaries.

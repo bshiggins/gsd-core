@@ -668,3 +668,26 @@ for (const [id, directory] of [['M1-03', '03-boundary'], ['AUTH', 'AUTH-boundary
     } finally { cleanup(cwd); }
   });
 }
+
+for (const kind of ['oversized', 'symlink', 'fifo']) {
+  test(`identity marker safety: ignores ${kind} without an unbounded read`, {skip: kind === 'fifo' && process.platform === 'win32'}, () => {
+    const cwd = fixture(null);
+    try {
+      const dir = path.join(cwd, '.planning/phases/AUTH-boundary');
+      fs.mkdirSync(dir);
+      const marker = path.join(dir, '.phase-id');
+      if (kind === 'oversized') fs.writeFileSync(marker, 'AUTH' + ' '.repeat(1024));
+      else if (kind === 'symlink') {
+        const target = path.join(cwd, 'identity.txt');
+        fs.writeFileSync(target, 'AUTH');
+        fs.symlinkSync(target, marker);
+      } else require('node:child_process').execFileSync('mkfifo', [marker]);
+      const script = `const locator = require(${JSON.stringify(require.resolve('../gsd-core/bin/lib/phase-locator.cjs'))}); process.stdout.write(JSON.stringify(locator.phaseDirectoryOptions(process.cwd(), {phase_naming:'custom'}, '').directoryIds));`;
+      const result = require('./helpers/process-seam.cjs').runNode(['-e', script], {
+        cwd, env: {...process.env, ...homeSandboxEnv(cwd)}, timeoutMs: 5000,
+      });
+      assert.equal(result.exitCode, 0, JSON.stringify(result));
+      assert.deepEqual(JSON.parse(result.stdout), {});
+    } finally { cleanup(cwd); }
+  });
+}
