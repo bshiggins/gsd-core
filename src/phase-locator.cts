@@ -177,7 +177,7 @@ function listArchiveVersionDirs(cwd: string, wsOverride?: string | null): Archiv
   // tree (root + each workstream) rather than widening this scope — the
   // #2855 no-leak contract for findPhaseInternal/getArchivedPhaseDirs is
   // preserved untouched.
-  const milestonesDir = path.join(planningDir(cwd, wsOverride ?? undefined), 'milestones');
+  const milestonesDir = path.join(planningDir(cwd, wsOverride), 'milestones');
   const out: ArchiveVersionDir[] = [];
   const seen = new Set<string>();
   const pushVersion = (version: string, archivePath: string): void => {
@@ -213,30 +213,51 @@ function listArchiveVersionDirs(cwd: string, wsOverride?: string | null): Archiv
 }
 
 /** Effective naming uses the shared loader without write-back. Roadmap hints are bounded. */
-function phaseDirectoryOptions(cwd: string, config?: Record<string, unknown>, roadmap?: string) {
-  const naming = config ?? loadConfig(cwd, {persist: false});
+function phaseDirectoryOptions(cwd: string, config?: Record<string, unknown>, roadmap?: string, ws?: string | null) {
+  const naming = config ?? loadConfig(cwd, {persist: false, ...(ws !== undefined ? {workstream: ws} : {})});
   const context = phaseDirectoryContext(naming, roadmap ?? '');
   if (naming.phase_naming !== 'custom') return context;
   // Load directory-owned IDs once for this scope, including archive fallback.
   // Old directories have no marker: reads retain heading hints, but removal
   // refuses to infer their ownership from a mutable roadmap or slug.
-  context.directoryIds = Object.create(null) as Record<string, string>;
-  const roots = [path.join(planningDir(cwd), 'phases'), ...listArchiveVersionDirs(cwd).map(entry => entry.archivePath)];
-  for (const root of roots) for (const dir of readSubdirectories(root, true)) {
-    try {
-      const id = fs.readFileSync(path.join(root, dir, CUSTOM_PHASE_ID_FILE), 'utf8').trim();
-      if (id) context.directoryIds[dir] = id;
-    } catch { /* A legacy directory has no recorded identity. */ }
+  context.directoryIdsByRoot = Object.create(null) as Record<string, Record<string, string>>;
+  const roots = [path.join(planningDir(cwd, ws), 'phases'), ...listArchiveVersionDirs(cwd, ws).map(entry => entry.archivePath)];
+  for (const root of roots) {
+    const ids = Object.create(null) as Record<string, string>;
+    context.directoryIdsByRoot[root] = ids;
+    for (const dir of readSubdirectories(root, true)) {
+      try {
+        const id = fs.readFileSync(path.join(root, dir, CUSTOM_PHASE_ID_FILE), 'utf8').trim();
+        if (id) ids[dir] = id;
+      } catch { /* A legacy directory has no recorded identity. */ }
+    }
   }
+  // Basenames can repeat across milestones with different ID/slug boundaries.
+  // Identity hints span the scope; authoritative records belong to one pool.
+  context.directoryIds = context.directoryIdsByRoot[roots[0]];
+  context.knownIds = [...new Set(Object.values(context.directoryIdsByRoot).flatMap(ids => Object.values(ids)))];
   if (roadmap !== undefined) return context;
   let fd: number | undefined;
   try {
-    fd = fs.openSync(path.join(planningDir(cwd), 'ROADMAP.md'), 'r');
+    fd = fs.openSync(path.join(planningDir(cwd, ws), 'ROADMAP.md'), 'r');
     const buffer = Buffer.alloc(Math.min(fs.fstatSync(fd).size, 1024 * 1024));
     const count = fs.readSync(fd, buffer, 0, buffer.length, 0);
-    return {...context, ...phaseDirectoryContext(naming, buffer.toString('utf8', 0, count))};
+    return {...context, roadmap: buffer.toString('utf8', 0, count)};
   } catch { return context; }
   finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+
+const directoryPoolContexts = new WeakMap<ReturnType<typeof phaseDirectoryOptions>, Map<string, ReturnType<typeof phaseDirectoryOptions>>>();
+
+/** Select records for this physical pool, reusing its context across queries. */
+function phaseDirectoryContextForRoot(context: ReturnType<typeof phaseDirectoryOptions>, root: string) {
+  const ids = context.directoryIdsByRoot?.[root];
+  if (!ids || ids === context.directoryIds) return context;
+  let pools = directoryPoolContexts.get(context);
+  if (!pools) { pools = new Map(); directoryPoolContexts.set(context, pools); }
+  let selected = pools.get(root);
+  if (!selected) { selected = {...context, directoryIds: ids}; pools.set(root, selected); }
+  return selected;
 }
 
 /** Usage guidance for every custom-ID writer, using the resolved naming policy. */
@@ -254,6 +275,7 @@ function customPhaseNamingUsage(cwd: string, context: ReturnType<typeof phaseDir
 }
 
 function searchPhaseInDir(baseDir: string, relBase: string, normalized: string, convention: string | null | undefined, context: ReturnType<typeof phaseDirectoryOptions>): PhaseSearchResult | null {
+  context = phaseDirectoryContextForRoot(context, baseDir);
   try {
     const dirs = readSubdirectories(baseDir, true);
     // #2528: canonical two-pass selection (exact token match, then the
@@ -505,7 +527,7 @@ function listMilestonePhaseDirs(
   let inWindow: (dirName: string) => boolean = () => true;
   let scope: Scope = SCOPE.COMPLETE;
   if (cwd) {
-    const filter = getMilestonePhaseFilter(cwd, versionOverride, phaseIdConvention, ws);
+    const filter = getMilestonePhaseFilter(cwd, versionOverride, phaseIdConvention, ws, phaseDirectoryOptions(cwd, undefined, undefined, ws));
     inWindow = filter;
     scope = filter.scope;
   }
@@ -646,6 +668,7 @@ function getAllArchivedPhaseDirs(cwd: string): ArchivedPhaseDir[] {
 
 export = {
   phaseDirectoryOptions,
+  phaseDirectoryContextForRoot,
   customPhaseNamingUsage,
   searchPhaseInDir,
   findPhaseInternal,

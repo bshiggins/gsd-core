@@ -790,7 +790,17 @@ function phaseMarkdownRegexSourceExact(phaseNum: unknown): string | null {
   return escapeRegex(raw);
 }
 
-function comparePhaseNum(a: unknown, b: unknown): number {
+function comparePhaseNum(a: unknown, b: unknown, context?: PhaseDirectoryContext): number {
+  if (context?.phaseNaming === 'custom') {
+    const index = customIdentityIndex(context);
+    const first = String(a), second = String(b);
+    // Arbitrary custom IDs have no numeric ordering: use their declared order.
+    // Unrecorded legacy numeric phases retain the original comparator below.
+    if (isCustomPhaseId(first) || isCustomPhaseId(second) || index.recorded.has(first) || index.recorded.has(second)) {
+      const left = index.order.get(first), right = index.order.get(second);
+      if (left !== undefined && right !== undefined) return left - right;
+    }
+  }
   // Strip optional project_code prefix before comparing
   const sa = stripProjectCodePrefix(a);
   const sb = stripProjectCodePrefix(b);
@@ -1424,7 +1434,7 @@ function isCustomPhaseId(id: string): boolean {
 }
 
 const CUSTOM_PHASE_ID_FILE = '.phase-id';
-type PhaseDirectoryContext = { phaseNaming: unknown; projectCode: string | null; roadmap: string; knownIds: string[]; directoryIds?: Record<string, string> };
+type PhaseDirectoryContext = { phaseNaming: unknown; projectCode: string | null; roadmap: string; knownIds: string[]; directoryIds?: Record<string, string>; directoryIdsByRoot?: Record<string, Record<string, string>> };
 
 /** Naming policy is supplied by the config owner; grammar remains pure. */
 function phaseDirectoryContext(config: Record<string, unknown>, roadmap = '', knownIds: string[] = []): PhaseDirectoryContext {
@@ -1437,7 +1447,7 @@ function phaseScanTokenSource(context: PhaseDirectoryContext): string {
 }
 type CustomPhaseQuery = { id: string; listed: boolean; projectCode?: string | null; prefixes: { id: string; prefix: string }[]; directoryIds?: Record<string, string> };
 
-type CustomIdentityIndex = { roadmap: string; knownIds: string[]; ids: Set<string>; recorded: Set<string>; prefixes: {id: string; prefix: string}[] };
+type CustomIdentityIndex = { roadmap: string; knownIds: string[]; ids: Set<string>; recorded: Set<string>; order: Map<string, number>; prefixes: {id: string; prefix: string}[] };
 const customIdentityIndexes = new WeakMap<PhaseDirectoryContext, CustomIdentityIndex>();
 
 function customIdentityIndex(options: PhaseDirectoryContext): CustomIdentityIndex {
@@ -1450,7 +1460,7 @@ function customIdentityIndex(options: PhaseDirectoryContext): CustomIdentityInde
     const recorded = new Set(Object.values(options.directoryIds ?? {}));
     const ids = new Set([...headings, ...options.knownIds ?? [], ...recorded]);
     index = {
-      roadmap: options.roadmap, knownIds: options.knownIds, ids, recorded,
+      roadmap: options.roadmap, knownIds: options.knownIds, ids, recorded, order: new Map([...ids].map((id, i) => [id, i])),
       prefixes: [...ids].filter(token => token && !UNSAFE_PHASE_DIRECTORY_PART_RE.test(token))
         .sort((a, b) => b.length - a.length)
         .map(token => ({id: token, prefix: phaseDirectoryName(token, '')})),

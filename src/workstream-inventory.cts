@@ -22,7 +22,7 @@ const { readSubdirectories } = coreUtilsMod;
 import planScan = require('./plan-scan.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
-const { planningPaths, planningRoot, getActiveWorkstream, readScopedConfigValue } = planningWorkspace;
+const { planningPaths, planningRoot, getActiveWorkstream } = planningWorkspace;
 import { stateFieldValue } from './state-document.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- frontmatter.cjs is an export= CommonJS module
 import frontmatterMod = require('./frontmatter.cjs');
@@ -34,12 +34,16 @@ const { isPhaseComplete, isVerificationStatus, VERIFICATION_STATUS } = verificat
 type VerificationStatus = verificationMod.VerificationStatus;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- phase-id.cjs is an export= CommonJS module
 import phaseIdMod = require('./phase-id.cjs');
-const { phaseDirectoryContext, phaseKeyFromDir, phaseKeyFromProse, parentPhaseKey } = phaseIdMod;
+const { phaseKeyFromDir, phaseKeyFromProse, parentPhaseKey } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- roadmap-parser.cjs is an export= CommonJS module
 import roadmapParserMod = require('./roadmap-parser.cjs');
 const { getMilestonePhaseFilter, isMilestoneShippedInRoadmap } = roadmapParserMod;
 import { buildWorkstreamInventory, isCompletedInventory, pickRollupWinners } from './workstream-inventory-builder.cjs';
 import type { WorkstreamInventory, StateProjection, MilestoneShippedSignal } from './workstream-inventory-builder.cjs';
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseLocatorMod = require('./phase-locator.cjs');
+const { phaseDirectoryOptions } = phaseLocatorMod;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -110,7 +114,7 @@ function countRoadmapPhases(roadmapPath: string, fallbackCount: number, cwd?: st
     // `null` -> 0 (fallback), `undefined` -> 3. A non-bracket workstream
     // resolves to a value that compiles the same base grammar `null` did, so
     // its count is unchanged (verified against a legacy control).
-    const filter = getMilestonePhaseFilter(cwd, versionOverride ?? null, undefined, ws ?? null);
+    const filter = getMilestonePhaseFilter(cwd, versionOverride ?? null, undefined, ws ?? null, phaseDirectoryOptions(cwd, undefined, undefined, ws ?? null));
     // A pass-all degrade (phaseCount 0) means the window declared no phases —
     // fall back rather than reporting a confident zero.
     return filter.phaseCount > 0 ? filter.phaseCount : fallbackCount;
@@ -538,10 +542,7 @@ function inspectWorkstream(cwd: string, name: string, options: InspectWorkstream
   const phaseDirNames = readSubdirectories(p.phases);
   let roadmap = '';
   try { roadmap = fs.readFileSync(p.roadmap, 'utf8'); } catch { /* no roadmap */ }
-  const directoryContext = phaseDirectoryContext({
-    phase_naming: readScopedConfigValue(cwd, ['phase_naming'], name).value,
-    project_code: readScopedConfigValue(cwd, ['project_code'], name).value,
-  }, roadmap);
+  const directoryContext = phaseDirectoryOptions(cwd, undefined, roadmap, name);
 
   // #2562: scope progress to the CURRENT milestone. Membership and the
   // denominator are derived in ONE key space (`phaseKeyFromDir` /
@@ -574,7 +575,7 @@ function inspectWorkstream(cwd: string, name: string, options: InspectWorkstream
   // it is exactly the caller that cannot set `GSD_WORKSTREAM`; spelling `null`
   // pinned every workstream to the legacy grammar and made `headingScoped`
   // unreachable (`phaseCount > 0` never held) on a bracket workstream.
-  const headingFilter = getMilestonePhaseFilter(cwd, currentVersion, undefined, name);
+  const headingFilter = getMilestonePhaseFilter(cwd, currentVersion, undefined, name, directoryContext);
   const headingScoped = headingFilter.versionScoped && headingFilter.phaseCount > 0;
 
   // Phase keys the ROADMAP attributes to some OTHER milestone. A row carrying an

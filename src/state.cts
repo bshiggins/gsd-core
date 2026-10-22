@@ -2948,7 +2948,7 @@ function buildStateFrontmatter(
   // section overwrites current_phase here, and the next read surfaces it. Fall
   // back to full-body search when no ## Current Position section exists.
   const currentPositionScope = matchCurrentPositionSection(bodyContent) ?? bodyContent;
-  const prosePhase = parseProsePhaseField(stateExtractField(currentPositionScope, 'Phase'));
+  const prosePhase = parseProsePhaseField(stateExtractField(currentPositionScope, 'Phase'), cwd ? phaseDirectoryOptions(cwd) : undefined);
   const currentPhase = stateExtractField(bodyContent, 'Current Phase') ?? prosePhase.phase;
   const currentPhaseName = stateExtractField(bodyContent, 'Current Phase Name') ?? prosePhase.name;
   const currentPlan = stateExtractField(bodyContent, 'Current Plan');
@@ -4299,6 +4299,7 @@ function applyPostSyncPreservation(
   syncedContent: string,
   statePath: string,
   options: StatePreservationOptions,
+  directoryContext?: ReturnType<typeof phaseDirectoryOptions>,
 ): string {
   assertStatePreservationOptions(options, 'applyPostSyncPreservation');
   const { resync, authoritativeFm, deriveProgressKeys, divergedFields, explicitProgressField, preWriteState } = options;
@@ -4361,7 +4362,7 @@ function applyPostSyncPreservation(
   const preCurrentPositionScope = matchCurrentPositionSection(preBody) ?? preBody;
   const preBodyCurrentPlan = stateExtractField(preBody, 'Current Plan');
   const preBodyCurrentPhase = stateExtractField(preBody, 'Current Phase')
-    ?? parseProsePhaseField(stateExtractField(preCurrentPositionScope, 'Phase')).phase;
+    ?? parseProsePhaseField(stateExtractField(preCurrentPositionScope, 'Phase'), directoryContext).phase;
   const preBodyPausedAt = stateExtractField(preSessionScope, 'Paused At');
   const preBodyLastActivityRaw = stateExtractField(preBody, 'Last Activity')
     ?? stateExtractField(preBody, 'Last activity');
@@ -4388,7 +4389,7 @@ function applyPostSyncPreservation(
   const postCurrentPositionScope = matchCurrentPositionSection(postBody) ?? postBody;
   const postBodyCurrentPlan = stateExtractField(postBody, 'Current Plan');
   const postBodyCurrentPhase = stateExtractField(postBody, 'Current Phase')
-    ?? parseProsePhaseField(stateExtractField(postCurrentPositionScope, 'Phase')).phase;
+    ?? parseProsePhaseField(stateExtractField(postCurrentPositionScope, 'Phase'), directoryContext).phase;
   const postBodyPausedAt = stateExtractField(postSessionScope, 'Paused At');
   const postBodyLastActivityRaw = stateExtractField(postBody, 'Last Activity')
     ?? stateExtractField(postBody, 'Last activity');
@@ -4616,6 +4617,7 @@ function syncAndPreserveStateMd(
     synced,
     statePath,
     options,
+    cwd ? phaseDirectoryOptions(cwd) : undefined,
   );
 }
 

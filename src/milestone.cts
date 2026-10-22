@@ -635,7 +635,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
   // `platformEnsureDir(archiveDir)` below — a refused run (scope not COMPLETE,
   // no --force) must be a true no-op on disk, and creating the archive
   // directory first left an empty directory behind even on refusal.
-  const isDirInMilestone = getMilestonePhaseFilter(cwd, version);
+  const isDirInMilestone = getMilestonePhaseFilter(cwd, version, undefined, undefined, phaseDirectoryOptions(cwd));
   if (isDirInMilestone.missingExplicitVersion) {
     error(`no phases found for milestone ${version} in ROADMAP.md`);
   }

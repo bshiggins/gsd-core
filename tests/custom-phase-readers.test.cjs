@@ -318,6 +318,55 @@ test('custom context: roadmap read buffer follows file size and stays bounded (#
   } finally { fs.readSync = original; cleanup(cwd); }
 });
 
+for (const code of [null, 'CCM']) {
+  test(`custom projection: progress preserves ID and name with code ${code} (#5186)`, () => {
+    const cwd = fixture(code);
+    try {
+      for (const id of ['AUTH', 'A-2', '2FA', '7b']) add(cwd, id, 'Sign In', code);
+      const result = run(cwd, ['query', 'progress']);
+      assert.deepEqual(result.phases.map(p => [p.number, p.name]).sort(),
+        [['AUTH', 'sign in'], ['A-2', 'sign in'], ['2FA', 'sign in'], ['7b', 'sign in']].sort());
+    } finally { cleanup(cwd); }
+  });
+  test(`custom projection: health W005 accepts writer directories with code ${code} (#5186)`, () => {
+    const cwd = fixture(code);
+    try {
+      for (const id of ['AUTH', 'A-2', '2FA', '7b']) add(cwd, id, 'Sign In', code);
+      const snapshot = require('../gsd-core/bin/lib/planning-snapshot.cjs').buildPlanningSnapshot(cwd);
+      const rule = require('../gsd-core/bin/lib/health-diagnostic-rules/phase-structure.cjs').RULES.find(r => r.code === 'W005');
+      assert.deepEqual(rule.check(snapshot), []);
+      const result = run(cwd, ['validate', 'health']);
+      const warnings = result.warnings.filter(w => w.code === 'W005');
+      assert.deepEqual(warnings, []);
+    } finally { cleanup(cwd); }
+  });
+}
+test('custom projection: phase plan index preserves A-2 (#5186)', () => {
+  const cwd = fixture(null);
+  try {
+    add(cwd, 'A-2');
+    assert.equal(run(cwd, ['query', 'phase-plan-index', 'A-2']).phase, 'A-2');
+  } finally { cleanup(cwd); }
+});
+for (const nextId of ['BILLING', 'ACCOUNT', 'A-2']) for (const nextOnDisk of [false, true]) {
+  test(`custom completion: AUTH advances STATE to ${nextId}, next on disk ${nextOnDisk} (#5186)`, () => {
+    const cwd = fixture('CCM');
+    try {
+      const dir = add(cwd, 'AUTH', 'Sign In', 'CCM');
+      if (nextOnDisk) add(cwd, nextId, 'Payments', 'CCM');
+      else fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), `\n### Phase ${nextId}: Payments\n`);
+      fs.writeFileSync(path.join(cwd, dir, 'AUTH-01-PLAN.md'), '---\nphase: AUTH\nplan: 01\n---\n# Plan\n');
+      fs.writeFileSync(path.join(cwd, dir, 'AUTH-01-SUMMARY.md'), '---\nstatus: complete\n---\n# Summary\n');
+      fs.writeFileSync(path.join(cwd, dir, 'AUTH-VERIFICATION.md'), '---\nstatus: passed\n---\n# Verification\n');
+      fs.writeFileSync(path.join(cwd, '.planning/STATE.md'), '---\ncurrent_phase: AUTH\nstatus: executing\n---\n# State\n\n## Current Position\nPhase: AUTH (Sign In)\nStatus: Executing\n');
+      const result = run(cwd, ['phase', 'complete', 'AUTH']);
+      assert.equal(result.is_last_phase, false, JSON.stringify(result));
+      assert.equal(result.next_phase, nextId);
+      assert.ok(fs.readFileSync(path.join(cwd, '.planning/STATE.md'), 'utf8').includes(`current_phase: ${nextId}`));
+    } finally { cleanup(cwd); }
+  });
+}
+
 test('custom controls: legacy numeric, suffix, decimal and bracket results stay unchanged (#5186)', () => {
   const cwd = fixture('CCM', 'sequential');
   const phaseId = require('../gsd-core/bin/lib/phase-id.cjs');
@@ -428,4 +477,40 @@ test('custom naming policy: numeric display prefixes remain valid for sequential
       assert.equal(run(cwd, ['scaffold', 'phase-dir', '--phase', id, '--name', 'Numeric']).directory, `.planning/phases/${dir}`);
     }
   } finally { cleanup(cwd); }
+});
+
+test('custom ownership scope: active and archived directories with the same basename keep their own records (#5186)', () => {
+  const cwd = fixture(null);
+  try {
+    const original = add(cwd, 'setup-extra', 'Widget');
+    const archive = path.join(cwd, '.planning/milestones/v1.0-phases');
+    fs.mkdirSync(archive, {recursive: true});
+    const archived = path.join(archive, path.basename(original));
+    fs.renameSync(path.join(cwd, original), archived);
+    const active = add(cwd, 'setup', 'Extra Widget');
+    fs.writeFileSync(path.join(cwd, '.planning/ROADMAP.md'), '# Roadmap\n');
+    for (const [id, expected] of [['setup', active], ['setup-extra', path.relative(cwd, archived)]]) {
+      assert.equal(run(cwd, ['query', 'find-phase', id]).directory, expected);
+      assert.equal(locator.findPhaseInternal(cwd, id).directory, expected);
+    }
+  } finally { cleanup(cwd); }
+});
+test('custom ownership scope: explicit root context excludes an ambient workstream archive (#5186)', () => {
+  const cwd = fixture(null);
+  const previous = process.env.GSD_WORKSTREAM;
+  try {
+    const ws = path.join(cwd, '.planning/workstreams/alpha');
+    const archived = path.join(ws, 'milestones/v1.0-phases/ARCHIVE-boundary');
+    fs.mkdirSync(archived, {recursive: true});
+    fs.writeFileSync(path.join(ws, 'config.json'), JSON.stringify({phase_naming: 'custom'}));
+    fs.writeFileSync(path.join(archived, '.phase-id'), 'ARCHIVE');
+    process.env.GSD_WORKSTREAM = 'alpha';
+    const root = locator.phaseDirectoryOptions(cwd, undefined, '', null);
+    assert.equal(root.directoryIds['ARCHIVE-boundary'], undefined);
+    assert.equal(locator.findPhaseInternal(cwd, 'ARCHIVE').directory, path.relative(cwd, archived));
+  } finally {
+    if (previous === undefined) delete process.env.GSD_WORKSTREAM;
+    else process.env.GSD_WORKSTREAM = previous;
+    cleanup(cwd);
+  }
 });

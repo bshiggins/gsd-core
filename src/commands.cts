@@ -31,6 +31,8 @@ import phaseIdMod = require('./phase-id.cjs');
 const {
   phaseDirectoryName,
   CUSTOM_PHASE_ID_FILE,
+  customPhaseQuery,
+  customDirectoryOwner,
   PhaseDirectoryNameError,
   isCustomPhaseId,
   stripConfiguredProjectCodePrefix,
@@ -3378,6 +3380,7 @@ function cmdProgressRender(cwd: string, format: string | undefined, raw: boolean
     : null;
   const milestoneVersion = milestoneDisplay ?? milestone?.version ?? null;
 
+  const directoryContext = phaseDirectoryOptions(cwd);
   const phases: PhaseProgress[] = [];
   let totalPlans = 0;
   let totalSummaries = 0;
@@ -3416,9 +3419,11 @@ function cmdProgressRender(cwd: string, format: string | undefined, raw: boolean
           phaseName = recoverBracketPhaseName(dir, phaseToken);
         }
       } else {
+        const custom = customPhaseQuery(dir, directoryContext);
+        const owner = custom && customDirectoryOwner(dir, custom);
         const dm = dir.match(/^(\d+(?:\.\d+)*)-?(.*)/);
-        phaseNum = dm ? dm[1] : dir;
-        phaseName = dm && dm[2] ? dm[2].replace(/-/g, ' ') : '';
+        phaseNum = owner ? owner.id : dm ? dm[1] : dir;
+        phaseName = owner ? owner.slug.replace(/-/g, ' ') : dm && dm[2] ? dm[2].replace(/-/g, ' ') : '';
       }
       // #3183/#5060: canonical plan/summary counts and lifecycle status
       // (root+nested, superseded-excluded, canonical pairing) from the

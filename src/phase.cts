@@ -50,6 +50,8 @@ const {
   phaseDirectoryName,
   PhaseDirectoryNameError,
   customPhaseDirectoryParts,
+  customDirectoryOwner,
+  phaseScanTokenSource,
   CUSTOM_PHASE_ID_FILE,
   isCustomPhaseId,
   isSentinelPhaseId,
@@ -542,9 +544,8 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
   }
 
   const planBase = planningDir(cwd);
-  const normalized = normalizePhaseName(phase);
   const directoryContext = phaseDirectoryOptions(cwd);
-  const custom = phaseIdMod.customPhaseQuery(phase, directoryContext);
+  const normalized = phaseIdMod.customPhaseQuery(phase, directoryContext) ? phase : normalizePhaseName(phase);
   const notFound = {
     found: false,
     directory: null,
@@ -585,6 +586,8 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
   );
 
   for (const searchDir of searchDirs) {
+    const searchContext = phaseLocatorMod.phaseDirectoryContextForRoot(directoryContext, searchDir);
+    const custom = phaseIdMod.customPhaseQuery(phase, searchContext);
     try {
       const entries = fs.readdirSync(searchDir, { withFileTypes: true });
       const dirs = entries
@@ -598,7 +601,7 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
       // #2528: selection delegates to the canonical two-pass matcher (exact
       // token match, then the bare-integer leading-digit-run fallback) shared
       // with the locator and the phase-plan-index scan.
-      const { matches } = matchPhaseDirs(dirs, phase, undefined, directoryContext);
+      const { matches } = matchPhaseDirs(dirs, phase, undefined, searchContext);
       if (matches.length === 0) continue;
       if (matches.length > 1) {
         output({
@@ -863,8 +866,8 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
   }
 
   const phasesDir = path.join(planningDir(cwd), 'phases');
-  const normalized = normalizePhaseName(phase);
   const directoryContext = phaseDirectoryOptions(cwd);
+  const normalized = phaseIdMod.customPhaseQuery(phase, directoryContext) ? phase : normalizePhaseName(phase);
 
   let phaseDir: string | null = null;
   let phaseDirName: string | null = null;
@@ -4782,18 +4785,20 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
       // comparePhaseNum-based so `02` and `2` dedupe. With no ROADMAP.md (or no
       // parseable rows) the set is empty and the scans behave exactly as
       // before.
+      // Custom IDs use declared roadmap order; the numeric-minimum comments
+      // below describe the unchanged legacy cascade.
       const roadmapCompleteNums: string[] = [];
       if (roadmapContent !== null) {
         try {
           const milestoneForComplete = extractCurrentMilestone(roadmapContent, cwd);
           const completePattern = new RegExp(
-            `-\\s*\\[[xX]\\]\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})`,
+            `-\\s*\\[[xX]\\]\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${phaseScanTokenSource(directoryContext)})`,
             'gi'
           );
           let cm: RegExpExecArray | null;
           while ((cm = completePattern.exec(milestoneForComplete)) !== null) {
             if (isSentinelPhaseId(cm[1])) continue;
-            if (!roadmapCompleteNums.some((n) => comparePhaseNum(cm![1], n) === 0)) {
+            if (!roadmapCompleteNums.some((n) => comparePhaseNum(cm![1], n, directoryContext) === 0)) {
               roadmapCompleteNums.push(cm[1]);
             }
           }
@@ -4803,7 +4808,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         }
       }
       const isCompletePhaseNum = (num: string): boolean =>
-        roadmapCompleteNums.some((n) => comparePhaseNum(num, n) === 0);
+        roadmapCompleteNums.some((n) => comparePhaseNum(num, n, directoryContext) === 0);
 
       try {
         // #3185 (ADR-3180 Decision 1): "which phase directories belong to
@@ -4816,7 +4821,9 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         const dirs = listMilestonePhaseDirs(phasesDir, { cwd }).value;
 
         for (const dir of dirs) {
-          const dm = dir.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i'));
+          const custom = phaseIdMod.customPhaseQuery(dir, directoryContext);
+          const owner = custom && customDirectoryOwner(dir, custom);
+          const dm = owner ? [dir, owner.id, owner.slug] : dir.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i'));
           if (dm) {
             // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.
             if (isSentinelPhaseId(dm[1])) continue;
@@ -4828,8 +4835,8 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             // correct today — but that makes this scan's correctness depend on an
             // upstream sort nothing here states. Selecting the minimum explicitly costs
             // one comparison and removes the hidden coupling.
-            if (comparePhaseNum(dm[1], phaseNum) > 0
-              && (diskNextNum === null || comparePhaseNum(dm[1], diskNextNum) < 0)) {
+            if (comparePhaseNum(dm[1], phaseNum, directoryContext) > 0
+              && (diskNextNum === null || comparePhaseNum(dm[1], diskNextNum, directoryContext) < 0)) {
               diskNextNum = dm[1];
               diskNextName = dm[2] || null;
             }
@@ -4878,8 +4885,8 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           // accepts. The two branches keep separate capture groups, normalized
           // just below the loop.
           const phasePattern = new RegExp(
-            `(?:#{2,4}\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n*]+)` +
-            `|-\\s*\\[[ xX]\\]\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+))`,
+            `(?:#{2,4}\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n*]+)` +
+            `|-\\s*\\[[ xX]\\]\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+))`,
             'gi'
           );
           let pm: RegExpExecArray | null;
@@ -4910,8 +4917,8 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             // Phase NUMBERS define sequence here, exactly as `comparePhaseNum` does for
             // the disk scan and for #2028's lowest-outstanding override; the roadmap
             // defines which phases EXIST and which milestone they belong to.
-            if (comparePhaseNum(pmNum, phaseNum) > 0
-              && (roadmapNextNum === null || comparePhaseNum(pmNum, roadmapNextNum) < 0)) {
+            if (comparePhaseNum(pmNum, phaseNum, directoryContext) > 0
+              && (roadmapNextNum === null || comparePhaseNum(pmNum, roadmapNextNum, directoryContext) < 0)) {
               roadmapNextNum = pmNum;
               roadmapNextName = pmName
                 .replace(/\(INSERTED\)/i, '')
@@ -4936,7 +4943,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         // and the roadmap mean the same phase" cannot drift from "N is above the
         // one just completed". `02` and `2` compare equal, which is the whole
         // point — they are the same phase spelled two ways.
-        const diskAgrees = diskNextNum !== null && comparePhaseNum(diskNextNum, roadmapNextNum) === 0;
+        const diskAgrees = diskNextNum !== null && comparePhaseNum(diskNextNum, roadmapNextNum, directoryContext) === 0;
         nextPhaseNum = diskAgrees ? diskNextNum : roadmapNextNum;
         nextPhaseName = diskAgrees ? diskNextName : roadmapNextName;
         isLastPhase = false;
@@ -4981,7 +4988,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
           // rows and could not correct an out-of-order completion on the same
           // mixed-grammar roadmaps that broke stage 2.
           const cbPattern = new RegExp(
-            `-\\s*\\[(x| )\\]\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+)`,
+            `-\\s*\\[(x| )\\]\\s*(?:\\*\\*|__)?\\s*Phase\\s+(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*[—–:\\-]\\s*([^\\n*]+)`,
             'gi'
           );
           let cbm: RegExpExecArray | null;
@@ -4995,8 +5002,8 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
             // isSentinelPhaseId covers both sentinel ranges (SENTINEL_RANGES = [0, 999]); a
             // real lower-numbered outstanding phase (e.g. Phase 9) is NOT a sentinel and is
             // still selected, preserving #2028's out-of-order-completion behavior.
-            if (!isChecked && !isSentinelPhaseId(cbm[2]) && comparePhaseNum(cbm[2], phaseNum) < 0) {
-              if (lowestOutstanding === null || comparePhaseNum(cbm[2], lowestOutstanding.num) < 0) {
+            if (!isChecked && !isSentinelPhaseId(cbm[2]) && comparePhaseNum(cbm[2], phaseNum, directoryContext) < 0) {
+              if (lowestOutstanding === null || comparePhaseNum(cbm[2], lowestOutstanding.num, directoryContext) < 0) {
                 lowestOutstanding = {
                   num: cbm[2],
                   name: cbm[3].replace(/\(INSERTED\)/i, '').trim().toLowerCase().replace(/\s+/g, '-'),
