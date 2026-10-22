@@ -173,8 +173,8 @@ function resolveRuntimeArtifactDestination(configDir: string, kind: ArtifactKind
   return assertDestWithinConfigHome(resolveRuntimeArtifactInstallRoot(configDir, kind), kind.destSubpath);
 }
 
-function resolveRuntimeArtifactInstallRoot(configDir: string, kind: ArtifactKind): string {
-  return kind.home ?? configDir;
+function resolveRuntimeArtifactInstallRoot(configDir: string, kind: Pick<ArtifactKind, 'home'> | null | undefined): string {
+  return (kind && typeof kind.home === 'string' && kind.home !== '') ? kind.home : configDir;
 }
 
 function shouldInstallCombinedFamily(behaviors: { combinedFamilyInstall?: boolean }): boolean {

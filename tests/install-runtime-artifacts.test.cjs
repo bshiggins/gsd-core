@@ -8722,6 +8722,52 @@ function assertInstallSymlinkBranchPreserved(fixture, refusal) {
   assert.deepStrictEqual(fixture.after, fixture.before, 'a refused upgrade must preserve the previous install and symlink target byte-identically');
 }
 
+describe('#5179 install root resolution', () => {
+  const planModule = require('../gsd-core/bin/lib/runtime-artifact-install-plan.cjs');
+  const engine = require('../gsd-core/bin/lib/install-engine.cjs');
+  const layoutModule = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
+
+  for (const [label, kind] of [
+    ['null kind', null],
+    ['missing kind', undefined],
+    ['missing home', {}],
+    ['empty home', { home: '' }],
+    ['null home', { home: null }],
+    ['numeric home', { home: 42 }],
+    ['boolean home', { home: false }],
+  ]) {
+    test(`falls back to configDir for ${label}`, () => {
+      const configDir = path.join(os.tmpdir(), 'gsd-5179-config');
+      assert.equal(planModule.resolveRuntimeArtifactInstallRoot(configDir, kind), configDir);
+    });
+  }
+
+  test('uses a non-empty string home for containment', () => {
+    const configDir = path.join(os.tmpdir(), 'gsd-5179-config');
+    const alternateHome = path.join(os.tmpdir(), 'gsd-5179-alternate');
+    const kind = { home: alternateHome, destSubpath: 'agents' };
+    assert.equal(planModule.resolveRuntimeArtifactInstallRoot(configDir, kind), alternateHome);
+    assert.equal(planModule.resolveRuntimeArtifactDestination(configDir, kind), path.join(alternateHome, 'agents'));
+  });
+
+  test('standalone agents with an empty home write under configDir', (t) => {
+    const configDir = createTempDir('gsd-5179-empty-home-');
+    t.after(() => cleanup(configDir));
+    sandboxHome(t, configDir);
+    const stagedDir = path.join(configDir, 'staged');
+    fs.mkdirSync(stagedDir);
+    fs.writeFileSync(path.join(stagedDir, 'gsd-proof.md'), '# staged agent\n');
+    t.mock.method(layoutModule, 'resolveRuntimeArtifactLayout', () => ({
+      runtime: 'claude', configDir, scope: 'local',
+      kinds: [{ kind: 'agents', home: '', destSubpath: 'agents', prefix: 'gsd-', stage: () => stagedDir }],
+    }));
+
+    const result = engine.installAgentsKindStandalone('claude', configDir, 'local', RESOLVED_CORE, './');
+    assert.equal(result.destDir, path.join(configDir, 'agents'));
+    assert.equal(fs.readFileSync(path.join(result.destDir, 'gsd-proof.md'), 'utf8'), '# staged agent\n');
+  });
+});
+
 describe('#5179 preflight branch coverage', () => {
   const branches = [
     { branch: 'gsd-core is symlinked', destination: 'gsd-core', refusal: /copyWithPathReplacement: destDir/ },

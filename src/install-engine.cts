@@ -1713,7 +1713,7 @@ function installAgentsKindStandalone(
     ? installFs().readdirSync(stagedDir).filter((f: string) => f.endsWith('.md'))
     : [];
 
-  const installRoot: string = (typeof agentsKindEntry.home === 'string' && agentsKindEntry.home !== '') ? agentsKindEntry.home : targetDir;
+  const installRoot = runtimeArtifactInstallPlan.resolveRuntimeArtifactInstallRoot(targetDir, agentsKindEntry);
   const dest = runtimeArtifactInstallPlan.assertDestWithinConfigHome(installRoot, agentsKindEntry.destSubpath);
   // Symlink-escape guard — same gate _copyStaged/installOpencodeFamilySkills apply
   // to their own writes (#2393 GSD_ALLOW_SYMLINKED_DEST opt-in preserved). Runs
