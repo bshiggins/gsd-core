@@ -8673,6 +8673,7 @@ describe('#5179 install refusal preserves the previous install', () => {
 
 function prepareInstallSymlinkBranchUpgrade(t, {
   runtime = 'claude', scope = 'global', destination, surface = null, upgradeArgs = [],
+  allowOptIn = false, refreshFile = null,
 }) {
   const root = createTempDir('gsd-5179-branch-');
   t.after(() => cleanup(root));
@@ -8701,18 +8702,25 @@ function prepareInstallSymlinkBranchUpgrade(t, {
     throw error;
   }
 
+  let expectedRefreshedBytes;
+  if (refreshFile !== null) {
+    const file = isDirectory ? path.join(dest, refreshFile) : dest;
+    expectedRefreshedBytes = fs.readFileSync(file);
+    fs.writeFileSync(file, '# stale previous install bytes\n');
+  }
+
   const before = snapshotInstallSymlinkTree(root, 'previous-install');
   const args = [INSTALL_SCRIPT, `--${runtime}`, `--${scope}`, '--no-legacy-cleanup', ...upgradeArgs];
   if (scope === 'global') args.push('--config-dir', configDir);
   const result = runNode(args, {
     cwd: scope === 'local' ? root : process.cwd(),
-    env: installerEnv({ HOME: root, USERPROFILE: root, GSD_ALLOW_SYMLINKED_DEST: '' }),
+    env: installerEnv({ HOME: root, USERPROFILE: root, GSD_ALLOW_SYMLINKED_DEST: allowOptIn ? '1' : '' }),
     timeoutMs: INSTALL_TIMEOUT_MS,
   });
   return {
     result, output: stripAnsi(`${result.stdout}\n${result.stderr}`),
     before, after: snapshotInstallSymlinkTree(root, 'previous-install'),
-    configDir, dest,
+    configDir, dest, expectedRefreshedBytes,
   };
 }
 
@@ -8783,6 +8791,21 @@ describe('#5179 preflight branch coverage', () => {
     test(`preserves the previous install when ${row.branch}`, (t) => {
       const fixture = prepareInstallSymlinkBranchUpgrade(t, row);
       if (fixture) assertInstallSymlinkBranchPreserved(fixture, row.refusal);
+    });
+  }
+
+  for (const row of [
+    { branch: 'commands corpus', destination: 'gsd-core/commands/gsd', refreshFile: 'help.md' },
+    { branch: 'Codex agent TOML', runtime: 'codex', destination: 'agents/gsd-planner.toml', refreshFile: '' },
+  ]) {
+    test(`allows opted-in ${row.branch} replacement with refreshed bytes`, (t) => {
+      const fixture = prepareInstallSymlinkBranchUpgrade(t, { ...row, allowOptIn: true });
+      if (!fixture) return;
+      assert.equal(fixture.result.exitCode, 0, fixture.output);
+      assert.doesNotMatch(fixture.output, /refusing to (write|create)/);
+      assert.equal(fs.lstatSync(fixture.dest).isSymbolicLink(), false, 'the writer replaces the symlink');
+      const installedFile = row.refreshFile ? path.join(fixture.dest, row.refreshFile) : fixture.dest;
+      assert.deepStrictEqual(fs.readFileSync(installedFile), fixture.expectedRefreshedBytes, 'the installed destination must contain refreshed bytes');
     });
   }
 
