@@ -586,7 +586,7 @@ for (const removed of ['3', 'AUTH']) {
   });
 }
 
-for (const [removed, survivor] of [['1', '2024-Q1'], ['2.1', '2.2']]) {
+for (const [removed, survivor] of [['1', '2024-Q1'], ['2.1', '2.2-EXTRA']]) {
   test(`custom renumbering: removal of ${removed} preserves unmarked known owner ${survivor}`, () => {
     const cwd = fixture(null);
     try {
@@ -816,3 +816,57 @@ for (const code of [null, 'CCM']) for (const id of ['3', '4A', '5.2']) {
     } finally { cleanup(cwd); }
   });
 }
+
+for (const padded of [false, true]) for (const removed of ['1', '2']) {
+  test(`legacy removal identity: custom project renumbers numeric phases with padded headings ${padded}, removing ${removed}`, () => {
+    const cwd = fixture(null);
+    try {
+      const names = ['a', 'b', 'c'];
+      for (const [index, name] of names.entries()) {
+        fs.mkdirSync(path.join(cwd, '.planning/phases', `0${index + 1}-${name}`));
+        const id = `${padded ? '0' : ''}${index + 1}`;
+        fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), `\n### Phase ${id}: ${name}\n\n**Plans:** 0 plans\n`);
+      }
+      fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), '\n## Progress\n\n| Phase | Plans Complete | Status | Completed |\n| --- | --- | --- | --- |\n' + names.map((name, index) => `| ${index + 1}. ${name} | 0/0 | Not started | - |`).join('\n') + '\n');
+      const result = run(cwd, ['phase', 'remove', removed, '--force']);
+      assert.equal(result.roadmap_updated, true);
+      const survivors = names.filter((_, index) => index + 1 !== Number(removed));
+      for (const [index, name] of survivors.entries()) {
+        const id = String(index + 1);
+        assert.equal(run(cwd, ['query', 'find-phase', id]).directory, `.planning/phases/0${id}-${name}`);
+        assert.equal(run(cwd, ['roadmap', 'get-phase', id]).phase_name, name);
+      }
+      const health = run(cwd, ['validate', 'health']);
+      assert.deepEqual(health.warnings.filter(warning => ['W006', 'W007'].includes(warning.code)), []);
+    } finally { cleanup(cwd); }
+  });
+}
+test('legacy removal identity: numeric renumbering preserves recorded headings, ordinals and references', () => {
+  const cwd = fixture(null);
+  try {
+    for (const [id, name] of [['01', 'a'], ['02', 'b']]) {
+      fs.mkdirSync(path.join(cwd, '.planning/phases', `${id}-${name}`));
+      fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), `\n### Phase ${Number(id)}: ${name}\n`);
+    }
+    add(cwd, '5', 'Stable');
+    fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), '\n**Depends on:** Phase 5\n- [ ] 05-01-PLAN.md\n- [ ] Phase 5: Stable\n\n## Progress\n\n| Phase | Status |\n| --- | --- |\n| 1. a | Pending |\n| 2. b | Pending |\n| 5. Stable | Pending |\n');
+    run(cwd, ['phase', 'remove', '1', '--force']);
+    const roadmap = fs.readFileSync(path.join(cwd, '.planning/ROADMAP.md'), 'utf8');
+    assert.equal(run(cwd, ['roadmap', 'get-phase', '1']).phase_name, 'b');
+    assert.equal(run(cwd, ['roadmap', 'get-phase', '5']).phase_name, 'Stable');
+    for (const text of ['Phase 5: Stable', '| 5. Stable |', '**Depends on:** Phase 5', '05-01-PLAN.md']) assert.ok(roadmap.includes(text), roadmap);
+  } finally { cleanup(cwd); }
+});
+test('legacy removal identity: removing a recorded numeric target leaves legacy siblings unchanged', () => {
+  const cwd = fixture(null);
+  try {
+    add(cwd, '1', 'Stable');
+    for (const id of ['02', '03']) {
+      fs.mkdirSync(path.join(cwd, '.planning/phases', `${id}-legacy`));
+      fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), `\n### Phase ${Number(id)}: Legacy ${id}\n`);
+    }
+    const result = run(cwd, ['phase', 'remove', '1', '--force']);
+    assert.deepEqual(result.renamed_directories, []);
+    for (const id of ['2', '3']) assert.equal(run(cwd, ['query', 'find-phase', id]).directory, `.planning/phases/0${id}-legacy`);
+  } finally { cleanup(cwd); }
+});

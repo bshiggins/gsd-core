@@ -1450,7 +1450,7 @@ function phaseScanTokenSource(context: PhaseDirectoryContext): string {
 }
 type CustomPhaseQuery = { id: string; listed: boolean; projectCode?: string | null; prefixes: { id: string; prefix: string }[]; directoryIds?: Record<string, string> };
 
-type CustomIdentityIndex = { roadmap: string; knownIds: string[]; ids: Set<string>; recorded: Set<string>; recordedByFold: Map<string, string>; order: Map<string, number>; prefixes: {id: string; prefix: string}[] };
+type CustomIdentityIndex = { roadmap: string; knownIds: string[]; explicitIds: Set<string>; ids: Set<string>; recorded: Set<string>; recordedByFold: Map<string, string>; order: Map<string, number>; prefixes: {id: string; prefix: string}[] };
 const customIdentityIndexes = new WeakMap<PhaseDirectoryContext, CustomIdentityIndex>();
 
 function customIdentityIndex(options: PhaseDirectoryContext): CustomIdentityIndex {
@@ -1463,7 +1463,7 @@ function customIdentityIndex(options: PhaseDirectoryContext): CustomIdentityInde
     const recorded = new Set(Object.values(options.directoryIds ?? {}));
     const ids = new Set([...headings, ...options.knownIds ?? [], ...recorded]);
     index = {
-      roadmap: options.roadmap, knownIds: options.knownIds, ids, recorded, recordedByFold: new Map([...recorded].map(id => [id.toLowerCase(), id])), order: new Map([...ids].map((id, i) => [id, i])),
+      roadmap: options.roadmap, knownIds: options.knownIds, explicitIds: new Set(options.knownIds ?? []), ids, recorded, recordedByFold: new Map([...recorded].map(id => [id.toLowerCase(), id])), order: new Map([...ids].map((id, i) => [id, i])),
       prefixes: [...ids].filter(token => token && !UNSAFE_PHASE_DIRECTORY_PART_RE.test(token))
         .sort((a, b) => b.length - a.length)
         .map(token => ({id: token, prefix: phaseDirectoryName(token, '')})),
@@ -1547,9 +1547,14 @@ function customDirectoryCandidates(dir: string, context: PhaseDirectoryContext):
     });
     return owner ? [owner.id] : [];
   }
-  const prefixes = customIdentityIndex(context).prefixes;
-  return [...new Set(customDirectoryBodies(dir, context.projectCode).flatMap(body =>
-    prefixes.filter(candidate => body.startsWith(candidate.prefix)).map(candidate => candidate.id)))];
+  const index = customIdentityIndex(context);
+  const candidates = [...new Set(customDirectoryBodies(dir, context.projectCode).flatMap(body =>
+    index.prefixes.filter(candidate => body.startsWith(candidate.prefix)).map(candidate => candidate.id)))];
+  // A lone legacy numeric heading is not proof of a custom identity. Preserve
+  // all candidates when ownership is ambiguous, and explicit recorded hints.
+  if (candidates.length === 1 && LEGACY_PHASE_ID_RE.test(candidates[0])
+    && !candidates[0].includes('-') && !index.explicitIds.has(candidates[0])) return [];
+  return candidates;
 }
 
 function customPhaseDirectoryParts(dir: string, query: CustomPhaseQuery): { id: string; slug: string } | null {

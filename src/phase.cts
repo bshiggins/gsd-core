@@ -2308,7 +2308,8 @@ function updateRoadmapAfterPhaseRemoval(
   isDecimal: boolean,
   removedInt: number,
   cwd: string,
-  context: ReturnType<typeof phaseDirectoryOptions>,
+  customTarget: boolean,
+  stableIds: ReadonlySet<string>,
 ): boolean {
   return withPlanningLock(cwd, () => {
     const originalContent = fs.readFileSync(roadmapPath, 'utf-8');
@@ -2321,8 +2322,9 @@ function updateRoadmapAfterPhaseRemoval(
     // makes the token padding-insensitive in both directions without widening
     // to other ids: the token stays anchored between `Phase\s+`/line-start and
     // `:`/whitespace/end, so `0*2` still never matches `Phase 12:`.
-    const customNaming = context.phaseNaming === 'custom';
-    const padTolerant = customNaming ? escaped : `0*${escaped}`;
+    const padTolerant = customTarget ? escaped : phaseMarkdownRegexSource(targetPhase);
+    const stableIdentity = (id: string): boolean =>
+      stableIds.has((isCustomPhaseId(id) ? id : normalizePhaseName(id)).toLowerCase());
 
     // SECTION-DELETION (not a section-body edit) — removes the phase's ENTIRE
     // detail section INCLUDING its own heading line. Migrated onto deleteSection
@@ -2374,7 +2376,7 @@ function updateRoadmapAfterPhaseRemoval(
 
       const matchRemovedProgressRow = (row: Record<string, string>): boolean => {
         const firstCellRaw = (Object.values(row)[0] ?? '').trim();
-        if (customNaming) {
+        if (customTarget) {
           return new RegExp(`^${escaped}\\.?(?:\\s|$)`, 'i').test(firstCellRaw);
         }
         if (isDecimal) {
@@ -2391,7 +2393,7 @@ function updateRoadmapAfterPhaseRemoval(
       }
     }
 
-    if (!isDecimal && !customNaming) {
+    if (!isDecimal && !customTarget) {
       // #1729: fold an optional pre-colon ( ) tag into the suffix capture so it
       // is re-emitted verbatim — a tagged later phase still gets renumbered.
       // #5007 (Phase 6 / ADR-4910 §8): composes phaseHeadingPrefixSrcFor
@@ -2423,12 +2425,12 @@ function updateRoadmapAfterPhaseRemoval(
           'gi',
         ),
         (_match, prefix: string, num: string, suffix: string) =>
-          `${prefix}${decrementRoadmapPhaseToken(num, removedInt)}${suffix}`,
+          `${prefix}${stableIdentity(num) ? num : decrementRoadmapPhaseToken(num, removedInt)}${suffix}`,
       );
       content = content.replace(
         /(-\s*\[[ x]\]\s*.*?Phase\s+)(\d+)(\s*:|\s+)/gi,
         (_match, prefix: string, num: string, suffix: string) =>
-          `${prefix}${decrementRoadmapPhaseNumber(num, removedInt)}${suffix}`,
+          `${prefix}${stableIdentity(num) ? num : decrementRoadmapPhaseNumber(num, removedInt)}${suffix}`,
       );
       // ORDINAL-RENUMBER — CELL EDIT (not row-deletion) — migrated onto
       // updateTableCell (ADR-2143 §7, sibling of the deleteTableRow scoping
@@ -2492,7 +2494,7 @@ function updateRoadmapAfterPhaseRemoval(
             (row, index) => {
               if (processedOrdinalRows.has(index)) return false;
               const m = phaseCellShapeRe.exec(row['Phase'] ?? '');
-              if (!m) return false;
+              if (!m || stableIdentity(m[1])) return false;
               const num = parseInt(m[1], 10);
               // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.
               if (!Number.isInteger(num) || num <= removedInt || isSentinelPhaseId(num)) return false;
@@ -2525,7 +2527,7 @@ function updateRoadmapAfterPhaseRemoval(
       content = content.replace(
         /(?<![0-9-])(\d{2})-(\d{2})(?=(?:(?:-[A-Za-z][A-Za-z0-9-]*)?-(?:PLAN|SUMMARY)\.md)|(?![0-9-]))/g,
         (_match, phaseNum: string, planNum: string) =>
-          `${decrementRoadmapPaddedPhaseNumber(phaseNum, removedInt)}-${planNum}`,
+          `${stableIdentity(phaseNum) ? phaseNum : decrementRoadmapPaddedPhaseNumber(phaseNum, removedInt)}-${planNum}`,
       );
       // #5007 (Phase 6 / ADR-4910): migrated the "Depends on" bold-field
       // decrement off two hand-rolled regexes — one per bold-placement
@@ -2561,7 +2563,7 @@ function updateRoadmapAfterPhaseRemoval(
           if (!depMatch) continue;
           const [wholeMatch, prefix, num] = depMatch;
           const newValue =
-            `${prefix}${decrementRoadmapPhaseToken(num, removedInt)}` + currentRead.value.slice(wholeMatch.length);
+            `${prefix}${stableIdentity(num) ? num : decrementRoadmapPhaseToken(num, removedInt)}` + currentRead.value.slice(wholeMatch.length);
           if (newValue === currentRead.value) continue;
           const staged = setFieldValue(dependsOnDoc, fieldId, newValue);
           if (staged.ok) dependsOnDoc = staged.value;
@@ -2667,6 +2669,10 @@ function cmdPhaseRemove(
     return;
   }
   const targetDir = phaseDirMatches[0] || null;
+  const customTarget = targetDir !== null && (directoryContext.directoryIds?.[targetDir] !== undefined
+    || phaseIdMod.customDirectoryCandidates(targetDir, directoryContext).length > 0);
+  const stableIds = new Set(subdirs.flatMap(dir => phaseIdMod.customDirectoryCandidates(dir, directoryContext))
+    .map(id => (isCustomPhaseId(id) ? id : normalizePhaseName(id)).toLowerCase()));
   if (targetDir && directoryContext.phaseNaming === 'custom'
     && isCustomPhaseId(targetPhase) && !directoryContext.directoryIds?.[targetDir]) {
     error(`Cannot prove ownership of custom phase directory ${targetDir}; refusing removal without ${CUSTOM_PHASE_ID_FILE}. Write the owning ID into ${targetDir}/${CUSTOM_PHASE_ID_FILE} and retry`, ERROR_REASON.USAGE);
@@ -2709,7 +2715,7 @@ function cmdPhaseRemove(
   let renamedFiles: { from: string; to: string }[] = [];
   let renamedFileCollisions: { from: string; to: string; displaced_to: string | null }[] = [];
   try {
-    if (isDecimal) {
+    if (!customTarget && isDecimal) {
       const renamed = renameDecimalPhases(
         phasesDir,
         parseInt(normalized.split('.')[0], 10),
@@ -2718,7 +2724,7 @@ function cmdPhaseRemove(
       );
       renamedDirs = renamed.renamedDirs;
       renamedFiles = renamed.renamedFiles;
-    } else {
+    } else if (!customTarget) {
       const renamed = renameIntegerPhases(phasesDir, parseInt(normalized, 10), directoryContext);
       renamedDirs = renamed.renamedDirs;
       renamedFiles = renamed.renamedFiles;
@@ -2744,7 +2750,8 @@ function cmdPhaseRemove(
     isDecimal,
     parseInt(normalized, 10),
     cwd,
-    directoryContext,
+    customTarget,
+    stableIds,
   );
 
   const statePath = path.join(planningDir(cwd), 'STATE.md');
