@@ -1936,6 +1936,7 @@ export = {
   PhaseDirectoryNameError,
   customPhaseQuery,
   customPhaseDirectoryParts,
+  customDirectoryOwner,
   isCustomPhaseId,
   phaseNumberForMatch,
   phaseKeyFromToken,

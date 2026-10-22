@@ -61,7 +61,7 @@ import stateDocument = require('./state-document.cjs');
 const { stateFieldValue } = stateDocument;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseId = require('./phase-id.cjs');
-const { comparePhaseNum, extractPhaseToken, matchPhaseDirs, parsePhaseFromProse, stripProjectCodePrefix } = phaseId;
+const { comparePhaseNum, extractPhaseToken, customPhaseQuery, customDirectoryOwner, matchPhaseDirs, parsePhaseFromProse, stripProjectCodePrefix } = phaseId;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import stateMod = require('./state.cjs');
 const { readStateHeadFreshness } = stateMod;
@@ -324,8 +324,8 @@ function readGitSignals(cwd: string): GitSignals {
 }
 
 /** Leading numeric phase token from a STATE.md scalar or body `Phase:` value. */
-function phaseTokenFromState(raw: string | null): string | null {
-  return parsePhaseFromProse(raw).phase;
+function phaseTokenFromState(raw: string | null, context?: ReturnType<typeof phaseDirectoryOptions>): string | null {
+  return parsePhaseFromProse(raw, context).phase;
 }
 
 /**
@@ -340,7 +340,12 @@ function detectVerifyFailed(cwd: string, currentPhaseRaw: string | null): boolea
   let entries: string[] = [];
   try {
     entries = fs.readdirSync(phasesDir)
-      .map((name) => ({ name, phaseToken: directoryContext.phaseNaming === 'custom' ? name : phaseTokenFromDirName(name) }))
+      .filter((name) => fs.statSync(path.join(phasesDir, name)).isDirectory())
+      .map((name) => {
+        const custom = customPhaseQuery(name, directoryContext.roadmap, directoryContext);
+        const parts = custom && customDirectoryOwner(name, custom);
+        return { name, phaseToken: parts ? parts.id : phaseTokenFromDirName(name) };
+      })
       .filter((entry): entry is { name: string; phaseToken: string } => entry.phaseToken !== null)
       .sort((a, b) => comparePhaseNum(a.phaseToken, b.phaseToken) || a.name.localeCompare(b.name))
       .map((entry) => entry.name);
@@ -349,9 +354,7 @@ function detectVerifyFailed(cwd: string, currentPhaseRaw: string | null): boolea
   }
   if (entries.length === 0) return false;
 
-  const phaseToken = directoryContext.phaseNaming === 'custom'
-    ? currentPhaseRaw?.trim().split(/\s+/)[0] ?? null
-    : phaseTokenFromState(currentPhaseRaw);
+  const phaseToken = phaseTokenFromState(currentPhaseRaw, directoryContext);
   let targetDir: string | undefined;
   if (phaseToken) {
     // #2528: the fourth directory-resolution site, and the one where a miss is

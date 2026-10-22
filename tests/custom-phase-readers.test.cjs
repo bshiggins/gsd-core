@@ -228,3 +228,28 @@ for (const id of ['2FA', '7B', '12AB', '2fa', '7b', '12ab']) for (const code of 
     } finally { cleanup(cwd); }
   });
 }
+
+for (const value of ['Phase 3', '3', '3 of 5 (Foo)']) {
+  test(`smart-entry: numeric state ${value} detects failed verification under custom naming (#5186)`, () => {
+    const cwd = fixture(null);
+    try {
+      const dir = path.join(cwd, '.planning/phases/03-foo');
+      fs.mkdirSync(dir);
+      fs.writeFileSync(path.join(dir, '03-VERIFICATION.md'), 'STATUS: failed\n');
+      fs.writeFileSync(path.join(cwd, '.planning/STATE.md'), `---\ncurrent_phase: "${value}"\nstatus: executing\n---\n# State\n`);
+      assert.equal(require('../gsd-core/bin/lib/smart-entry.cjs').classifyProject(cwd).signals.verify_failed, true);
+    } finally { cleanup(cwd); }
+  });
+}
+test('smart-entry: non-phase directories cannot hide the latest failed numeric phase (#5186)', () => {
+  const cwd = fixture(null);
+  try {
+    for (const name of ['03-foo', 'zzz-not-a-phase']) {
+      const dir = path.join(cwd, '.planning/phases', name);
+      fs.mkdirSync(dir);
+      fs.writeFileSync(path.join(dir, 'VERIFICATION.md'), `STATUS: ${name === '03-foo' ? 'failed' : 'passed'}\n`);
+    }
+    fs.writeFileSync(path.join(cwd, '.planning/STATE.md'), '---\nstatus: executing\n---\n# State\n');
+    assert.equal(require('../gsd-core/bin/lib/smart-entry.cjs').classifyProject(cwd).signals.verify_failed, true);
+  } finally { cleanup(cwd); }
+});
