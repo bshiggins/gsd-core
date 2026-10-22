@@ -273,7 +273,7 @@ function searchPhaseInDir(baseDir: string, relBase: string, normalized: string, 
 
     const match = matches[0];
 
-    const custom = convention === 'bracket' ? null : customPhaseQuery(normalized, context?.roadmap ?? '', context);
+    const custom = convention === 'bracket' ? null : customPhaseQuery(normalized, context);
     const parts = custom ? customPhaseDirectoryParts(match, custom) : null;
     const phaseToken = parts?.id || phaseNumberForMatch(match, usedBareFallback);
     const phaseNumber = phaseToken || normalized;

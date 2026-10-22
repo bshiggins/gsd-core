@@ -544,7 +544,7 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
   const planBase = planningDir(cwd);
   const normalized = normalizePhaseName(phase);
   const directoryContext = phaseDirectoryOptions(cwd);
-  const custom = phaseIdMod.customPhaseQuery(phase, directoryContext.roadmap ?? '', directoryContext);
+  const custom = phaseIdMod.customPhaseQuery(phase, directoryContext);
   const notFound = {
     found: false,
     directory: null,

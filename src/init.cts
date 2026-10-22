@@ -1261,14 +1261,14 @@ function cmdInitPlanPhase(
   const rawProjectCodePlan = (config.project_code as string) || '';
   let expectedPhaseDirPlan: string | null = null;
   const namingContextPlan = phaseDirectoryContext(config);
-  const customNamingPlan = customPhaseQuery(phase, '', namingContextPlan) !== null;
+  const customNamingPlan = customPhaseQuery(phase, namingContextPlan) !== null;
   if ((!phaseDirPlan || customNamingPlan) && phaseNumberPlan && phaseNamePlan) {
     const paddedNum = normalizePhaseName(phaseNumberPlan);
     const expectedName = (roadmapPhase?.['phase_name'] as string | undefined) || phaseNamePlan;
     const slug = (generateSlugInternal(expectedName) || '').substring(0, 60);
     if (slug) {
       const dirName = phaseDirectoryName(
-        customPhaseQuery(phaseNumberPlan, '', namingContextPlan) ? phaseNumberPlan : paddedNum, slug, rawProjectCodePlan,
+        customPhaseQuery(phaseNumberPlan, namingContextPlan) ? phaseNumberPlan : paddedNum, slug, rawProjectCodePlan,
       );
       // #2376: absolute — see comment on phase_dir below.
       expectedPhaseDirPlan = toPosixPath(path.join(planningPaths(cwd).phases, dirName));

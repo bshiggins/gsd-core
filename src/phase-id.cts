@@ -749,7 +749,7 @@ function isSentinelPhaseDir(dirName: string): boolean {
  * prose regardless of zero-padding on either side.
  */
 function phaseMarkdownRegexSource(phaseNum: unknown, context?: PhaseDirectoryContext): string {
-  if (context && customPhaseQuery(String(phaseNum), '', context)) return escapeRegex(String(phaseNum));
+  if (context && customPhaseQuery(String(phaseNum), context)) return escapeRegex(String(phaseNum));
   const stripped = stripProjectCodePrefix(phaseNum);
 
   // Milestone-prefixed IDs: M-NN or M-N-N (deep).
@@ -1437,30 +1437,39 @@ function phaseScanTokenSource(context: PhaseDirectoryContext): string {
 }
 type CustomPhaseQuery = { id: string; listed: boolean; projectCode?: string | null; prefixes: { id: string; prefix: string }[]; directoryIds?: Record<string, string> };
 
+type CustomIdentityIndex = { roadmap: string; knownIds: string[]; ids: Set<string>; prefixes: {id: string; prefix: string}[] };
+const customIdentityIndexes = new WeakMap<PhaseDirectoryContext, CustomIdentityIndex>();
+
 /** Custom heading IDs are identity hints only; titles never locate directories. */
-function customPhaseQuery(id: string, roadmap: string, options: PhaseDirectoryContext): CustomPhaseQuery | null {
+function customPhaseQuery(id: string, options: PhaseDirectoryContext): CustomPhaseQuery | null {
   if (options?.phaseNaming !== 'custom' || id.startsWith('[')) return null;
   if (UNSAFE_PHASE_DIRECTORY_PART_RE.test(id)) return null;
   const prefix = options.projectCode ? `${options.projectCode}-` : '';
   const body = prefix && id.startsWith(prefix) ? id.slice(prefix.length) : id;
-  const headingId = /^Phase[ \t]+([^ \t:\n]+)(?:[ \t]+\([^)\n]*\))?[ \t]*:/;
-  const knownIds = tokenizeHeadings(roadmap)
-    .filter(heading => heading.level >= 2 && heading.level <= 4)
-    .flatMap(heading => {
-      const match = heading.text.match(headingId);
-      return match ? [match[1]] : [];
-    });
-  const listed = [...new Set([...knownIds, ...options.knownIds ?? []])].sort((a, b) => b.length - a.length);
-  if (!isCustomPhaseId(id) && !(listed.includes(id) && /[a-z]/i.test(id))) return null;
+  let index = customIdentityIndexes.get(options);
+  if (!index || index.roadmap !== options.roadmap || index.knownIds !== options.knownIds) {
+    const headingId = /^Phase[ \t]+([^ \t:\n]+)(?:[ \t]+\([^)\n]*\))?[ \t]*:/;
+    const headings = tokenizeHeadings(options.roadmap ?? '')
+      .filter(heading => heading.level >= 2 && heading.level <= 4)
+      .flatMap(heading => heading.text.match(headingId)?.[1] ?? []);
+    const ids = new Set([...headings, ...options.knownIds ?? [], ...Object.values(options.directoryIds ?? {})]);
+    index = {
+      roadmap: options.roadmap, knownIds: options.knownIds, ids,
+      prefixes: [...ids].filter(token => token && !UNSAFE_PHASE_DIRECTORY_PART_RE.test(token))
+        .sort((a, b) => b.length - a.length)
+        .map(token => ({id: token, prefix: phaseDirectoryName(token, '')})),
+    };
+    customIdentityIndexes.set(options, index);
+  }
+  const listed = index.ids.has(id);
+  if (!isCustomPhaseId(id) && !(listed && /[a-z]/i.test(id))) return null;
   // Only a complete legacy segment identifies a numeric directory. Digit-leading
   // custom IDs such as 2FA must not collapse to their leading digit run.
-  if (!listed.includes(id) && body.includes('-') && LEGACY_PHASE_ID_RE.test(body.split('-')[0])) return null;
+  if (!listed && body.includes('-') && LEGACY_PHASE_ID_RE.test(body.split('-')[0])) return null;
   // Listed identities outrank the query; a directory's slug never invents an ID.
   return {
-    id, listed: listed.includes(id), projectCode: options.projectCode, directoryIds: options.directoryIds,
-    prefixes: (listed.includes(id) ? listed : [...listed, id])
-      .filter(token => !UNSAFE_PHASE_DIRECTORY_PART_RE.test(token))
-      .map(token => ({id: token, prefix: phaseDirectoryName(token, '')})),
+    id, listed: listed, projectCode: options.projectCode, directoryIds: options.directoryIds,
+    prefixes: listed ? index.prefixes : [...index.prefixes, {id, prefix: phaseDirectoryName(id, '')}],
   };
 }
 
@@ -1569,7 +1578,7 @@ function customPhaseDirectoryParts(dir: string, query: CustomPhaseQuery): { id: 
  * token for these dirs is the mis-absorbed multi-segment form).
  */
 function matchPhaseDirs(dirs: string[], query: string, convention: string | null | undefined, context: PhaseDirectoryContext): { matches: string[]; usedBareFallback: boolean } {
-  const custom = convention === 'bracket' ? null : customPhaseQuery(query, context?.roadmap ?? '', context);
+  const custom = convention === 'bracket' ? null : customPhaseQuery(query, context);
   const normalized = normalizePhaseName(query);
   if (custom) {
     // A full directory name is an existing lookup form, distinct from an ID prefix.
@@ -1644,7 +1653,7 @@ function phaseNumberForMatch(dirName: string, usedBareFallback: boolean): string
  * Arithmetic is avoided (`parseInt` would lose precision on a long digit run).
  */
 function phaseKeyFromToken(token: unknown, context?: PhaseDirectoryContext): string {
-  if (context && customPhaseQuery(String(token), context.roadmap, context)) return String(token).toUpperCase();
+  if (context && customPhaseQuery(String(token), context)) return String(token).toUpperCase();
   const stripped = String(token)
     .split('-')
     .map(segment => segment.replace(/^0+(?=\d)/, ''))
@@ -1667,7 +1676,7 @@ function phaseKeyFromToken(token: unknown, context?: PhaseDirectoryContext): str
  */
 function phaseKeyFromDir(dirName: string, convention?: string | null, context?: PhaseDirectoryContext): string {
   if (context && convention !== 'bracket') {
-    const custom = customPhaseQuery(dirName, context.roadmap, context);
+    const custom = customPhaseQuery(dirName, context);
     if (custom) {
       const owner = customDirectoryOwner(dirName, custom);
       if (owner) return phaseKeyFromToken(owner.id, context);
@@ -1734,7 +1743,7 @@ function parsePhaseFromProse(value: string | null, context?: PhaseDirectoryConte
   const candidate = context?.phaseNaming === 'custom'
     ? str.trim().replace(/^Phase[ \t]+/i, '').split(/[ \t:]/, 1)[0].replace(/\.$/, '')
     : null;
-  const query = candidate && context && customPhaseQuery(candidate, context.roadmap, context);
+  const query = candidate && context && customPhaseQuery(candidate, context);
   const custom = query && (query.listed || candidate === str.trim() || /^Phase[ \t]+/i.test(str.trim()));
   const phaseMatch = str.match(/^\s*(?:Phase\s+)?(?:[A-Z][A-Z0-9_]*-)?(\d+[A-Z]?(?:\.\d+)*)\b/i);
   // The name-extraction quantifiers are length-bounded so a crafted long

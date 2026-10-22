@@ -278,3 +278,23 @@ for (const code of [null, 'CCM']) {
     } finally { cleanup(cwd); }
   });
 }
+
+test('custom context: one heading scan serves all phase key and directory matches (#5186)', () => {
+  const parser = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
+  const original = parser.tokenizeHeadings;
+  let scans = 0;
+  parser.tokenizeHeadings = function(...args) { scans++; return original.apply(this, args); };
+  try {
+    const phaseId = require('../gsd-core/bin/lib/phase-id.cjs');
+    const roadmap = Array.from({length: 1200}, (_, i) => `### Phase AUTH-${i}: Step ${i}\n`).join('');
+    const context = phaseId.phaseDirectoryContext({phase_naming: 'custom'}, roadmap);
+    for (let i = 0; i < 1200; i++) {
+      const id = `AUTH-${i}`;
+      const dir = `${id}-step-${i}`;
+      assert.equal(phaseId.phaseKeyFromDir(dir, undefined, context), id);
+      assert.equal(phaseId.phaseKeyFromToken(id, context), id);
+      assert.deepEqual(phaseId.matchPhaseDirs([dir], id, undefined, context).matches, [dir]);
+    }
+    assert.equal(scans, 1, `heading scans for one context: ${scans}`);
+  } finally { parser.tokenizeHeadings = original; }
+});

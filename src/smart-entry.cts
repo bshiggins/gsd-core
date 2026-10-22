@@ -342,7 +342,7 @@ function detectVerifyFailed(cwd: string, currentPhaseRaw: string | null): boolea
     entries = fs.readdirSync(phasesDir)
       .filter((name) => fs.statSync(path.join(phasesDir, name)).isDirectory())
       .map((name) => {
-        const custom = customPhaseQuery(name, directoryContext.roadmap, directoryContext);
+        const custom = customPhaseQuery(name, directoryContext);
         const parts = custom && customDirectoryOwner(name, custom);
         return { name, phaseToken: parts ? parts.id : phaseTokenFromDirName(name) };
       })
