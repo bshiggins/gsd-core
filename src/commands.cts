@@ -30,6 +30,7 @@ const { toPosixPath, generateSlugInternal, extractOneLinerFromBody } = coreUtils
 import phaseIdMod = require('./phase-id.cjs');
 const {
   phaseDirectoryName,
+  validateCustomPhaseId,
   CUSTOM_PHASE_ID_FILE,
   customPhaseQuery,
   customDirectoryOwner,
@@ -3809,6 +3810,7 @@ function cmdScaffold(cwd: string, type: string, options: ScaffoldOptions, raw: b
       const scaffoldProjectCode = (scaffoldConfig.projectCode as string) || '';
       let dirName: string;
       try {
+        if (scaffoldConfig.phaseNaming === 'custom') validateCustomPhaseId(phase);
         // Validate the raw ID before normalization can discard path components.
         phaseDirectoryName(phase, '', scaffoldProjectCode);
         dirName = phaseDirectoryName(

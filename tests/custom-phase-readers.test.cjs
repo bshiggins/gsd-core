@@ -894,3 +894,15 @@ for (const code of [null, 'CCM']) {
     } finally { cleanup(cwd); }
   });
 }
+
+for (const id of ['[CCM.01-01]', '[CCM]-01']) {
+  test(`legacy bracket scaffold: accepts ${id} outside custom naming`, () => {
+    const cwd = fixture('CCM', 'sequential');
+    try {
+      fs.writeFileSync(path.join(cwd, '.planning/config.json'), JSON.stringify({phase_id_convention: 'bracket', project_code: 'CCM'}));
+      const created = run(cwd, ['scaffold', 'phase-dir', '--phase', id, '--name', 'A']);
+      assert.equal(fs.statSync(path.join(cwd, created.directory)).isDirectory(), true);
+      assert.equal(fs.existsSync(path.join(cwd, created.directory, '.phase-id')), false);
+    } finally { cleanup(cwd); }
+  });
+}

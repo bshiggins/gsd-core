@@ -1423,10 +1423,14 @@ function phaseDirectoryName(id: string, slug: string, projectCode?: string | nul
   if (!id || [id, slug, projectCode ?? ''].some(part => UNSAFE_PHASE_DIRECTORY_PART_RE.test(part))) {
     throw new PhaseDirectoryNameError('Invalid phase id or directory component: paths, .. and NUL are not allowed');
   }
-  if (id !== id.trim() || /[\s:]/.test(id) || id.startsWith('[')) {
-    throw new PhaseDirectoryNameError('Invalid phase id: whitespace, colons and a leading [ are not allowed');
-  }
   return `${projectCode ? `${projectCode}-` : ''}${id}-${slug}`;
+}
+
+/** Grammar required only when writing an arbitrary custom identity. */
+function validateCustomPhaseId(id: string): void {
+  if (!id || id !== id.trim() || /[\s:]/.test(id) || id.startsWith('[')) {
+    throw new PhaseDirectoryNameError('Invalid custom phase id: empty IDs, whitespace, colons and a leading [ are not allowed');
+  }
 }
 
 /** Keep numeric, letter-suffixed and bracket queries on their legacy path. */
@@ -2015,6 +2019,7 @@ export = {
   phaseDirectoryContext,
   phaseScanTokenSource,
   phaseDirectoryName,
+  validateCustomPhaseId,
   PhaseDirectoryNameError,
   customPhaseQuery,
   customPhaseDirectoryParts,

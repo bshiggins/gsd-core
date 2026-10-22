@@ -48,6 +48,7 @@ const {
   comparePhaseNum,
   matchPhaseDirs,
   phaseDirectoryName,
+  validateCustomPhaseId,
   PhaseDirectoryNameError,
   customPhaseDirectoryParts,
   customDirectoryOwner,
@@ -1494,7 +1495,10 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
       if (collision) {
         error(`Custom ID ${_newPhaseId} has a segment-prefix collision with recorded ID ${collision}; choose a distinct ID`, ERROR_REASON.USAGE);
       }
-      try { _dirName = phaseDirectoryName(String(_newPhaseId), slug, projectCode); }
+      try {
+        validateCustomPhaseId(String(_newPhaseId));
+        _dirName = phaseDirectoryName(String(_newPhaseId), slug, projectCode);
+      }
       catch (cause) {
         if (cause instanceof PhaseDirectoryNameError) error(cause.message, ERROR_REASON.USAGE);
         throw cause;
@@ -1678,9 +1682,16 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
         if (num > maxPhase) maxPhase = num;
       }
     }
+    const prepared = descriptions.map(description => ({description, slug: generateSlugInternal(description) || ''}));
+    if (naming.phaseNaming === 'custom') {
+      try { for (const {slug} of prepared) validateCustomPhaseId(slug.toUpperCase()); }
+      catch (cause) {
+        if (cause instanceof PhaseDirectoryNameError) error(cause.message, ERROR_REASON.USAGE);
+        throw cause;
+      }
+    }
     const added: Record<string, unknown>[] = [];
-    for (const description of descriptions) {
-      const slug = generateSlugInternal(description) || '';
+    for (const {description, slug} of prepared) {
       let newPhaseId: number | string;
       let dirName: string;
       if (naming.phaseNaming === 'custom') {
