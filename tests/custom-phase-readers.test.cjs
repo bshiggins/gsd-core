@@ -514,3 +514,24 @@ test('custom ownership scope: explicit root context excludes an ambient workstre
     cleanup(cwd);
   }
 });
+
+for (const [id, alias] of [['3-Q1', '3'], ['2024-Q1', '2024'], ['007', '7']]) {
+  test(`recorded identity: removing ${alias} preserves ${id}`, () => {
+    const cwd = fixture(null);
+    try {
+      const dir = add(cwd, id, 'Quarter one');
+      const result = run(cwd, ['phase', 'remove', alias, '--force']);
+      assert.equal(result.directory_deleted, null);
+      assert.ok(fs.existsSync(path.join(cwd, dir)), 'a numeric alias must not delete another recorded ID');
+      assert.equal(run(cwd, ['query', 'find-phase', id]).found, true);
+    } finally { cleanup(cwd); }
+  });
+}
+test('recorded identity: case-insensitive configured prefix resolves the exact ID', () => {
+  const cwd = fixture('CCM');
+  try {
+    const dir = add(cwd, '3-Q1', 'Quarter one', 'CCM');
+    assert.equal(run(cwd, ['query', 'find-phase', 'ccm-3-q1']).directory, dir);
+    assert.equal(run(cwd, ['phase', 'remove', 'CCM-3-q1', '--force']).directory_deleted, dir.split('/').at(-1));
+  } finally { cleanup(cwd); }
+});

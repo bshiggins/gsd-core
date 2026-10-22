@@ -1447,7 +1447,7 @@ function phaseScanTokenSource(context: PhaseDirectoryContext): string {
 }
 type CustomPhaseQuery = { id: string; listed: boolean; projectCode?: string | null; prefixes: { id: string; prefix: string }[]; directoryIds?: Record<string, string> };
 
-type CustomIdentityIndex = { roadmap: string; knownIds: string[]; ids: Set<string>; recorded: Set<string>; order: Map<string, number>; prefixes: {id: string; prefix: string}[] };
+type CustomIdentityIndex = { roadmap: string; knownIds: string[]; ids: Set<string>; recorded: Set<string>; recordedByFold: Map<string, string>; order: Map<string, number>; prefixes: {id: string; prefix: string}[] };
 const customIdentityIndexes = new WeakMap<PhaseDirectoryContext, CustomIdentityIndex>();
 
 function customIdentityIndex(options: PhaseDirectoryContext): CustomIdentityIndex {
@@ -1460,7 +1460,7 @@ function customIdentityIndex(options: PhaseDirectoryContext): CustomIdentityInde
     const recorded = new Set(Object.values(options.directoryIds ?? {}));
     const ids = new Set([...headings, ...options.knownIds ?? [], ...recorded]);
     index = {
-      roadmap: options.roadmap, knownIds: options.knownIds, ids, recorded, order: new Map([...ids].map((id, i) => [id, i])),
+      roadmap: options.roadmap, knownIds: options.knownIds, ids, recorded, recordedByFold: new Map([...recorded].map(id => [id.toLowerCase(), id])), order: new Map([...ids].map((id, i) => [id, i])),
       prefixes: [...ids].filter(token => token && !UNSAFE_PHASE_DIRECTORY_PART_RE.test(token))
         .sort((a, b) => b.length - a.length)
         .map(token => ({id: token, prefix: phaseDirectoryName(token, '')})),
@@ -1475,14 +1475,17 @@ function customPhaseQuery(id: string, options: PhaseDirectoryContext): CustomPha
   if (options?.phaseNaming !== 'custom' || id.startsWith('[')) return null;
   if (UNSAFE_PHASE_DIRECTORY_PART_RE.test(id)) return null;
   const prefix = options.projectCode ? `${options.projectCode}-` : '';
-  const body = prefix && id.startsWith(prefix) ? id.slice(prefix.length) : id;
+  const body = prefix && id.toLowerCase().startsWith(prefix.toLowerCase()) ? id.slice(prefix.length) : id;
   const index = customIdentityIndex(options);
+  // A marker is authoritative, including numeric IDs and their exact padding.
+  const recorded = index.recordedByFold.get(body.toLowerCase());
+  if (recorded !== undefined) id = recorded;
   const listed = index.ids.has(id);
   // Legacy numeric tokens (including configured display prefixes) keep their
   // reading unless a writer explicitly recorded this exact ID. That record
   // also distinguishes an unpadded 2A from the custom continuation 2A-2.
   if (!index.recorded.has(id) && !body.includes('-') && LEGACY_PHASE_ID_RE.test(body)) return null;
-  if (!isCustomPhaseId(id) && !(listed && /[a-z]/i.test(id))) return null;
+  if (!index.recorded.has(id) && !isCustomPhaseId(id) && !(listed && /[a-z]/i.test(id))) return null;
   // Only a complete legacy segment identifies a numeric directory. Digit-leading
   // custom IDs such as 2FA must not collapse to their leading digit run.
   if (!listed && !options.directoryIds?.[id] && body.includes('-') && LEGACY_PHASE_ID_RE.test(body.split('-')[0])) return null;
@@ -1538,7 +1541,7 @@ function customDirectoryCandidates(dir: string, context: PhaseDirectoryContext):
 
 function customPhaseDirectoryParts(dir: string, query: CustomPhaseQuery): { id: string; slug: string } | null {
   const owner = customDirectoryOwner(dir, query);
-  return owner?.id === query.id ? owner : null;
+  return owner?.id.toLowerCase() === query.id.toLowerCase() ? owner : null;
 }
 
 /**
@@ -1614,6 +1617,12 @@ function customPhaseDirectoryParts(dir: string, query: CustomPhaseQuery): { id: 
 function matchPhaseDirs(dirs: string[], query: string, convention: string | null | undefined, context: PhaseDirectoryContext): { matches: string[]; usedBareFallback: boolean } {
   const custom = convention === 'bracket' ? null : customPhaseQuery(query, context);
   const normalized = normalizePhaseName(query);
+  // Recorded directories never enter legacy token or bare-number fallback for
+  // another query. Keep those compatibility passes for unmarked directories.
+  if (context.phaseNaming === 'custom') {
+    dirs = dirs.filter(dir => context.directoryIds?.[dir] === undefined
+      || (custom !== null && customPhaseDirectoryParts(dir, custom) !== null));
+  }
   if (custom) {
     // A full directory name is an existing lookup form, distinct from an ID prefix.
     const exact = dirs.filter(d => d === custom.id);
