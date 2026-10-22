@@ -21,7 +21,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdModule = require('./phase-id.cjs');
-const { phaseDirectoryContext, customPhaseQuery, customPhaseDirectoryParts, normalizePhaseName, matchPhaseDirs, phaseNumberForMatch, isSentinelPhaseId, comparePhaseNum } = phaseIdModule;
+const { CUSTOM_PHASE_ID_FILE, phaseDirectoryContext, customPhaseQuery, customPhaseDirectoryParts, normalizePhaseName, matchPhaseDirs, phaseNumberForMatch, isSentinelPhaseId, comparePhaseNum } = phaseIdModule;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import coreUtilsModule = require('./core-utils.cjs');
 const { readSubdirectories, getPhaseFileStats, extractCanonicalPlanId, toPosixPath, findUnsummarizedPlans } = coreUtilsModule;
@@ -211,15 +211,27 @@ function phaseDirectoryOptions(cwd: string, config?: Record<string, unknown>, ro
     phase_naming: readScopedConfigValue(cwd, ['phase_naming']).value,
     project_code: readScopedConfigValue(cwd, ['project_code']).value,
   };
-  if (naming.phase_naming !== 'custom') return phaseDirectoryContext(naming);
-  if (roadmap !== undefined) return phaseDirectoryContext(naming, roadmap);
+  const context = phaseDirectoryContext(naming, roadmap ?? '');
+  if (naming.phase_naming !== 'custom') return context;
+  // Load directory-owned IDs once for this scope, including archive fallback.
+  // Old directories have no marker: reads retain heading hints, but removal
+  // refuses to infer their ownership from a mutable roadmap or slug.
+  context.directoryIds = Object.create(null) as Record<string, string>;
+  const roots = [path.join(planningDir(cwd), 'phases'), ...listArchiveVersionDirs(cwd).map(entry => entry.archivePath)];
+  for (const root of roots) for (const dir of readSubdirectories(root, true)) {
+    try {
+      const id = fs.readFileSync(path.join(root, dir, CUSTOM_PHASE_ID_FILE), 'utf8').trim();
+      if (id) context.directoryIds[dir] = id;
+    } catch { /* A legacy directory has no recorded identity. */ }
+  }
+  if (roadmap !== undefined) return context;
   let fd: number | undefined;
   try {
     fd = fs.openSync(path.join(planningDir(cwd), 'ROADMAP.md'), 'r');
     const buffer = Buffer.alloc(1024 * 1024);
     const count = fs.readSync(fd, buffer, 0, buffer.length, 0);
-    return phaseDirectoryContext(naming, buffer.toString('utf8', 0, count));
-  } catch { return phaseDirectoryContext(naming); }
+    return {...context, ...phaseDirectoryContext(naming, buffer.toString('utf8', 0, count))};
+  } catch { return context; }
   finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 

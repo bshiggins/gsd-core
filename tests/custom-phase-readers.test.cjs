@@ -253,3 +253,28 @@ test('smart-entry: non-phase directories cannot hide the latest failed numeric p
     assert.equal(require('../gsd-core/bin/lib/smart-entry.cjs').classifyProject(cwd).signals.verify_failed, true);
   } finally { cleanup(cwd); }
 });
+
+for (const code of [null, 'CCM']) {
+  test(`custom removal: orphaned longer ID survives removing its prefix with code ${code} (#5186)`, () => {
+    const cwd = fixture(code);
+    try {
+      const short = add(cwd, 'A', 'First', code);
+      const long = add(cwd, 'A-B', 'Second', code);
+      fs.writeFileSync(path.join(cwd, '.planning/ROADMAP.md'), '# Roadmap\n## Phases\n### Phase A: First\n');
+      run(cwd, ['phase', 'remove', 'A', '--force']);
+      assert.equal(fs.existsSync(path.join(cwd, short)), false);
+      assert.equal(fs.existsSync(path.join(cwd, long)), true);
+      assert.equal(run(cwd, ['query', 'find-phase', 'A']).found, false);
+      assert.equal(run(cwd, ['query', 'find-phase', 'A-B']).directory, long);
+    } finally { cleanup(cwd); }
+  });
+  test(`custom ownership: headings cannot reassign a directory with code ${code} (#5186)`, () => {
+    const cwd = fixture(code);
+    try {
+      const long = add(cwd, 'A-B', 'Second', code);
+      fs.writeFileSync(path.join(cwd, '.planning/ROADMAP.md'), '# Roadmap\n## Phases\n### Phase A: First\n');
+      run(cwd, ['phase', 'remove', 'A', '--force']);
+      assert.equal(fs.existsSync(path.join(cwd, long)), true);
+    } finally { cleanup(cwd); }
+  });
+}

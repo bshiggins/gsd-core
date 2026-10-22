@@ -30,6 +30,7 @@ const { toPosixPath, generateSlugInternal, extractOneLinerFromBody } = coreUtils
 import phaseIdMod = require('./phase-id.cjs');
 const {
   phaseDirectoryName,
+  CUSTOM_PHASE_ID_FILE,
   PhaseDirectoryNameError,
   isCustomPhaseId,
   normalizePhaseName,
@@ -3817,6 +3818,7 @@ function cmdScaffold(cwd: string, type: string, options: ScaffoldOptions, raw: b
       const dirPath = path.resolve(phasesParent, dirName);
       if (path.dirname(dirPath) !== path.resolve(phasesParent)) error('Phase directory escapes the phases directory', ERROR_REASON.USAGE);
       platformEnsureDir(dirPath);
+      if (scaffoldConfig.phase_naming === 'custom') platformWriteSync(path.join(dirPath, CUSTOM_PHASE_ID_FILE), phase);
       output({ created: true, directory: toPosixPath(path.relative(cwd, dirPath)), path: dirPath }, raw, dirPath);
       return;
     }

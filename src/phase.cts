@@ -50,6 +50,8 @@ const {
   phaseDirectoryName,
   PhaseDirectoryNameError,
   customPhaseDirectoryParts,
+  CUSTOM_PHASE_ID_FILE,
+  isCustomPhaseId,
   isSentinelPhaseId,
   scopeToPhase,
   OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
@@ -1549,6 +1551,7 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
 
     platformEnsureDir(dirPath);
     platformWriteSync(path.join(dirPath, '.gitkeep'), '');
+    if (config.phase_naming === 'custom') platformWriteSync(path.join(dirPath, CUSTOM_PHASE_ID_FILE), String(_newPhaseId));
 
     const dependsOn =
       config.phase_naming === 'custom' ? '' : dependsOnLine(_newPhaseId, roadmapDeclaredPhaseNums(rawContent));
@@ -1673,6 +1676,7 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
       const dirPath = path.join(planningDir(cwd), 'phases', dirName);
       platformEnsureDir(dirPath);
       platformWriteSync(path.join(dirPath, '.gitkeep'), '');
+      if (config.phase_naming === 'custom') platformWriteSync(path.join(dirPath, CUSTOM_PHASE_ID_FILE), String(newPhaseId));
       const dependsOn =
         config.phase_naming === 'custom' ? '' : dependsOnLine(newPhaseId, roadmapDeclaredPhaseNums(rawContent));
       const phaseEntry =
@@ -2593,7 +2597,8 @@ function cmdPhaseRemove(
   // taking `matches[0]` silently is strictly worse than anywhere else: it turns
   // "resolve nothing" into "delete one of two candidates, unrecoverably, and
   // renumber every phase after it". Refuse before any file is touched.
-  const { matches: phaseDirMatches } = matchPhaseDirs(subdirs, targetPhase, undefined, phaseDirectoryOptions(cwd));
+  const directoryContext = phaseDirectoryOptions(cwd);
+  const { matches: phaseDirMatches } = matchPhaseDirs(subdirs, targetPhase, undefined, directoryContext);
   if (phaseDirMatches.length > 1) {
     output(
       {
@@ -2614,6 +2619,10 @@ function cmdPhaseRemove(
     return;
   }
   const targetDir = phaseDirMatches[0] || null;
+  if (targetDir && directoryContext.phaseNaming === 'custom'
+    && isCustomPhaseId(targetPhase) && !directoryContext.directoryIds?.[targetDir]) {
+    error(`Cannot prove ownership of custom phase directory ${targetDir}; refusing removal without ${CUSTOM_PHASE_ID_FILE}`, ERROR_REASON.USAGE);
+  }
 
   if (targetDir && !force) {
     // #3183: canonical summary set (root+nested) from the single owner —

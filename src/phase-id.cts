@@ -1423,7 +1423,8 @@ function isCustomPhaseId(id: string): boolean {
     && !id.startsWith('[');
 }
 
-type PhaseDirectoryContext = { phaseNaming: unknown; projectCode: string | null; roadmap: string; knownIds: string[] };
+const CUSTOM_PHASE_ID_FILE = '.phase-id';
+type PhaseDirectoryContext = { phaseNaming: unknown; projectCode: string | null; roadmap: string; knownIds: string[]; directoryIds?: Record<string, string> };
 
 /** Naming policy is supplied by the config owner; grammar remains pure. */
 function phaseDirectoryContext(config: Record<string, unknown>, roadmap = '', knownIds: string[] = []): PhaseDirectoryContext {
@@ -1434,7 +1435,7 @@ function phaseDirectoryContext(config: Record<string, unknown>, roadmap = '', kn
 function phaseScanTokenSource(context: PhaseDirectoryContext): string {
   return context?.phaseNaming === 'custom' ? '[^ \t:\n]+' : PHASE_NUMBER_TOKEN_SOURCE;
 }
-type CustomPhaseQuery = { id: string; listed: boolean; projectCode?: string | null; prefixes: { id: string; prefix: string }[] };
+type CustomPhaseQuery = { id: string; listed: boolean; projectCode?: string | null; prefixes: { id: string; prefix: string }[]; directoryIds?: Record<string, string> };
 
 /** Custom heading IDs are identity hints only; titles never locate directories. */
 function customPhaseQuery(id: string, roadmap: string, options: PhaseDirectoryContext): CustomPhaseQuery | null {
@@ -1456,7 +1457,7 @@ function customPhaseQuery(id: string, roadmap: string, options: PhaseDirectoryCo
   if (!listed.includes(id) && body.includes('-') && LEGACY_PHASE_ID_RE.test(body.split('-')[0])) return null;
   // Listed identities outrank the query; a directory's slug never invents an ID.
   return {
-    id, listed: listed.includes(id), projectCode: options.projectCode,
+    id, listed: listed.includes(id), projectCode: options.projectCode, directoryIds: options.directoryIds,
     prefixes: (listed.includes(id) ? listed : [...listed, id])
       .filter(token => !UNSAFE_PHASE_DIRECTORY_PART_RE.test(token))
       .map(token => ({id: token, prefix: phaseDirectoryName(token, '')})),
@@ -1475,6 +1476,16 @@ function customDirectoryBodies(dir: string, projectCode?: string | null): string
 
 /** Known IDs and writer-shaped prefixes are computed once per query. */
 function customDirectoryOwner(dir: string, query: CustomPhaseQuery): { id: string; slug: string } | null {
+  // A writer-recorded identity survives heading edits and archival. A slug
+  // cannot prove where an arbitrary hyphenated ID ends. Legacy directories
+  // keep heading-assisted read compatibility; destructive callers require proof.
+  const recordedId = query.directoryIds?.[dir];
+  if (recordedId !== undefined) {
+    if (UNSAFE_PHASE_DIRECTORY_PART_RE.test(recordedId)) return null;
+    const prefix = phaseDirectoryName(recordedId, '');
+    const body = customDirectoryBodies(dir, query.projectCode).find(body => body.startsWith(prefix));
+    return body ? { id: recordedId, slug: body.slice(prefix.length) } : null;
+  }
   for (const body of customDirectoryBodies(dir, query.projectCode)) {
     const owner = query.prefixes.find(candidate => body.startsWith(candidate.prefix));
     if (owner) return {id: owner.id, slug: body.slice(owner.prefix.length)};
@@ -1937,6 +1948,7 @@ export = {
   customPhaseQuery,
   customPhaseDirectoryParts,
   customDirectoryOwner,
+  CUSTOM_PHASE_ID_FILE,
   isCustomPhaseId,
   phaseNumberForMatch,
   phaseKeyFromToken,
