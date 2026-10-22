@@ -1440,6 +1440,13 @@ function isCustomPhaseId(id: string): boolean {
     && !id.startsWith('[');
 }
 
+/** Preserve every legacy segment while applying its normal padding rules. */
+function recordedPhaseKey(id: string): string {
+  // Whole-token normalization can discard a letter-suffixed continuation
+  // (2A-2). Normalize its segments independently so it never aliases 2A.
+  return (LEGACY_PHASE_ID_RE.test(id) ? id.split('-').map(normalizePhaseName).join('-') : id).toLowerCase();
+}
+
 const CUSTOM_PHASE_ID_FILE = '.phase-id';
 type PhaseDirectoryContext = { phaseNaming: unknown; projectCode: string | null; roadmap: string; knownIds: string[]; directoryIds?: Record<string, string>; directoryIdsByRoot?: Record<string, Record<string, string>> };
 
@@ -1467,7 +1474,7 @@ function customIdentityIndex(options: PhaseDirectoryContext): CustomIdentityInde
     const recorded = new Set(Object.values(options.directoryIds ?? {}));
     const ids = new Set([...headings, ...options.knownIds ?? [], ...recorded]);
     index = {
-      roadmap: options.roadmap, knownIds: options.knownIds, explicitIds: new Set(options.knownIds ?? []), ids, recorded, recordedByFold: new Map([...recorded].map(id => [(LEGACY_PHASE_ID_RE.test(id) ? normalizePhaseName(id) : id).toLowerCase(), id])), order: new Map([...ids].map((id, i) => [id, i])),
+      roadmap: options.roadmap, knownIds: options.knownIds, explicitIds: new Set(options.knownIds ?? []), ids, recorded, recordedByFold: new Map([...recorded].map(id => [recordedPhaseKey(id), id])), order: new Map([...ids].map((id, i) => [id, i])),
       prefixes: [...ids].filter(token => token && !UNSAFE_PHASE_DIRECTORY_PART_RE.test(token))
         .sort((a, b) => b.length - a.length)
         .map(token => ({id: token, prefix: phaseDirectoryName(token, '')})),
@@ -1486,7 +1493,7 @@ function customPhaseQuery(id: string, options: PhaseDirectoryContext): CustomPha
   const index = customIdentityIndex(options);
   // Markers are authoritative; only legacy-shaped IDs share their ordinary
   // numeric padding normalization. Custom digit-leading IDs never collapse.
-  const recorded = index.recordedByFold.get((LEGACY_PHASE_ID_RE.test(body) ? normalizePhaseName(body) : body).toLowerCase());
+  const recorded = index.recordedByFold.get(recordedPhaseKey(body));
   if (recorded !== undefined) id = recorded;
   const listed = index.ids.has(id);
   // Legacy numeric tokens (including configured display prefixes) keep their

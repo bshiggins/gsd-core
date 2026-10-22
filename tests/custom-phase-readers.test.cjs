@@ -906,3 +906,11 @@ for (const id of ['[CCM.01-01]', '[CCM]-01']) {
     } finally { cleanup(cwd); }
   });
 }
+
+test('recorded numeric aliases: a letter-suffixed continuation never aliases its parent', () => {
+  const cwd = fixture(null);
+  try {
+    add(cwd, '2A');
+    assert.equal(run(cwd, ['query', 'find-phase', '2A-2']).found, false);
+  } finally { cleanup(cwd); }
+});
