@@ -4,6 +4,7 @@ const { test, describe, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 
 const projects = new Set();
@@ -48,4 +49,12 @@ describe('#4304 / ADR-612 Decision 2: new-project default remains unchanged', ()
     assert.equal(config.phase_id_convention, 'bracket');
     assert.equal(config.project_code, null);
   });
+});
+
+
+test('phase_id_convention documentation says these exact strings without a stale count', () => {
+  const documentation = fs.readFileSync(path.join(__dirname, '..', 'docs', 'CONFIGURATION.md'), 'utf8');
+  const row = splitLines(documentation).find((line) => line.startsWith('| `phase_id_convention` |'));
+  assert.ok(row, 'phase_id_convention must have a configuration row');
+  assert.ok(row.includes('accepts only these exact strings'), row);
 });
