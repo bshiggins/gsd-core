@@ -1517,9 +1517,16 @@ function customDirectoryOwner(dir: string, query: CustomPhaseQuery): { id: strin
   const recordedId = query.directoryIds?.[dir];
   if (recordedId !== undefined) {
     if (UNSAFE_PHASE_DIRECTORY_PART_RE.test(recordedId)) return null;
-    const prefix = phaseDirectoryName(recordedId, '');
-    const body = customDirectoryBodies(dir, query.projectCode).find(body => body.startsWith(prefix));
-    return body ? { id: recordedId, slug: body.slice(prefix.length) } : null;
+    const prefixes = [phaseDirectoryName(recordedId, '')];
+    // Scaffold retains legacy numeric directory padding while recording the
+    // requested ID. Padding affects the shape only; queries still name the
+    // recorded ID exactly, so 7 cannot select a directory recorded as 007.
+    if (LEGACY_PHASE_ID_RE.test(recordedId)) prefixes.push(phaseDirectoryName(normalizePhaseName(recordedId), ''));
+    for (const prefix of prefixes) {
+      const body = customDirectoryBodies(dir, query.projectCode).find(body => body.startsWith(prefix));
+      if (body) return { id: recordedId, slug: body.slice(prefix.length) };
+    }
+    return null;
   }
   for (const body of customDirectoryBodies(dir, query.projectCode)) {
     const owner = query.prefixes.find(candidate => body.startsWith(candidate.prefix));
@@ -1534,8 +1541,11 @@ function customDirectoryCandidates(dir: string, context: PhaseDirectoryContext):
   const recorded = context.directoryIds?.[dir];
   if (recorded !== undefined) {
     if (!recorded || UNSAFE_PHASE_DIRECTORY_PART_RE.test(recorded)) return [];
-    return customDirectoryBodies(dir, context.projectCode).some(body => body.startsWith(phaseDirectoryName(recorded, '')))
-      ? [recorded] : [];
+    const owner = customDirectoryOwner(dir, {
+      id: recorded, listed: true, projectCode: context.projectCode,
+      directoryIds: context.directoryIds, prefixes: [],
+    });
+    return owner ? [owner.id] : [];
   }
   const prefixes = customIdentityIndex(context).prefixes;
   return [...new Set(customDirectoryBodies(dir, context.projectCode).flatMap(body =>

@@ -805,3 +805,14 @@ test('read-only naming: two-key projection agrees with loadConfig across resolut
     }
   }
 });
+
+for (const code of [null, 'CCM']) for (const id of ['3', '4A', '5.2']) {
+  test(`recorded scaffold identity: ${id} resolves with configured code ${code}`, () => {
+    const cwd = fixture(code);
+    try {
+      const created = run(cwd, ['scaffold', 'phase-dir', '--phase', id, '--name', 'Numeric']);
+      assert.equal(fs.readFileSync(path.join(cwd, created.directory, '.phase-id'), 'utf8').trim(), id);
+      assert.equal(run(cwd, ['query', 'find-phase', id]).directory, created.directory);
+    } finally { cleanup(cwd); }
+  });
+}

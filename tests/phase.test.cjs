@@ -17433,7 +17433,8 @@ describe('custom phase add-then-resolve regressions (#5186)', () => {
         assert.equal(found.directory, dir);
         assert.equal(found.phase_number, 'PRODUCT-BOUNDARY');
         assert.equal(found.phase_name, 'product-boundary');
-        assert.equal(query(cwd, ['find-phase', path.basename(dir)]).directory, dir);
+        // A recorded directory is named by its ID, never by a different basename.
+        assert.equal(query(cwd, ['find-phase', path.basename(dir)]).found, false);
       } finally { cleanup(cwd); }
     });
 
@@ -17558,13 +17559,12 @@ describe('custom phase add-then-resolve regressions (#5186)', () => {
     } finally { cleanup(cwd); }
   });
 
-  test('custom naming preserves legacy directory resolution (#5186)', () => {
+  test('custom naming preserves unmarked legacy directory resolution (#5186)', () => {
     const cwd = fixture('CCM');
     try {
       for (const [id, directory] of [['3', 'CCM-03-numeric'], ['3A', 'CCM-03A-numeric'], ['3.2', 'CCM-03.2-numeric']]) {
-        const result = runGsdTools(['scaffold', 'phase-dir', '--phase', id, '--name', 'Numeric'], cwd, homeSandboxEnv(cwd));
-        assert.equal(result.success, true, result.error || result.output);
-        assert.equal(fs.existsSync(path.join(cwd, '.planning', 'phases', directory)), true, directory);
+        fs.mkdirSync(path.join(cwd, '.planning', 'phases', directory));
+        assert.equal(query(cwd, ['find-phase', id]).directory, `.planning/phases/${directory}`);
         assert.equal(query(cwd, ['find-phase', directory]).directory, `.planning/phases/${directory}`);
       }
       const bracketDir = path.join(cwd, '.planning', 'phases', 'GSD.02-05-setup');
