@@ -8794,6 +8794,41 @@ describe('#5179 preflight branch coverage', () => {
     assert.ok(fs.existsSync(path.join(fixture.dest, 'gsd-help.md')), 'the flat writer must install commands through the symlink');
   });
 
+  test('does not newly refuse symlinked legacy-flat local skills cleanup', (t) => {
+    const root = createTempDir('gsd-5179-local-skills-');
+    t.after(() => cleanup(root));
+    const { configDir } = runMinimalInstall({
+      runtime: 'claude', scope: 'local', root, extraArgs: ['--no-legacy-cleanup'],
+    });
+    const skillsTarget = path.join(root, 'previous-skills');
+    const staleSkill = path.join(skillsTarget, 'gsd-stale');
+    fs.mkdirSync(staleSkill, { recursive: true });
+    fs.writeFileSync(path.join(staleSkill, 'SKILL.md'), '# stale skill\n');
+    fs.writeFileSync(path.join(skillsTarget, 'user-skill.md'), '# keep user skill\n');
+    const skillsDir = path.join(configDir, 'skills');
+    try {
+      fs.symlinkSync(skillsTarget, skillsDir, process.platform === 'win32' ? 'junction' : 'dir');
+    } catch (error) {
+      if (error.code === 'EPERM' || error.code === 'EACCES' || error.code === 'ENOTSUP') {
+        t.skip(`directory symlink creation is unavailable: ${error.code}`);
+        return;
+      }
+      throw error;
+    }
+
+    const result = runNode([INSTALL_SCRIPT, '--claude', '--local', '--no-legacy-cleanup'], {
+      cwd: root,
+      env: installerEnv({ HOME: root, USERPROFILE: root, GSD_ALLOW_SYMLINKED_DEST: '' }),
+      timeoutMs: INSTALL_TIMEOUT_MS,
+    });
+    const output = stripAnsi(`${result.stdout}\n${result.stderr}`);
+    assert.equal(result.exitCode, 0, output);
+    assert.doesNotMatch(output, /refusing to (write|create)/);
+    assert.equal(fs.lstatSync(skillsDir).isSymbolicLink(), true);
+    assert.equal(fs.existsSync(staleSkill), false, 'legacy-flat cleanup removes stale GSD skills through the symlink');
+    assert.equal(fs.readFileSync(path.join(skillsTarget, 'user-skill.md'), 'utf8'), '# keep user skill\n');
+  });
+
   test('does not refuse a trusted non-symlinked layout', (t) => {
     const root = createTempDir('gsd-5179-trusted-');
     t.after(() => cleanup(root));
