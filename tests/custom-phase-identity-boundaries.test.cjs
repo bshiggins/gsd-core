@@ -18,7 +18,7 @@ function run(cwd, args) {
   return JSON.parse(result.output);
 }
 for (const code of [null, 'CCM']) for (const title of ['2024 roadmap', '3 steps']) {
-  test(`round 4 Major 1: add then find digit-leading title ${title}, code ${code}`, () => {
+  test(`custom directory lookup: add then find digit-leading title ${title}, code ${code}`, () => {
     const cwd = fixture(code);
     try {
       if (code) fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), `\n### Phase ${code}: Independent phase\n`);
@@ -31,7 +31,7 @@ for (const code of [null, 'CCM']) for (const title of ['2024 roadmap', '3 steps'
   });
 }
 for (const id of ['PRODUCT-BOUNDARY', 'SETUP-2']) {
-  test(`round 4 Major 2: planning inspect custom checkbox ${id}`, () => {
+  test(`custom identity readers: planning inspect custom checkbox ${id}`, () => {
     const cwd = fixture();
     try {
       run(cwd, ['query', 'phase.add', 'Boundary', '--id', id]);
@@ -42,7 +42,7 @@ for (const id of ['PRODUCT-BOUNDARY', 'SETUP-2']) {
       assert.equal(phase.roadmap_acceptance.checkbox, true);
     } finally { cleanup(cwd); }
   });
-  test(`round 4 Major 2: workstream inventory custom key ${id}`, () => {
+  test(`custom identity readers: workstream inventory custom key ${id}`, () => {
     const cwd = fixture();
     try {
       const { seedWorkstream } = require('./fixtures/index.cjs');
@@ -62,7 +62,7 @@ for (const id of ['PRODUCT-BOUNDARY', 'SETUP-2']) {
     } finally { cleanup(cwd); }
   });
 }
-test('round 4 Major 2: SETUP-2 and numeric 2 have distinct owner keys', () => {
+test('custom identity readers: SETUP-2 and numeric 2 have distinct owner keys', () => {
   const context = {phaseNaming: 'custom', projectCode: null, roadmap: '### Phase SETUP-2: Setup\n### Phase 2: Numeric\n', knownIds: []};
   assert.equal(phaseId.phaseKeyFromToken('SETUP-2', context), 'SETUP-2');
   assert.equal(phaseId.phaseKeyFromDir('SETUP-2-boundary', undefined, context), 'SETUP-2');
@@ -71,7 +71,7 @@ test('round 4 Major 2: SETUP-2 and numeric 2 have distinct owner keys', () => {
   assert.notEqual(phaseId.phaseKeyFromToken('SETUP-2', context), phaseId.phaseKeyFromToken('2', context));
 });
 for (const id of ['../evil', 'bad/id', 'bad\\id', 'bad..id']) for (const verb of ['add', 'scaffold']) {
-  test(`round 4 Major 3: ${verb} rejects unsafe id ${JSON.stringify(id)}`, () => {
+  test(`custom directory safety: ${verb} rejects unsafe id ${JSON.stringify(id)}`, () => {
     const cwd = fixture();
     try {
       const before = fs.readdirSync(path.join(cwd, '.planning')).sort();
@@ -84,11 +84,11 @@ for (const id of ['../evil', 'bad/id', 'bad\\id', 'bad..id']) for (const verb of
     } finally { cleanup(cwd); }
   });
 }
-test('round 4 Major 3: writer owner rejects NUL before constructing a path', () => {
+test('custom directory safety: writer owner rejects NUL before constructing a path', () => {
   assert.throws(() => phaseId.phaseDirectoryName('bad\0id', 'x'), /phase id/i);
 });
 for (const verb of ['add', 'scaffold']) {
-  test(`round 4 Major 3: ${verb} rejects NUL through its command entry point`, () => {
+  test(`custom directory safety: ${verb} rejects NUL through its command entry point`, () => {
     const cwd = fixture();
     try {
       // An OS argv cannot contain NUL; invoke the same command function in a child.
@@ -107,7 +107,7 @@ for (const verb of ['add', 'scaffold']) {
   });
 }
 for (const id of ['PRODUCT-BOUNDARY', 'SETUP-2']) {
-  test(`round 4 Major 2: state validates custom ${id} independently of numeric 2`, () => {
+  test(`custom identity readers: state validates custom ${id} independently of numeric 2`, () => {
     const cwd = fixture();
     try {
       run(cwd, ['query', 'phase.add', 'Boundary', '--id', id]);
