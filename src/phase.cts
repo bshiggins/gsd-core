@@ -16,6 +16,7 @@
  *   This file provides the CJS (sync) implementations of those handlers.
  */
 
+import type { PhaseDirectoryContext } from './phase-id.cjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -47,9 +48,6 @@ const {
   phaseMarkdownRegexSource,
   comparePhaseNum,
   matchPhaseDirs,
-  phaseDirectoryName,
-  validateCustomPhaseIds,
-  PhaseDirectoryNameError,
   customPhaseDirectoryParts,
   customDirectoryOwner,
   phaseScanTokenSource,
@@ -88,7 +86,7 @@ import planningWorkspace = require('./planning-workspace.cjs');
 import frontmatterMod = require('./frontmatter.cjs');
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- state.cjs is an export= CommonJS module
 import stateMod = require('./state.cjs');
-import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync, contentChangedAfterNormalize } from './shell-command-projection.cjs';
+import { platformWriteSync, platformReadSync, retryRenameSync, contentChangedAfterNormalize } from './shell-command-projection.cjs';
 import { parsePlanningDoc, findField, readNode, setFieldValue, serialize } from './planning-document.cjs';
 import { formatGsdSlash, resolveRuntime } from './runtime-slash.cjs';
 import { realClock } from './clock.cjs';
@@ -1479,23 +1477,11 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
     const rawContent = fs.readFileSync(roadmapPath, 'utf-8');
     const content = extractCurrentMilestone(rawContent, cwd);
 
-    const projectCode = (naming.projectCode as string) || '';
-    const prefix = projectCode ? `${projectCode}-` : '';
-
     let _newPhaseId: number | string;
-    let _dirName: string;
 
     if (naming.phaseNaming === 'custom') {
       _newPhaseId = customId || slug.toUpperCase();
       if (!_newPhaseId) error('--id required when phase_naming is "custom"');
-      try {
-        validateCustomPhaseIds([String(_newPhaseId)], {...naming, roadmap: rawContent});
-        _dirName = phaseDirectoryName(String(_newPhaseId), slug, projectCode);
-      }
-      catch (cause) {
-        if (cause instanceof PhaseDirectoryNameError) error(cause.message, cause.kind === 'collision' ? ERROR_REASON.PHASE_ID_COLLISION : ERROR_REASON.USAGE);
-        throw cause;
-      }
     } else {
       // Collect all phase numbers visible in the current-milestone content.
       // Three sources are scanned so that a phase in ANY representation
@@ -1553,17 +1539,12 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
       collectSiblingWorktreePhaseNums(cwd, usedPhaseNums);
       const maxUsed = usedPhaseNums.size > 0 ? Math.max(...usedPhaseNums) : 0;
       _newPhaseId = maxUsed + 1;
-      const paddedNum = String(_newPhaseId).padStart(2, '0');
-      _dirName = `${prefix}${paddedNum}-${slug}`;
     }
 
-    const phasesRoot = path.resolve(planningDir(cwd), 'phases');
-    const dirPath = path.resolve(phasesRoot, _dirName);
-    if (path.dirname(dirPath) !== phasesRoot) error('Phase directory escapes the phases directory', ERROR_REASON.USAGE);
-
-    platformEnsureDir(dirPath);
-    platformWriteSync(path.join(dirPath, '.gitkeep'), '');
-    if (naming.phaseNaming === 'custom') platformWriteSync(path.join(dirPath, CUSTOM_PHASE_ID_FILE), String(_newPhaseId));
+    const [{dirName: _dirName}] = phaseLocatorMod.createPhaseDirectories(cwd, [{
+      id: String(_newPhaseId), slug,
+      directoryId: typeof _newPhaseId === 'number' ? String(_newPhaseId).padStart(2, '0') : _newPhaseId,
+    }], {...naming, roadmap: rawContent});
 
     const dependsOn =
       naming.phaseNaming === 'custom' ? '' : dependsOnLine(_newPhaseId, roadmapDeclaredPhaseNums(rawContent));
@@ -1625,8 +1606,6 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
   if (!fs.existsSync(roadmapPath)) {
     error('ROADMAP.md not found');
   }
-  const projectCode = (naming.projectCode as string) || '';
-  const phasesRoot = path.resolve(planningDir(cwd), 'phases');
 
   const results = withPlanningLock(cwd, () => {
     let rawContent = fs.readFileSync(roadmapPath, 'utf-8');
@@ -1675,32 +1654,15 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
         if (num > maxPhase) maxPhase = num;
       }
     }
-    const entries = descriptions.map(description => ({description, slug: generateSlugInternal(description) || ''}));
-    let prepared: {description: string; slug: string; newPhaseId: number | string; dirName: string; dirPath: string}[];
-    try {
-      if (naming.phaseNaming === 'custom') {
-        validateCustomPhaseIds(entries.map(({slug}) => slug.toUpperCase()), {...naming, roadmap: rawContent});
-      }
-      prepared = entries.map(({description, slug}) => {
-        const newPhaseId = naming.phaseNaming === 'custom' ? slug.toUpperCase() : ++maxPhase;
-        const dirName = phaseDirectoryName(
-          typeof newPhaseId === 'number' ? String(newPhaseId).padStart(2, '0') : newPhaseId,
-          slug,
-          projectCode,
-        );
-        const dirPath = path.resolve(phasesRoot, dirName);
-        if (path.dirname(dirPath) !== phasesRoot) error('Phase directory escapes the phases directory', ERROR_REASON.USAGE);
-        return {description, slug, newPhaseId, dirName, dirPath};
-      });
-    } catch (cause) {
-      if (cause instanceof PhaseDirectoryNameError) error(cause.message, cause.kind === 'collision' ? ERROR_REASON.PHASE_ID_COLLISION : ERROR_REASON.USAGE);
-      throw cause;
-    }
+    const entries = descriptions.map(description => {
+      const slug = generateSlugInternal(description) || '';
+      const newPhaseId = naming.phaseNaming === 'custom' ? slug.toUpperCase() : ++maxPhase;
+      return {description, slug, newPhaseId, id: String(newPhaseId),
+        directoryId: typeof newPhaseId === 'number' ? String(newPhaseId).padStart(2, '0') : newPhaseId};
+    });
+    const prepared = phaseLocatorMod.createPhaseDirectories(cwd, entries, {...naming, roadmap: rawContent});
     const added: Record<string, unknown>[] = [];
-    for (const {description, slug, newPhaseId, dirName, dirPath} of prepared) {
-      platformEnsureDir(dirPath);
-      platformWriteSync(path.join(dirPath, '.gitkeep'), '');
-      if (naming.phaseNaming === 'custom') platformWriteSync(path.join(dirPath, CUSTOM_PHASE_ID_FILE), String(newPhaseId));
+    for (const {description, slug, newPhaseId, dirName} of prepared) {
       const dependsOn =
         naming.phaseNaming === 'custom' ? '' : dependsOnLine(newPhaseId, roadmapDeclaredPhaseNums(rawContent));
       const phaseEntry =
@@ -1916,21 +1878,13 @@ function cmdPhaseInsert(
       allocation === 'sibling' && lastDotIndex !== -1
         ? normalizedBase.slice(0, lastDotIndex)
         : normalizedBase;
-    const insertConfig = phaseDirectoryOptions(cwd, undefined, '');
-    const projectCode = (insertConfig.projectCode as string) || '';
-    const pfx = projectCode ? `${projectCode}-` : '';
-    const _dirName = `${pfx}${_decimalPhase}-${slug}`;
-    const phasesRoot = path.resolve(planningDir(cwd), 'phases');
-    const dirPath = path.resolve(phasesRoot, _dirName);
-    if (path.dirname(dirPath) !== phasesRoot) error('Phase directory escapes the phases directory', ERROR_REASON.USAGE);
-
-    platformEnsureDir(dirPath);
-    platformWriteSync(path.join(dirPath, '.gitkeep'), '');
+    const insertConfig = phaseDirectoryOptions(cwd, undefined, rawContent);
     // An inserted child inherits its parent's identity policy: legacy numeric
     // families must still renumber together when their parent moves.
-    if (phaseIdMod.customPhaseQuery(afterPhase, {...insertConfig, roadmap: rawContent})) {
-      platformWriteSync(path.join(dirPath, CUSTOM_PHASE_ID_FILE), _decimalPhase);
-    }
+    const [{dirName: _dirName}] = phaseLocatorMod.createPhaseDirectories(cwd, [{
+      id: _decimalPhase, slug,
+      recordIdentity: phaseIdMod.customPhaseQuery(afterPhase, insertConfig) !== null,
+    }], insertConfig);
 
     let updatedContent: string;
 
@@ -2087,7 +2041,7 @@ interface RenameIntInfo {
 }
 
 /** Refuse every ambiguous owner before deletion or the first sibling rename. */
-function assertUnambiguousCustomDirectories(dirs: string[], context: ReturnType<typeof phaseDirectoryOptions>): void {
+function assertUnambiguousCustomDirectories(dirs: string[], context: PhaseDirectoryContext): void {
   for (const dir of dirs) {
     const candidates = phaseIdMod.customDirectoryCandidates(dir, context);
     if (candidates.length > 1) {
@@ -2100,7 +2054,7 @@ function renameDecimalPhases(
   phasesDir: string,
   baseInt: number,
   removedDecimal: number,
-  context: ReturnType<typeof phaseDirectoryOptions>,
+  context: PhaseDirectoryContext,
 ): { renamedDirs: { from: string; to: string }[]; renamedFiles: { from: string; to: string }[] } {
   const renamedDirs: { from: string; to: string }[] = [];
   const renamedFiles: { from: string; to: string }[] = [];
@@ -2165,7 +2119,7 @@ function findOrphanedDisplacementName(dir: string, fileName: string): string | n
 function renameIntegerPhases(
   phasesDir: string,
   removedInt: number,
-  context: ReturnType<typeof phaseDirectoryOptions>,
+  context: PhaseDirectoryContext,
 ): {
   renamedDirs: { from: string; to: string }[];
   renamedFiles: { from: string; to: string }[];

@@ -13,6 +13,7 @@
  * The tolerant `readIfExists` reader is deleted; a gate reads through `gate-evidence.cts`.
  */
 
+import type { PhaseDirectoryContext } from './phase-id.cjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { tryWithinRoot, PathAcceptance } from './security.cjs';
@@ -108,7 +109,7 @@ export function resolvePhaseDir(projectDir: string, phase: string): Evidence<str
  * `resolvePhaseDir` would widen what those gates inspect, so the two stay apart and each states its
  * scope. Throws when `phasesDir` cannot be listed; both callers sit inside their non-blocking catch.
  */
-export function resolvePhaseDirByToken(phasesDir: string, phaseArg: string, directoryContext: ReturnType<typeof phaseDirectoryOptions>): string | null {
+export function resolvePhaseDirByToken(phasesDir: string, phaseArg: string, directoryContext: PhaseDirectoryContext): string | null {
   const dirEntries = fs.readdirSync(phasesDir, { withFileTypes: true });
   const dirNames = dirEntries.filter((e) => e.isDirectory()).map((e) => e.name);
   const matched = matchPhaseDirs(dirNames, phaseArg, undefined, directoryContext).matches[0];

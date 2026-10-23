@@ -6,6 +6,7 @@
  * from the prior hand-written .cjs; only strict types are added.
  */
 
+import type { PhaseDirectoryContext } from './phase-id.cjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { realClock } from './clock.cjs';
@@ -480,7 +481,7 @@ function collectAnalyzePhases(
   phasesDir: string,
   phaseDirNames: string[],
   convention: string | null | undefined,
-  directoryContext: ReturnType<typeof phaseDirectoryOptions>,
+  directoryContext: PhaseDirectoryContext,
 ): AnalyzePhaseCollection {
   // Extract all phase headings: ## Phase N: Name or ### Phase N: Name
   // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).

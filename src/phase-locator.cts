@@ -5,8 +5,9 @@
  * Owns active-phase discovery against the `.planning/phases/` tree
  * (`searchPhaseInDir`, `findPhaseInternal`) and archived-phase-dir
  * enumeration (`getArchivedPhaseDirs`), matching phase ids/tokens against
- * the filesystem. Behaviour is preserved byte-for-behaviour from the prior
- * location; only the module boundary moved. The core.cjs re-export spine
+ * the filesystem. Also owns the silent naming projection and shared writer
+ * tail (preflight, containment, directory creation, identity markers).
+ * The core.cjs re-export spine
  * was retired in epic #1267; callers import phase-locator helpers directly.
  *
  * Dependencies:
@@ -15,11 +16,21 @@
  *                           normalizePhaseName, matchPhaseDirs, phaseNumberForMatch)
  *   - ./core-utils.cjs     (readSubdirectories, getPhaseFileStats, extractCanonicalPlanId, toPosixPath)
  *   - ./planning-workspace.cjs (planningDir)
- *   - ./config-loader.cjs (CONFIG_DEFAULTS, naming defaults)
+ *   - ./config-loader.cjs (CONFIG_DEFAULTS, _deepMergeConfig, _getConfigValue;
+ *                          silent file-selection projection, not loadConfig)
+ *   - ./runtime-homes.cjs (resolveGsdHome)
+ *   - ./frontmatter.cjs / ./plan-dependency-graph.cjs (plan dependency evidence)
+ *   - ./roadmap-parser.cjs / ./planning-scope.cjs (milestone membership/scope)
+ *   - ./io.cjs / ./shell-command-projection.cjs (typed write errors and files)
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
+import type { PhaseDirectoryContext } from './phase-id.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import ioMod = require('./io.cjs');
+const { error, ERROR_REASON } = ioMod;
+import { platformEnsureDir, platformWriteSync } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdModule = require('./phase-id.cjs');
 const { CUSTOM_PHASE_ID_FILE, phaseDirectoryContext, customPhaseQuery, customPhaseDirectoryParts, normalizePhaseName, matchPhaseDirs, phaseNumberForMatch, isSentinelPhaseId, comparePhaseNum } = phaseIdModule;
@@ -248,8 +259,8 @@ function phaseDirectoryOptions(cwd: string, config?: Record<string, unknown>, ro
   if (configError) context.configError = configError;
   if (context.phaseNaming !== 'custom') return context;
   // Load directory-owned IDs once for this scope, including archive fallback.
-  // Old directories have no marker: reads retain heading hints, but removal
-  // refuses to infer their ownership from a mutable roadmap or slug.
+  // Old directories retain known heading hints. Mutations accept a unique
+  // owner and refuse ambiguous candidates before any deletion or rename.
   context.directoryIdsByRoot = Object.create(null) as Record<string, Record<string, string>>;
   const unmarkedDirectories: string[] = [];
   context.unmarkedDirectories = unmarkedDirectories;
@@ -266,6 +277,9 @@ function phaseDirectoryOptions(cwd: string, config?: Record<string, unknown>, ro
         if (!marker.isFile() || marker.size > 1024) continue;
         // Nonblocking/no-follow open also bounds a replacement between lstat and
         // open; fstat validates the actual descriptor before reading at most 1 KiB.
+        // Windows may omit these flags: lstat/fstat still require a regular file,
+        // but the open is not atomically no-follow there. Adopt Windows no-follow
+        // flags here if Node exposes them; no caller should weaken these checks.
         identityFd = fs.openSync(markerPath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW);
         const opened = fs.fstatSync(identityFd);
         if (!opened.isFile() || opened.size > 1024) continue;
@@ -296,10 +310,10 @@ function phaseDirectoryOptions(cwd: string, config?: Record<string, unknown>, ro
   finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 
-const directoryPoolContexts = new WeakMap<ReturnType<typeof phaseDirectoryOptions>, Map<string, ReturnType<typeof phaseDirectoryOptions>>>();
+const directoryPoolContexts = new WeakMap<PhaseDirectoryContext, Map<string, PhaseDirectoryContext>>();
 
 /** Select records for this physical pool, reusing its context across queries. */
-function phaseDirectoryContextForRoot(context: ReturnType<typeof phaseDirectoryOptions>, root: string) {
+function phaseDirectoryContextForRoot(context: PhaseDirectoryContext, root: string) {
   const ids = context.directoryIdsByRoot?.[root];
   if (!ids || ids === context.directoryIds) return context;
   let pools = directoryPoolContexts.get(context);
@@ -310,7 +324,7 @@ function phaseDirectoryContextForRoot(context: ReturnType<typeof phaseDirectoryO
 }
 
 /** Usage guidance for every custom-ID writer, using the resolved naming policy. */
-function customPhaseNamingUsage(cwd: string, context: ReturnType<typeof phaseDirectoryOptions>): string | null {
+function customPhaseNamingUsage(cwd: string, context: PhaseDirectoryContext): string | null {
   if (context.phaseNaming === 'custom') return null;
   if (context.configError) return `Cannot read phase naming from ${context.configError.path}: ${context.configError.message}. Repair the project config before using a custom ID`;
   let message = 'phase_naming is not custom for this project; configure phase_naming as "custom" before using a custom ID';
@@ -324,7 +338,38 @@ function customPhaseNamingUsage(cwd: string, context: ReturnType<typeof phaseDir
   return message;
 }
 
-function searchPhaseInDir(baseDir: string, relBase: string, normalized: string, convention?: string | null, context: ReturnType<typeof phaseDirectoryOptions> = phaseDirectoryContext({})): PhaseSearchResult | null {
+type PhaseDirectoryWrite = {id: string; slug: string; directoryId?: string; recordIdentity?: boolean};
+
+/** Preflight the complete write set, then create directories and identity records. */
+function createPhaseDirectories<T extends PhaseDirectoryWrite>(cwd: string, entries: T[], context: PhaseDirectoryContext, gitkeep = true) {
+  const phasesRoot = path.resolve(planningDir(cwd), 'phases');
+  let prepared: (T & {dirName: string; dirPath: string; recordIdentity: boolean})[];
+  try {
+    const recorded = entries.filter(entry => entry.recordIdentity ?? context.phaseNaming === 'custom');
+    if (recorded.length > 0) phaseIdModule.validateCustomPhaseIds(recorded.map(entry => entry.id), context);
+    prepared = entries.map(entry => {
+      // Validate the raw ID before legacy scaffold normalization can discard it.
+      phaseIdModule.phaseDirectoryName(entry.id, '', context.projectCode);
+      const dirName = phaseIdModule.phaseDirectoryName(entry.directoryId ?? entry.id, entry.slug, context.projectCode);
+      const dirPath = path.resolve(phasesRoot, dirName);
+      if (path.dirname(dirPath) !== phasesRoot) error('Phase directory escapes the phases directory', ERROR_REASON.USAGE);
+      return {...entry, dirName, dirPath, recordIdentity: entry.recordIdentity ?? context.phaseNaming === 'custom'};
+    });
+  } catch (cause) {
+    if (cause instanceof phaseIdModule.PhaseDirectoryNameError) {
+      error(cause.message, cause.kind === 'collision' ? ERROR_REASON.PHASE_ID_COLLISION : ERROR_REASON.USAGE);
+    }
+    throw cause;
+  }
+  for (const entry of prepared) {
+    platformEnsureDir(entry.dirPath);
+    if (gitkeep) platformWriteSync(path.join(entry.dirPath, '.gitkeep'), '');
+    if (entry.recordIdentity) platformWriteSync(path.join(entry.dirPath, CUSTOM_PHASE_ID_FILE), entry.id);
+  }
+  return prepared;
+}
+
+function searchPhaseInDir(baseDir: string, relBase: string, normalized: string, convention?: string | null, context: PhaseDirectoryContext = phaseDirectoryContext({})): PhaseSearchResult | null {
   context = phaseDirectoryContextForRoot(context, baseDir);
   try {
     const dirs = readSubdirectories(baseDir, true);
@@ -476,9 +521,9 @@ function searchPhaseInDir(baseDir: string, relBase: string, normalized: string, 
   }
 }
 
-function findPhaseInternal(cwd: string, phase: unknown, convention: string | null | undefined, context: ReturnType<typeof phaseDirectoryOptions>): PhaseSearchResult | null {
+function findPhaseInternal(cwd: string, phase: unknown, convention?: string | null, context?: PhaseDirectoryContext): PhaseSearchResult | null {
   if (!phase) return null;
-  // Legacy JavaScript callers have no typed context contract. Typed command readers supply it once.
+  // Existing callers may omit context; multi-phase readers supply one reusable context.
   context ??= phaseDirectoryOptions(cwd);
 
   const phasesDir = path.join(planningDir(cwd), 'phases');
@@ -574,7 +619,7 @@ function listMilestonePhaseDirs(
   // Without a cwd there is nothing to scope AGAINST — the caller asked for an
   // unscoped read, which is a real answer (mirrors extractCurrentMilestoneScoped's
   // row 1). Sentinels are still refused: they are never milestone phases.
-  let directoryContext: ReturnType<typeof phaseDirectoryOptions> | undefined;
+  let directoryContext: PhaseDirectoryContext | undefined;
   let inWindow: (dirName: string) => boolean = () => true;
   let scope: Scope = SCOPE.COMPLETE;
   if (cwd) {
@@ -719,6 +764,7 @@ function getAllArchivedPhaseDirs(cwd: string): ArchivedPhaseDir[] {
 }
 
 export = {
+  createPhaseDirectories,
   phaseDirectoryOptions,
   phaseDirectoryContextForRoot,
   customPhaseNamingUsage,

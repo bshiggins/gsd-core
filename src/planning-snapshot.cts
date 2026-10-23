@@ -19,6 +19,7 @@
  * gsd-core/bin/lib/planning-snapshot.cjs (gitignored).
  */
 
+import type { PhaseDirectoryContext } from './phase-id.cjs';
 import fs from 'node:fs';
 import path from 'node:path';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -280,7 +281,7 @@ interface PlanningSnapshot {
   // on every repo that has not opted in, which is the value each widened read
   // compiles its BASE (byte-identical) grammar from.
   phaseIdConvention: string | null;
-  directoryContext: ReturnType<typeof phaseDirectoryOptions>;
+  directoryContext: PhaseDirectoryContext;
   // Tokens borne ONLY by sentinel-bracket ROADMAP headings (`### [GSD.999] 07:`
   // yields token `07`). Produced by the same `buildRoadmapPhaseVariants` call
   // that produces `roadmapDeclaredPhases`, so the two can never disagree about
@@ -818,7 +819,7 @@ function buildRoadmapDeclaredPhasesField(
 function buildRoadmapPhaseCheckboxesField(
   roadmapPath: string,
   convention: string | null,
-  directoryContext: ReturnType<typeof phaseDirectoryOptions>,
+  directoryContext: PhaseDirectoryContext,
 ): { value: Record<string, boolean>; scope: Scope } {
   if (!fs.existsSync(roadmapPath)) {
     return { value: {}, scope: SCOPE.UNREADABLE };
@@ -1120,7 +1121,7 @@ function buildCurrentMilestoneRoadmapPhaseIdsField(
   cwd: string,
   roadmapPath: string,
   convention: string | null,
-  directoryContext: ReturnType<typeof phaseDirectoryOptions>,
+  directoryContext: PhaseDirectoryContext,
 ): { value: string[]; scope: Scope } {
   if (!fs.existsSync(roadmapPath)) return { value: [], scope: SCOPE.UNREADABLE };
   let content: string;

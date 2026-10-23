@@ -29,12 +29,8 @@ const { toPosixPath, generateSlugInternal, extractOneLinerFromBody } = coreUtils
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
 const {
-  phaseDirectoryName,
-  validateCustomPhaseIds,
-  CUSTOM_PHASE_ID_FILE,
   customPhaseQuery,
   customDirectoryOwner,
-  PhaseDirectoryNameError,
   isCustomPhaseId,
   normalizePhaseName,
   comparePhaseNum,
@@ -3807,29 +3803,13 @@ function cmdScaffold(cwd: string, type: string, options: ScaffoldOptions, raw: b
       const slug = generateSlugInternal(name);
       // #3287: apply project_code prefix to stay consistent with phase.add/phase.insert
       const scaffoldConfig = phaseDirectoryOptions(cwd, undefined, '');
-      const scaffoldProjectCode = (scaffoldConfig.projectCode as string) || '';
-      let dirName: string;
-      try {
-        if (scaffoldConfig.phaseNaming === 'custom') {
-          const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
-          const roadmap = fs.existsSync(roadmapPath) ? fs.readFileSync(roadmapPath, 'utf8') : '';
-          validateCustomPhaseIds([phase], {...scaffoldConfig, roadmap});
-        }
-        // Validate the raw ID before normalization can discard path components.
-        phaseDirectoryName(phase, '', scaffoldProjectCode);
-        dirName = phaseDirectoryName(
-          scaffoldConfig.phaseNaming === 'custom' && isCustomPhaseId(phase) ? phase : padded, slug || '', scaffoldProjectCode,
-        );
-      } catch (cause) {
-        if (cause instanceof PhaseDirectoryNameError) error(cause.message, cause.kind === 'collision' ? ERROR_REASON.PHASE_ID_COLLISION : ERROR_REASON.USAGE);
-        throw cause;
-      }
-      const phasesParent = planningPaths(cwd).phases;
-      platformEnsureDir(phasesParent);
-      const dirPath = path.resolve(phasesParent, dirName);
-      if (path.dirname(dirPath) !== path.resolve(phasesParent)) error('Phase directory escapes the phases directory', ERROR_REASON.USAGE);
-      platformEnsureDir(dirPath);
-      if (scaffoldConfig.phaseNaming === 'custom') platformWriteSync(path.join(dirPath, CUSTOM_PHASE_ID_FILE), phase);
+      const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
+      const roadmap = scaffoldConfig.phaseNaming === 'custom' && fs.existsSync(roadmapPath)
+        ? fs.readFileSync(roadmapPath, 'utf8') : '';
+      const [{dirPath}] = phaseLocatorMod.createPhaseDirectories(cwd, [{
+        id: phase, slug: slug || '',
+        directoryId: scaffoldConfig.phaseNaming === 'custom' && isCustomPhaseId(phase) ? phase : padded,
+      }], {...scaffoldConfig, roadmap}, false);
       output({ created: true, directory: toPosixPath(path.relative(cwd, dirPath)), path: dirPath }, raw, dirPath);
       return;
     }

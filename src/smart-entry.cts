@@ -29,12 +29,13 @@
  * translation, not a port.
  */
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-import directoryLocatorMod = require('./phase-locator.cjs');
-const { phaseDirectoryOptions } = directoryLocatorMod;
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import type { PhaseDirectoryContext } from './phase-id.cjs';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import phaseLocatorMod = require('./phase-locator.cjs');
+const { phaseDirectoryOptions } = phaseLocatorMod;
 import { collectSection } from './markdown-sectionizer.cjs';
 import { formatGsdSlash, resolveRuntime, runtimeCommand } from './runtime-slash.cjs';
 // #3696: the calendar-validity predicate moved to the STATE.md document module
@@ -323,8 +324,8 @@ function readGitSignals(cwd: string): GitSignals {
   return { has_git: true, dirty, unpushed };
 }
 
-/** Leading numeric phase token from a STATE.md scalar or body `Phase:` value. */
-function phaseTokenFromState(raw: string | null, context?: ReturnType<typeof phaseDirectoryOptions>): string | null {
+/** Phase identity from a STATE.md scalar or body `Phase:` value, honoring custom naming when a context is supplied. */
+function phaseTokenFromState(raw: string | null, context?: PhaseDirectoryContext): string | null {
   return parsePhaseFromProse(raw, context).phase;
 }
 

@@ -1,13 +1,23 @@
 /**
  * Pure phase-id parsing/matching helpers — normalize, token match,
- * milestone/phase-dir id parsing, phase-markdown regex builders.
+ * milestone/phase-dir id parsing, phase-markdown regex builders, and identity
+ * indexes over caller-supplied roadmap text. No filesystem or config reads.
  *
  * Extracted from core.cts (ADR-857 rollout phase 2a / issue #865).
  * The hand-written bodies are preserved byte-for-behaviour; only the module
  * boundary moved. The core.cjs re-export spine was retired in epic #1267;
  * callers import phase-id helpers from phase-id.cjs directly.
  *
+ * Custom directory lookup decision table (#5186):
+ *   1. An exact physical basename selects that directory and reports its owner.
+ *   2. Exact recorded IDs win; a unique case/padding alias may name a record.
+ *      Multiple alias records remain ambiguous rather than last-write-wins.
+ *   3. Markerless reads use known heading/ID prefixes; mutations refuse when
+ *      more than one owner fits. Marked segment-prefix pairs are independent.
+ *   4. Unrecorded numeric and bracket queries keep their legacy matching paths.
+ *
  * Dependencies:
+ *   - ./markdown-sectionizer.cjs (tokenizeHeadings over supplied roadmap text)
  *   - ./pattern.cjs (escapeRegex — #3212 Phase 1 seam; this module is no
  *     longer the owner of pattern-escaping, only a consumer)
  *   - ./core-utils.cjs (generateSlugInternal — #3883/ADR-3473 §8.3: the
@@ -2027,7 +2037,7 @@ function roadmapPhaseLookupSources(phaseNum: unknown): string[] {
   return [...new Set(sources)];
 }
 
-export = {
+const phaseIdExports = {
   OPTIONAL_PROJECT_CODE_PREFIX_SOURCE,
   OPTIONAL_PHASE_TAG_SOURCE,
   PHASE_NUMBER_TOKEN_SOURCE,
@@ -2096,3 +2106,9 @@ export = {
   roadmapPhaseLookupSources,
   renderPhaseBranchName,
 };
+
+// A declaration merge exposes the shared type alongside the CommonJS value,
+// matching planning-scope.cts; export type cannot accompany export =.
+// eslint-disable-next-line @typescript-eslint/no-namespace
+declare namespace phaseIdExports { export { PhaseDirectoryContext }; }
+export = phaseIdExports;

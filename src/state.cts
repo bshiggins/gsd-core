@@ -6,6 +6,7 @@
  * from the prior hand-written .cjs; only strict types are added.
  */
 
+import type { PhaseDirectoryContext } from './phase-id.cjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { escapeRegex } from './pattern.cjs';
@@ -2367,7 +2368,7 @@ function preferNewerLastActivity(
   }
 }
 
-function parseProsePhaseField(value: string | null, directoryContext?: ReturnType<typeof phaseDirectoryOptions>): { phase: string | null; name: string | null } {
+function parseProsePhaseField(value: string | null, directoryContext?: PhaseDirectoryContext): { phase: string | null; name: string | null } {
   // #2121 Phase 2 (#2125): delegate to the canonical anchored parser so this
   // module holds no independent prose phase-id regex. Drives #2111 — the
   // anchored parser returns { phase: null } for a "Milestone vX.Y complete"
@@ -2377,7 +2378,7 @@ function parseProsePhaseField(value: string | null, directoryContext?: ReturnTyp
   return parsePhaseFromProse(value, directoryContext);
 }
 
-function resolveStatePhase(fm: Record<string, unknown>, body: string, directoryContext: ReturnType<typeof phaseDirectoryOptions>): {
+function resolveStatePhase(fm: Record<string, unknown>, body: string, directoryContext: PhaseDirectoryContext): {
   phase: string | null;
   name: string | null;
   sources: {
@@ -2676,7 +2677,7 @@ function isMilestoneBounded(roadmapRaw: string, milestone: string, convention?: 
  * decimal, and project-code IDs are detected alike. Returns canonical keys
  * (see phaseKeyFromToken).
  */
-function extractRetiredPhaseNumbers(scope: string, convention?: string | null, directoryContext?: ReturnType<typeof phaseDirectoryOptions>): Set<string> {
+function extractRetiredPhaseNumbers(scope: string, convention?: string | null, directoryContext?: PhaseDirectoryContext): Set<string> {
   const retired = new Set<string>();
   const isChecklistOrHeading = /^\s*(?:[-*+]\s*\[[ xX]\]|#{1,6}\s)/;
   // #612: the retirement filter has to widen with the counter it protects. The
@@ -2751,7 +2752,7 @@ function countRoadmapPhaseHeadings(
   convention: string | null | undefined,
   retiredPhaseNums: Set<string>,
   applyConventionTokenSentinelRules: boolean,
-  directoryContext?: ReturnType<typeof phaseDirectoryOptions>,
+  directoryContext?: PhaseDirectoryContext,
 ): number {
   let count = 0;
   if (convention === 'bracket') {
@@ -2821,7 +2822,7 @@ function scanStatePhaseDirs(
   roadmapScope: string | null;
   roadmapRaw: string | null;
   retiredPhaseNums: Set<string>;
-  directoryContext: ReturnType<typeof phaseDirectoryOptions>;
+  directoryContext: PhaseDirectoryContext;
 } {
   // Read the current-milestone ROADMAP scope once: it feeds both the
   // heading-based phase count and the retired/folded-phase
@@ -4299,7 +4300,7 @@ function applyPostSyncPreservation(
   syncedContent: string,
   statePath: string,
   options: StatePreservationOptions,
-  directoryContext?: ReturnType<typeof phaseDirectoryOptions>,
+  directoryContext?: PhaseDirectoryContext,
 ): string {
   assertStatePreservationOptions(options, 'applyPostSyncPreservation');
   const { resync, authoritativeFm, deriveProgressKeys, divergedFields, explicitProgressField, preWriteState } = options;
