@@ -12,6 +12,20 @@ const locator = require('../gsd-core/bin/lib/phase-locator.cjs');
 function options(code, naming = 'custom') { return {phaseNaming: naming, projectCode: code}; }
 
 
+test('markerless ownership: removing a unique shorter id preserves the longer declared owner', () => {
+  const cwd = fixture('CCM');
+  try {
+    for (const dir of ['CCM-SETUP-s', 'CCM-SETUP-2-t']) fs.mkdirSync(path.join(cwd, '.planning/phases', dir));
+    fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), '\n### Phase SETUP: Short\n### Phase SETUP-2: Long\n');
+    assert.equal(run(cwd, ['query', 'find-phase', 'SETUP']).directory, '.planning/phases/CCM-SETUP-s');
+    assert.equal(run(cwd, ['phase', 'remove', 'SETUP', '--force']).directory_deleted, 'CCM-SETUP-s');
+    assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), ['CCM-SETUP-2-t']);
+    assert.equal(run(cwd, ['query', 'find-phase', 'SETUP-2']).directory, '.planning/phases/CCM-SETUP-2-t');
+    assert.equal(run(cwd, ['roadmap', 'get-phase', 'SETUP']).found, false);
+    assert.equal(run(cwd, ['roadmap', 'get-phase', 'SETUP-2']).found, true);
+  } finally { cleanup(cwd); }
+});
+
 for (const code of [null, 'CCM']) {
   for (const writer of ['add', 'scaffold']) {
     test(`phase directory collision: ${writer} cannot replace a different owner's marker, code ${code}`, () => {

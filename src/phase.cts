@@ -2637,13 +2637,17 @@ function cmdPhaseRemove(
   // "resolve nothing" into "delete one of two candidates, unrecoverably, and
   // renumber every phase after it". Refuse before any file is touched.
   const directoryContext = phaseDirectoryOptions(cwd);
+  const { matches: phaseDirMatches } = matchPhaseDirs(subdirs, targetPhase, undefined, directoryContext);
+  const uniqueCustomTarget = phaseDirMatches.length === 1
+    && phaseIdMod.customDirectoryCandidates(phaseDirMatches[0], directoryContext).length === 1;
   const mutationCandidates = subdirs.filter(dir => {
     const owners = phaseIdMod.customDirectoryCandidates(dir, directoryContext);
-    return dir === targetPhase || owners.includes(targetPhase)
+    // A unique proven target excludes siblings whose longer declared owner
+    // wins resolution. Unresolved/ambiguous queries retain the full refusal.
+    return dir === targetPhase || (owners.includes(targetPhase) && (!uniqueCustomTarget || dir === phaseDirMatches[0]))
       || (!isCustomPhaseId(targetPhase) && Number.parseFloat(dir) > Number.parseFloat(normalized));
   });
   assertUnambiguousCustomDirectories(mutationCandidates, directoryContext);
-  const { matches: phaseDirMatches } = matchPhaseDirs(subdirs, targetPhase, undefined, directoryContext);
   if (phaseDirMatches.length > 1) {
     output(
       {
