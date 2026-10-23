@@ -299,14 +299,47 @@ describe('#4304 / ADR-612 bracket phase remove', () => {
     assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
   });
 
-  test('refuses an existing real directory at a later bracket rename destination before any rename', () => {
-    makePhaseDir('CK.02-03-four', ['orphan.md']);
+  for (const tokens of [['02', '03', '04'], ['01.01', '01.02', '01.03']]) {
+    test(`removes same-slug bracket phase ${tokens[0]} and reuses directories vacated in order`, () => {
+      replaceSeed(
+        ['# Roadmap', '', '## [CK.02] v2.0 — Current', '',
+          ...tokens.flatMap((token) => [`### [CK.02] ${token}: Cleanup`, '**Goal:** cleanup', ''])],
+        tokens.map((token) => [`CK.02-${token}-cleanup`, [`${token}-01-PLAN.md`]]),
+      );
+      for (const token of tokens) {
+        fs.writeFileSync(planning('phases', `CK.02-${token}-cleanup`, `${token}-01-PLAN.md`), `# Original ${token}\n`);
+      }
+
+      const result = runGsdTools(['phase', 'remove', tokens[0], '--force'], tmpDir);
+
+      assert.equal(result.success, true, result.error || result.output);
+      assert.deepEqual(fs.readdirSync(planning('phases')).sort(), tokens.slice(0, 2).map((token) => `CK.02-${token}-cleanup`));
+      for (const [index, token] of tokens.slice(0, 2).entries()) {
+        assert.equal(fs.readFileSync(planning('phases', `CK.02-${token}-cleanup`, `${token}-01-PLAN.md`), 'utf8'), `# Original ${tokens[index + 1]}\n`);
+      }
+    });
+  }
+
+  test('refuses a true foreign orphan at a later bracket rename destination before any rename', () => {
+    replaceSeed(
+      ['# Roadmap', '', '## [CK.02] v2.0 — Current', '',
+        '### [CK.02] 997: Cleanup', '**Goal:** remove', '',
+        '### [CK.02] 998: Cleanup', '**Goal:** rename first', '',
+        '### [CK.02] 1000: Foreign', '**Goal:** blocked later', ''],
+      [
+        ['CK.02-997-cleanup', ['997-01-PLAN.md']],
+        ['CK.02-998-cleanup', ['998-01-PLAN.md']],
+        // Sentinel 999 is excluded from renumbering, so this orphan never vacates.
+        ['CK.02-999-foreign', ['orphan.md']],
+        ['CK.02-1000-foreign', ['1000-01-PLAN.md']],
+      ],
+    );
     const before = snapshotTree(planning());
 
-    const result = runGsdTools(['phase', 'remove', '02', '--force'], tmpDir);
+    const result = runGsdTools(['phase', 'remove', '997', '--force'], tmpDir);
 
     assert.equal(result.success, false, result.output);
-    assert.match(result.error, /Cannot renumber into phase directory "CK\.02-03-four": the destination already exists/);
+    assert.match(result.error, /Cannot renumber into phase directory "CK\.02-999-foreign": the destination already exists/);
     assert.deepEqual(snapshotTree(planning()), before, 'all directories, artifacts, ROADMAP and STATE must stay unchanged');
   });
 

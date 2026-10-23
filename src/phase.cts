@@ -1754,13 +1754,14 @@ function bracketDirNameOrRefuse(
  * recursive mkdir or child write can follow it. The canonical containment
  * predicate then resolves the existing path, or its nearest existing parent,
  * so a destination reached through a symlinked ancestor cannot escape the
- * planning phases directory either. Renumbering also refuses an occupied
- * destination during the pre-mutation pass, before any earlier rename runs.
+ * planning phases directory either. A pre-pass supplies simulated occupancy
+ * after deletion and earlier renames; the rename loop checks the live disk.
  */
 function assertPhaseDirectoryDestinationSafe(
   phasesDir: string,
   dirName: string,
   operation: 'create' | 'renumber into',
+  occupiedNames?: ReadonlySet<string>,
 ): void {
   const destination = path.join(phasesDir, dirName);
   let stat: fs.Stats | null = null;
@@ -1775,7 +1776,10 @@ function assertPhaseDirectoryDestinationSafe(
   if (stat?.isSymbolicLink()) {
     error(`Cannot ${operation} phase directory "${dirName}": the destination is a symbolic link`);
   }
-  if (stat && operation === 'renumber into') {
+  const destinationOccupied = occupiedNames
+    ? occupiedNames.has(dirName) || (stat !== null && !stat.isDirectory())
+    : stat !== null;
+  if (operation === 'renumber into' && destinationOccupied) {
     error(`Cannot ${operation} phase directory "${dirName}": the destination already exists`);
   }
   if (tryWithinRoot(destination, phasesDir, PathAcceptance.AbsoluteInsideRoot) === null) {
@@ -3819,9 +3823,16 @@ function assertBracketRenameDestinationsSafe(
   phasesDir: string,
   context: BracketWriteContext,
   mapping: BracketRenumberMapping[],
+  targetDir: string | null,
 ): void {
-  for (const { newDirName } of bracketRenameCandidates(phasesDir, context, mapping)) {
-    assertPhaseDirectoryDestinationSafe(phasesDir, newDirName, 'renumber into');
+  const occupied = new Set(readSubdirectories(phasesDir));
+  if (targetDir !== null) occupied.delete(targetDir);
+  for (const { item, newDirName } of bracketRenameCandidates(phasesDir, context, mapping)) {
+    // Simulate the same ascending sequence the rename loop will apply. A
+    // destination is free only after its target or earlier source vacates it.
+    assertPhaseDirectoryDestinationSafe(phasesDir, newDirName, 'renumber into', occupied);
+    occupied.delete(item.dir);
+    occupied.add(newDirName);
   }
 }
 
@@ -5294,7 +5305,7 @@ function cmdPhaseRemove(
   // changing ROADMAP/STATE, so a planted symlink produces a clean refusal
   // with the planning tree untouched.
   if (removeContext) {
-    assertBracketRenameDestinationsSafe(phasesDir, removeContext, bracketMapping);
+    assertBracketRenameDestinationsSafe(phasesDir, removeContext, bracketMapping, targetDir);
   }
 
   // #5118 (no write before the error): the STATE.md rewrite below rebuilds the
