@@ -2779,7 +2779,9 @@ function cmdPhaseRemove(
 
   const roadmapUpdated = updateRoadmapAfterPhaseRemoval(
     roadmapPath,
-    directoryContext.directoryIds?.[targetDir ?? ''] ?? targetPhase,
+    directoryContext.directoryIds?.[targetDir ?? '']
+      ?? (targetDir ? phaseIdMod.customDirectoryCandidates(targetDir, directoryContext)[0] : undefined)
+      ?? targetPhase,
     isDecimal,
     parseInt(normalized, 10),
     cwd,

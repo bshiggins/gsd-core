@@ -136,6 +136,26 @@ test('custom refusal codes: non-custom naming has a distinct reason', () => {
     assert.equal(JSON.parse(result.error).reason, 'phase_naming_not_custom');
   } finally { cleanup(cwd); }
 });
+for (const command of ['find-phase', 'init.plan-phase', 'init.execute-phase', 'init.phase-op']) {
+  test(`custom directory handles: ${command} accepts a recorded full basename`, () => {
+    const cwd = fixture('CCM');
+    try {
+      const dir = add(cwd, 'PRODUCT-BOUNDARY', 'Boundary', 'CCM');
+      const result = run(cwd, ['query', command, path.basename(dir)]);
+      if (command === 'find-phase') assert.equal(result.directory, dir);
+      else assert.equal(result.phase_dir, path.join(cwd, dir).split(path.sep).join('/'));
+      assert.equal(result.phase_number, 'PRODUCT-BOUNDARY');
+    } finally { cleanup(cwd); }
+  });
+}
+test('custom directory handles: remove accepts a full basename and removes its heading', () => {
+  const cwd = fixture('CCM');
+  try {
+    const dir = add(cwd, 'PRODUCT-BOUNDARY', 'Boundary', 'CCM');
+    assert.equal(run(cwd, ['phase', 'remove', path.basename(dir), '--force']).directory_deleted, path.basename(dir));
+    assert.equal(run(cwd, ['roadmap', 'get-phase', 'PRODUCT-BOUNDARY']).found, false);
+  } finally { cleanup(cwd); }
+});
 for (const naming of ['custom', 'sequential']) {
   test(`batch directory safety: ${naming} rejects a project code that escapes phases`, () => {
     const cwd = fixture('../x', naming);

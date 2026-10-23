@@ -1521,9 +1521,14 @@ function validateCustomPhaseIds(ids: string[], context: PhaseDirectoryContext): 
 function customPhaseQuery(id: string, options: PhaseDirectoryContext): CustomPhaseQuery | null {
   if (options?.phaseNaming !== 'custom' || id.startsWith('[')) return null;
   if (UNSAFE_PHASE_DIRECTORY_PART_RE.test(id)) return null;
+  const index = customIdentityIndex(options);
+  const directoryId = options.directoryIds?.[id]
+    ?? (options.unmarkedDirectories?.includes(id) ? customDirectoryOwner(id, {
+      id, listed: false, projectCode: options.projectCode, prefixes: index.prefixes,
+    })?.id : undefined);
+  if (directoryId !== undefined) id = directoryId;
   const prefix = options.projectCode ? `${options.projectCode}-` : '';
   const body = prefix && id.toLowerCase().startsWith(prefix.toLowerCase()) ? id.slice(prefix.length) : id;
-  const index = customIdentityIndex(options);
   // Markers are authoritative; only legacy-shaped IDs share their ordinary
   // numeric padding normalization. Custom digit-leading IDs never collapse.
   const aliases = index.recordedByFold.get(recordedPhaseKey(body)) ?? [];
@@ -1681,6 +1686,9 @@ function customPhaseDirectoryParts(dir: string, query: CustomPhaseQuery): { id: 
  * token for these dirs is the mis-absorbed multi-segment form).
  */
 function matchPhaseDirs(dirs: string[], query: string, convention?: string | null, context: PhaseDirectoryContext = phaseDirectoryContext({})): { matches: string[]; usedBareFallback: boolean } {
+  // A complete basename names that physical directory, including marked ones.
+  const directoryMatches = dirs.filter(dir => dir === query);
+  if (directoryMatches.length > 0) return {matches: directoryMatches, usedBareFallback: false};
   const custom = convention === 'bracket' ? null : customPhaseQuery(query, context);
   const normalized = normalizePhaseName(query);
   // Recorded directories never enter legacy token or bare-number fallback for
