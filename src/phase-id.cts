@@ -1537,18 +1537,26 @@ function customPhaseQuery(id: string, options: PhaseDirectoryContext): CustomPha
   if (options?.phaseNaming !== 'custom' || id.startsWith('[')) return null;
   if (UNSAFE_PHASE_DIRECTORY_PART_RE.test(id)) return null;
   const index = customIdentityIndex(options);
-  const directoryId = options.directoryIds?.[id]
-    ?? (options.unmarkedDirectories?.includes(id) ? customDirectoryOwner(id, {
-      id, listed: false, projectCode: options.projectCode, prefixes: index.prefixes,
-    })?.id : undefined);
-  if (directoryId !== undefined) id = directoryId;
   const prefix = options.projectCode ? `${options.projectCode}-` : '';
-  const body = prefix && id.toLowerCase().startsWith(prefix.toLowerCase()) ? id.slice(prefix.length) : id;
+  const queryBody = prefix && id.toLowerCase().startsWith(prefix.toLowerCase()) ? id.slice(prefix.length) : id;
   // Markers are authoritative; only legacy-shaped IDs share their ordinary
-  // numeric padding normalization. Custom digit-leading IDs never collapse.
-  const aliases = index.recordedByFold.get(recordedPhaseKey(body)) ?? [];
-  const recorded = index.recorded.has(id) ? id : index.recorded.has(body) ? body : aliases.length === 1 ? aliases[0] : undefined;
-  if (recorded !== undefined) id = recorded;
+  // numeric padding normalization. Resolve recorded IDs before interpreting a
+  // query as a basename: an ID may equal a different directory's full name.
+  const aliases = index.recordedByFold.get(recordedPhaseKey(queryBody)) ?? [];
+  let recorded = index.recorded.has(id) ? id : index.recorded.has(queryBody) ? queryBody : aliases.length === 1 ? aliases[0] : undefined;
+  if (recorded !== undefined) {
+    id = recorded;
+  } else {
+    const directoryId = options.directoryIds?.[id]
+      ?? (options.unmarkedDirectories?.includes(id) ? customDirectoryOwner(id, {
+        id, listed: false, projectCode: options.projectCode, prefixes: index.prefixes,
+      })?.id : undefined);
+    if (directoryId !== undefined) {
+      id = directoryId;
+      if (index.recorded.has(id)) recorded = id;
+    }
+  }
+  const body = prefix && id.toLowerCase().startsWith(prefix.toLowerCase()) ? id.slice(prefix.length) : id;
   const listed = index.ids.has(id);
   // Legacy numeric tokens (including configured display prefixes) keep their
   // reading unless a writer explicitly recorded this exact ID. That record
@@ -1701,10 +1709,13 @@ function customPhaseDirectoryParts(dir: string, query: CustomPhaseQuery): { id: 
  * token for these dirs is the mis-absorbed multi-segment form).
  */
 function matchPhaseDirs(dirs: string[], query: string, convention?: string | null, context: PhaseDirectoryContext = phaseDirectoryContext({})): { matches: string[]; usedBareFallback: boolean } {
-  // A complete basename names that physical directory, including marked ones.
+  const custom = convention === 'bracket' ? null : customPhaseQuery(query, context);
+  if (custom?.recordedId !== undefined) {
+    return {matches: dirs.filter(dir => customPhaseDirectoryParts(dir, custom) !== null), usedBareFallback: false};
+  }
+  // A complete basename names that physical directory when no record owns the query.
   const directoryMatches = dirs.filter(dir => dir === query);
   if (directoryMatches.length > 0) return {matches: directoryMatches, usedBareFallback: false};
-  const custom = convention === 'bracket' ? null : customPhaseQuery(query, context);
   const normalized = normalizePhaseName(query);
   // Recorded directories never enter legacy token or bare-number fallback for
   // another query. Keep those compatibility passes for unmarked directories.

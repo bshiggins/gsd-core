@@ -11,6 +11,32 @@ const locator = require('../gsd-core/bin/lib/phase-locator.cjs');
 
 function options(code, naming = 'custom') { return {phaseNaming: naming, projectCode: code}; }
 
+for (const reverse of [false, true]) {
+  for (const command of ['find-phase', 'init.plan-phase', 'init.execute-phase', 'init.phase-op', 'remove']) {
+    test(`custom identity precedence: ${command} prefers a recorded id over a basename, reverse ${reverse}`, () => {
+      const cwd = fixture(null);
+      try {
+        const phases = [['API', 'v2'], ['API-v2', 'Gateway']];
+        for (const [id, title] of reverse ? phases.toReversed() : phases) add(cwd, id, title);
+        if (command === 'remove') {
+          const result = run(cwd, ['phase', 'remove', 'API-v2', '--force']);
+          assert.equal(result.directory_deleted, 'API-v2-gateway');
+          assert.equal(run(cwd, ['roadmap', 'get-phase', 'API-v2']).found, false);
+          assert.equal(run(cwd, ['roadmap', 'get-phase', 'API']).found, true);
+          assert.equal(fs.readFileSync(path.join(cwd, '.planning/phases/API-v2/.phase-id'), 'utf8').trim(), 'API');
+        } else {
+          const result = run(cwd, ['query', command, 'API-v2']);
+          const expected = '.planning/phases/API-v2-gateway';
+          if (command === 'find-phase') assert.equal(result.directory, expected);
+          else assert.equal(result.phase_dir, toPosixPath(path.join(cwd, expected)));
+          assert.equal(result.phase_number, 'API-v2');
+        }
+        assert.equal(run(cwd, ['query', 'find-phase', 'API']).directory, '.planning/phases/API-v2');
+      } finally { cleanup(cwd); }
+    });
+  }
+}
+
 for (const [first, second] of [['1', '01'], ['Foo', 'FOO'], ['7.1', '07.1']]) {
   for (const owner of ['recorded', 'roadmap']) {
     test(`custom write identity: refuses equivalent ${second} after ${owner} ${first}`, () => {
