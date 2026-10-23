@@ -35,6 +35,107 @@ function existingCustomDirectory(cwd, id, title, code) {
 }
 function options(code, naming = 'custom') { return {phaseNaming: naming, projectCode: code}; }
 
+for (const [first, second] of [['1', '01'], ['Foo', 'FOO'], ['7.1', '07.1']]) {
+  for (const owner of ['recorded', 'roadmap']) {
+    test(`custom write identity: refuses equivalent ${second} after ${owner} ${first}`, () => {
+      const cwd = fixture('CCM');
+      try {
+        if (owner === 'recorded') add(cwd, first, 'Existing', 'CCM');
+        else fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), `\n### Phase ${first}: Existing\n`);
+        const before = fs.readdirSync(path.join(cwd, '.planning/phases'));
+        const result = runGsdTools(['--json-errors', 'phase', 'add', 'Other', '--id', second], cwd, homeSandboxEnv(cwd));
+        assert.equal(result.success, false, result.output);
+        assert.equal(JSON.parse(result.error).reason, 'phase_id_collision');
+        assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), before);
+      } finally { cleanup(cwd); }
+    });
+  }
+}
+test('custom write identity: exact recorded numeric ids win over padding aliases', () => {
+  const cwd = fixture('CCM');
+  try {
+    const one = existingCustomDirectory(cwd, '1', 'One', 'CCM');
+    const padded = existingCustomDirectory(cwd, '01', 'Padded', 'CCM');
+    for (const [id, dir] of [['1', one], ['01', padded]]) assert.equal(run(cwd, ['query', 'find-phase', id]).directory, dir);
+    assert.equal(run(cwd, ['phase', 'remove', '01', '--force']).directory_deleted, path.basename(padded));
+    assert.equal(run(cwd, ['query', 'find-phase', '1']).directory, one);
+    assert.ok(fs.existsSync(path.join(cwd, one)));
+    const mixed = existingCustomDirectory(cwd, 'Foo', 'Mixed', 'CCM');
+    const upper = existingCustomDirectory(cwd, 'FOO', 'Upper', 'CCM');
+    assert.equal(run(cwd, ['query', 'find-phase', 'Foo']).directory, mixed);
+    assert.equal(run(cwd, ['query', 'find-phase', 'FOO']).directory, upper);
+    assert.equal(run(cwd, ['query', 'find-phase', 'foo']).found, false);
+  } finally { cleanup(cwd); }
+});
+test('custom write identity: a batch refuses duplicate ids before writing', () => {
+  const cwd = fixture(null);
+  try {
+    const result = runGsdTools(['--json-errors', 'phase', 'add-batch', 'Same', 'same'], cwd, homeSandboxEnv(cwd));
+    assert.equal(result.success, false, result.output);
+    assert.equal(JSON.parse(result.error).reason, 'phase_id_collision');
+    assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), []);
+    assert.deepEqual(run(cwd, ['query', 'roadmap.analyze']).phases, []);
+  } finally { cleanup(cwd); }
+});
+test('custom write identity: rejects an id already prefixed by the project code', () => {
+  const cwd = fixture('CCM');
+  try {
+    const result = runGsdTools(['--json-errors', 'phase', 'add', 'Other', '--id', 'ccm-FOO'], cwd, homeSandboxEnv(cwd));
+    assert.equal(result.success, false, result.output);
+    assert.equal(JSON.parse(result.error).reason, 'usage');
+    assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), []);
+  } finally { cleanup(cwd); }
+});
+for (const ids of [['SETUP', 'SETUP-2'], ['A-B', 'A'], ['3', '3-2']]) {
+  test(`custom write identity: marked prefix pair ${ids.join(' / ')} resolves independently`, () => {
+    const cwd = fixture('CCM');
+    try {
+      const dirs = ids.map(id => add(cwd, id, 'Boundary', 'CCM'));
+      for (let i = 0; i < ids.length; i++) assert.equal(run(cwd, ['query', 'find-phase', ids[i]]).directory, dirs[i]);
+      assert.equal(run(cwd, ['phase', 'remove', ids[0], '--force']).directory_deleted, path.basename(dirs[0]));
+      assert.equal(run(cwd, ['query', 'find-phase', ids[1]]).directory, dirs[1]);
+    } finally { cleanup(cwd); }
+  });
+}
+test('custom write identity: a roadmap-only prefix does not block a marked new id', () => {
+  const cwd = fixture(null);
+  try {
+    fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), '\n### Phase SETUP: Existing\n');
+    const dir = add(cwd, 'SETUP-2');
+    assert.equal(run(cwd, ['query', 'find-phase', 'SETUP-2']).directory, dir);
+  } finally { cleanup(cwd); }
+});
+test('custom write identity: an unambiguous markerless owner can be removed', () => {
+  const cwd = fixture(null);
+  try {
+    fs.mkdirSync(path.join(cwd, '.planning/phases/AUTH-legacy'));
+    fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), '\n### Phase AUTH: Legacy\n');
+    assert.equal(run(cwd, ['query', 'find-phase', 'AUTH']).directory, '.planning/phases/AUTH-legacy');
+    assert.equal(run(cwd, ['phase', 'remove', 'AUTH', '--force']).directory_deleted, 'AUTH-legacy');
+    assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), []);
+  } finally { cleanup(cwd); }
+});
+test('custom refusal codes: ambiguous markerless owners report candidates and repair path', () => {
+  const cwd = fixture(null);
+  try {
+    fs.mkdirSync(path.join(cwd, '.planning/phases/A-B-legacy'));
+    fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), '\n### Phase A: One\n### Phase A-B: Two\n');
+    const result = runGsdTools(['--json-errors', 'phase', 'remove', 'A-B', '--force'], cwd, homeSandboxEnv(cwd));
+    assert.equal(result.success, false);
+    const refusal = JSON.parse(result.error);
+    assert.equal(refusal.reason, 'ambiguous_phase_owner');
+    assert.deepEqual(refusal.candidates.sort(), ['A', 'A-B']);
+    assert.equal(refusal.marker_path, 'A-B-legacy/.phase-id');
+  } finally { cleanup(cwd); }
+});
+test('custom refusal codes: non-custom naming has a distinct reason', () => {
+  const cwd = fixture(null, 'sequential');
+  try {
+    const result = runGsdTools(['--json-errors', 'phase', 'add', 'Other', '--id', 'AUTH'], cwd, homeSandboxEnv(cwd));
+    assert.equal(result.success, false);
+    assert.equal(JSON.parse(result.error).reason, 'phase_naming_not_custom');
+  } finally { cleanup(cwd); }
+});
 for (const naming of ['custom', 'sequential']) {
   test(`batch directory safety: ${naming} rejects a project code that escapes phases`, () => {
     const cwd = fixture('../x', naming);
@@ -45,7 +146,7 @@ for (const naming of ['custom', 'sequential']) {
       const beforeRoadmap = fs.readFileSync(roadmapPath, 'utf8');
       const result = runGsdTools(['--json-errors', 'phase', 'add-batch', 'Alpha', 'Beta'], cwd, homeSandboxEnv(cwd));
       assert.equal(result.success, false, result.output);
-      assert.match(result.error, /"reason":"usage"/);
+      assert.equal(JSON.parse(result.error.split('\n').at(-1)).reason, 'usage');
       assert.deepEqual(fs.readdirSync(path.join(planning, 'phases')), []);
       assert.deepEqual(fs.readdirSync(planning).sort(), beforeEntries, 'no phase directory may be written beside phases/');
       assert.equal(fs.readFileSync(roadmapPath, 'utf8'), beforeRoadmap);
@@ -125,6 +226,7 @@ for (const code of [null, 'CCM']) {
     try {
       const dir = add(cwd, 'mixed-2', 'Boundary', code);
       cleanup(path.join(cwd, dir));
+      fs.writeFileSync(path.join(cwd, '.planning/ROADMAP.md'), '# Roadmap\n');
       run(cwd, ['scaffold', 'phase-dir', '--phase', 'mixed-2', '--name', 'Boundary']);
       assert.ok(fs.statSync(path.join(cwd, dir)).isDirectory());
     } finally { cleanup(cwd); }
@@ -164,7 +266,7 @@ for (const length of [59, 60, 61]) {
     } finally { cleanup(cwd); }
   });
 }
-test('custom add collision: fast-check refuses segment extensions with mixed-case and digit-leading ids', {timeout: ROUND_TRIP_TIMEOUT_MS}, () => {
+test('custom marked prefixes: fast-check resolves mixed-case and digit-leading pairs', {timeout: ROUND_TRIP_TIMEOUT_MS}, () => {
   const segment = fc.tuple(
     fc.constantFrom('A', 'b', 'c', '2A', '7b'),
     fc.array(fc.constantFrom('A', 'b', 'c', '2'), {maxLength: 2}),
@@ -175,11 +277,9 @@ test('custom add collision: fast-check refuses segment extensions with mixed-cas
     try {
       const longer = `${id}-${suffix}`;
       const shortDir = add(cwd, id, title, code);
-      const result = runGsdTools(['query', 'phase.add', title, '--id', longer], cwd, homeSandboxEnv(cwd));
-      assert.equal(result.success, false);
-      assert.match(result.error, /segment-prefix collision/);
+      const longDir = add(cwd, longer, title, code);
       assert.equal(run(cwd, ['query', 'find-phase', id]).directory, shortDir);
-      assert.equal(run(cwd, ['query', 'find-phase', longer]).found, false);
+      assert.equal(run(cwd, ['query', 'find-phase', longer]).directory, longDir);
     } finally { cleanup(cwd); }
   }), {numRuns: 30, seed: 5186, examples: [['2A', '2', false, '2024 roadmap'], ['7b', 'Ab', true, '3 steps'], ['A', '2', false, '2024 roadmap']]});
 });
@@ -449,9 +549,7 @@ for (const writer of ['add', 'batch']) {
         : ['phase', 'add-batch', 'Boundary', '--id', 'PRODUCT-BOUNDARY'];
       const result = runGsdTools(['--json-errors', ...args], cwd, {...homeSandboxEnv(cwd), GSD_HOME: cwd});
       assert.equal(result.success, false, result.output);
-      assert.match(result.error, /"reason":"usage"/);
-      assert.match(result.error, /phase_naming is not custom for this project/);
-      assert.match(result.error, /project config shadows.*defaults\.json/);
+      assert.equal(JSON.parse(result.error).reason, 'phase_naming_not_custom');
       assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), []);
       assert.equal(fs.readFileSync(path.join(cwd, '.planning/ROADMAP.md'), 'utf8'), before);
       assert.equal(fs.readFileSync(path.join(cwd, '.planning/config.json'), 'utf8'), '{}');
@@ -483,8 +581,8 @@ for (const target of ['A', 'A-B']) for (const code of [null, 'CCM']) {
       const roadmap = fs.readFileSync(path.join(cwd, '.planning/ROADMAP.md'), 'utf8');
       const result = runGsdTools(['--json-errors', 'phase', 'remove', target, '--force'], cwd, homeSandboxEnv(cwd));
       assert.equal(result.success, false, result.output);
-      assert.match(result.error, /"reason":"usage"/);
-      assert.match(result.error, /candidates: A-B, A/);
+      assert.equal(JSON.parse(result.error).reason, 'ambiguous_phase_owner');
+      assert.deepEqual(JSON.parse(result.error).candidates.sort(), ['A', 'A-B']);
       assert.equal(fs.existsSync(path.join(cwd, short)), true);
       assert.equal(fs.existsSync(path.join(cwd, long)), true);
       assert.equal(fs.readFileSync(path.join(cwd, '.planning/ROADMAP.md'), 'utf8'), roadmap);
@@ -502,8 +600,8 @@ for (const [target, ids, dir] of [['2', ['03', '03-2'], '03-2-second'], ['2.1', 
       const roadmap = fs.readFileSync(path.join(cwd, '.planning/ROADMAP.md'), 'utf8');
       const result = runGsdTools(['--json-errors', 'phase', 'remove', target, '--force'], cwd, homeSandboxEnv(cwd));
       assert.equal(result.success, false, result.output);
-      assert.match(result.error, /"reason":"usage"/);
-      for (const id of ids) assert.ok(result.error.includes(id), result.error);
+      assert.equal(JSON.parse(result.error).reason, 'ambiguous_phase_owner');
+      assert.deepEqual(JSON.parse(result.error).candidates.sort(), [...ids].sort());
       assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')).sort(), [targetDir, dir].sort());
       assert.equal(fs.readFileSync(path.join(cwd, '.planning/ROADMAP.md'), 'utf8'), roadmap);
     } finally { cleanup(cwd); }
@@ -538,7 +636,7 @@ test('custom ownership scope: active and archived directories with the same base
     fs.mkdirSync(archive, {recursive: true});
     const archived = path.join(archive, path.basename(original));
     fs.renameSync(path.join(cwd, original), archived);
-    const created = add(cwd, 'CCM-setup', 'Extra Widget', 'CCM');
+    const created = existingCustomDirectory(cwd, 'CCM-setup', 'Extra Widget', 'CCM');
     // These IDs have no segment-prefix collision. The reader supports both
     // configured-prefix and unprefixed legacy directory bodies, allowing the
     // two physical pools to retain the same basename with different records.
@@ -636,19 +734,13 @@ for (const [removed, survivor] of [['1', '2024-Q1'], ['2.1', '2.2-EXTRA']]) {
 }
 
 for (const [first, second] of [['3', '3-2'], ['3-2', '3'], ['setup', 'setup-extra'], ['setup-extra', 'setup']]) {
-  test(`custom add collision: ${second} cannot extend recorded ${first} or its parent`, () => {
+  test(`custom marked prefixes: ${first} and ${second} keep distinct directories`, () => {
     const cwd = fixture(null);
     try {
-      add(cwd, first);
-      const roadmap = path.join(cwd, '.planning/ROADMAP.md');
-      const before = fs.readFileSync(roadmap, 'utf8');
-      const dirs = fs.readdirSync(path.join(cwd, '.planning/phases'));
-      const result = runGsdTools(['query', 'phase.add', 'Collision', '--id', second], cwd, homeSandboxEnv(cwd));
-      assert.equal(result.success, false);
-      assert.match(result.error, /recorded.*(?:segment|prefix)|(?:segment|prefix).*recorded/i);
-      assert.match(result.error, new RegExp(first));
-      assert.equal(fs.readFileSync(roadmap, 'utf8'), before);
-      assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), dirs);
+      const firstDir = add(cwd, first, 'First');
+      const secondDir = add(cwd, second, 'Second');
+      assert.equal(run(cwd, ['query', 'find-phase', first]).directory, firstDir);
+      assert.equal(run(cwd, ['query', 'find-phase', second]).directory, secondDir);
     } finally { cleanup(cwd); }
   });
 }
@@ -661,7 +753,7 @@ for (const id of [' A', 'B ', '[Z]', 'A B', 'A\tB', 'A:B']) {
       const before = fs.readFileSync(roadmap, 'utf8');
       const result = runGsdTools(['--json-errors', 'query', 'phase.add', 'Invalid', '--id', id], cwd, homeSandboxEnv(cwd));
       assert.equal(result.success, false);
-      assert.match(result.error, /"reason":"usage"/);
+      assert.equal(JSON.parse(result.error).reason, 'usage');
       assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), []);
       assert.equal(fs.readFileSync(roadmap, 'utf8'), before);
     } finally { cleanup(cwd); }
@@ -684,7 +776,7 @@ test('custom insertion: records AUTH.1 and permits its removal', () => {
 });
 
 for (const ambiguous of [false, true]) {
-  test(`custom ownership repair: markerless refusal explains repair with ambiguity ${ambiguous}`, () => {
+  test(`custom ownership repair: only ambiguous markerless owners refuse with ambiguity ${ambiguous}`, () => {
     const cwd = fixture(null);
     try {
       const id = ambiguous ? 'AUTH-EXTRA' : 'AUTH';
@@ -692,25 +784,16 @@ for (const ambiguous of [false, true]) {
       fs.mkdirSync(path.join(cwd, '.planning/phases', dir));
       fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), `\n### Phase AUTH: Auth\n${ambiguous ? '### Phase AUTH-EXTRA: Extra\n' : ''}`);
       const result = runGsdTools(['--json-errors', 'phase', 'remove', id, '--force'], cwd, homeSandboxEnv(cwd));
-      assert.equal(result.success, false);
-      assert.match(result.error, /"reason":"usage"/);
-      assert.match(result.error, /write.*id/i);
-      assert.ok(result.error.includes(`${dir}/.phase-id`), result.error);
+      assert.equal(result.success, !ambiguous, result.error || result.output);
+      if (ambiguous) {
+        const refusal = JSON.parse(result.error);
+        assert.equal(refusal.reason, 'ambiguous_phase_owner');
+        assert.deepEqual(refusal.candidates.sort(), ['AUTH', 'AUTH-EXTRA']);
+        assert.equal(refusal.marker_path, `${dir}/.phase-id`);
+      } else assert.equal(JSON.parse(result.output).directory_deleted, dir);
     } finally { cleanup(cwd); }
   });
 }
-
-test('custom naming compatibility: changeset explains the non-custom phase.add --id usage error', () => {
-  const cwd = fixture(null, 'sequential');
-  try {
-    const result = runGsdTools(['query', 'phase.add', 'Boundary', '--id', 'AUTH'], cwd, homeSandboxEnv(cwd));
-    assert.equal(result.success, false);
-    assert.match(result.error, /phase_naming is not custom/);
-    const active = path.join(__dirname, '../.changeset/lucky-deer-travel.md');
-    const changeset = fs.readFileSync(fs.existsSync(active) ? active : path.join(__dirname, '../.changeset/archived/lucky-deer-travel.md'), 'utf8');
-    assert.match(changeset, /phase\.add --id.*usage error.*unresolvable/i);
-  } finally { cleanup(cwd); }
-});
 
 for (const [id, directory] of [['M1-03', '03-boundary'], ['AUTH', 'AUTH-boundary']]) {
   test(`legacy scaffold compatibility: non-custom project accepts ${id}`, () => {
@@ -944,39 +1027,36 @@ for (const id of ['[CCM.01-01]', '[CCM]-01']) {
 }
 
 for (const writer of ['add', 'batch', 'scaffold']) for (const owner of ['recorded', 'markerless', 'roadmap']) {
-  test(`shared custom collision guard: ${writer} refuses an extension of ${owner} AUTH`, () => {
+  test(`shared custom identity preflight: ${writer} checks prefix ownership from ${owner}`, () => {
     const cwd = fixture(null);
     try {
       if (owner === 'recorded') add(cwd, 'AUTH', 'Existing');
-      else if (owner === 'markerless') fs.mkdirSync(path.join(cwd, '.planning/phases/AUTH-legacy'));
-      else fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), '\n### Phase AUTH: Declared\n');
-      const roadmap = path.join(cwd, '.planning/ROADMAP.md');
-      const before = fs.readFileSync(roadmap, 'utf8');
-      const dirs = fs.readdirSync(path.join(cwd, '.planning/phases'));
+      else if (owner === 'markerless') {
+        fs.mkdirSync(path.join(cwd, '.planning/phases/AUTH-EXTRA-legacy'));
+        fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), '\n### Phase AUTH: Declared\n');
+      } else fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), '\n### Phase AUTH: Declared\n');
+      const before = fs.readdirSync(path.join(cwd, '.planning/phases'));
       const args = writer === 'add' ? ['query', 'phase.add', 'New', '--id', 'AUTH-EXTRA']
         : writer === 'batch' ? ['phase', 'add-batch', 'Auth Extra']
           : ['scaffold', 'phase-dir', '--phase', 'AUTH-EXTRA', '--name', 'New'];
       const result = runGsdTools(['--json-errors', ...args], cwd, homeSandboxEnv(cwd));
-      assert.equal(result.success, false, result.output);
-      assert.match(result.error, /"reason":"usage"/);
-      assert.match(result.error, /segment-prefix collision/);
-      assert.equal(fs.readFileSync(roadmap, 'utf8'), before);
-      assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), dirs);
+      assert.equal(result.success, owner !== 'markerless', result.error || result.output);
+      if (owner === 'markerless') {
+        assert.equal(JSON.parse(result.error).reason, 'phase_id_collision');
+        assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), before);
+      } else assert.equal(run(cwd, ['query', 'find-phase', 'AUTH-EXTRA']).found, true);
     } finally { cleanup(cwd); }
   });
 }
 for (const descriptions of [['Auth', 'Auth Extra'], ['Auth Extra', 'Auth']]) {
-  test(`shared custom collision guard: batch refuses its own prefixes in order ${descriptions.join(', ')}`, () => {
+  test(`shared custom identity preflight: batch records prefixes in order ${descriptions.join(', ')}`, () => {
     const cwd = fixture(null);
     try {
-      const roadmap = path.join(cwd, '.planning/ROADMAP.md');
-      const before = fs.readFileSync(roadmap, 'utf8');
-      const result = runGsdTools(['--json-errors', 'phase', 'add-batch', ...descriptions], cwd, homeSandboxEnv(cwd));
-      assert.equal(result.success, false, result.output);
-      assert.match(result.error, /"reason":"usage"/);
-      assert.match(result.error, /segment-prefix collision/);
-      assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), []);
-      assert.equal(fs.readFileSync(roadmap, 'utf8'), before);
+      const result = run(cwd, ['phase', 'add-batch', ...descriptions]);
+      assert.equal(result.count, 2);
+      for (const phase of result.phases) {
+        assert.equal(run(cwd, ['query', 'find-phase', phase.phase_number]).directory, phase.directory);
+      }
     } finally { cleanup(cwd); }
   });
 }

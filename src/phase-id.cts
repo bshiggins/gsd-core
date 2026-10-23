@@ -1418,7 +1418,9 @@ const unpad = (digits: string): string => digits.replace(/^0+(?=\d)/, '');
 
 /** #5186: the directory shape shared by phase.add and custom-ID readers. */
 const UNSAFE_PHASE_DIRECTORY_PART_RE = /[/\\\0]|\.\./;
-class PhaseDirectoryNameError extends Error {}
+class PhaseDirectoryNameError extends Error {
+  constructor(message: string, readonly kind: 'invalid' | 'collision' = 'invalid') { super(message); }
+}
 function phaseDirectoryName(id: string, slug: string, projectCode?: string | null): string {
   if (!id || [id, slug, projectCode ?? ''].some(part => UNSAFE_PHASE_DIRECTORY_PART_RE.test(part))) {
     throw new PhaseDirectoryNameError('Invalid phase id or directory component: paths, .. and NUL are not allowed');
@@ -1459,9 +1461,9 @@ function phaseDirectoryContext(config: Record<string, unknown>, roadmap = '', kn
 function phaseScanTokenSource(context: PhaseDirectoryContext): string {
   return context?.phaseNaming === 'custom' ? '[^ \t:\n]+' : PHASE_NUMBER_TOKEN_SOURCE;
 }
-type CustomPhaseQuery = { id: string; listed: boolean; projectCode?: string | null; prefixes: { id: string; prefix: string }[]; directoryIds?: Record<string, string> };
+type CustomPhaseQuery = { id: string; listed: boolean; recordedId?: string; projectCode?: string | null; prefixes: { id: string; prefix: string }[]; directoryIds?: Record<string, string> };
 
-type CustomIdentityIndex = { roadmap: string; knownIds: string[]; explicitIds: Set<string>; ids: Set<string>; recorded: Set<string>; recordedByFold: Map<string, string>; order: Map<string, number>; prefixes: {id: string; prefix: string}[] };
+type CustomIdentityIndex = { roadmap: string; knownIds: string[]; explicitIds: Set<string>; ids: Set<string>; recorded: Set<string>; recordedByFold: Map<string, string[]>; order: Map<string, number>; prefixes: {id: string; prefix: string}[] };
 const customIdentityIndexes = new WeakMap<PhaseDirectoryContext, CustomIdentityIndex>();
 
 function customIdentityIndex(options: PhaseDirectoryContext): CustomIdentityIndex {
@@ -1472,9 +1474,16 @@ function customIdentityIndex(options: PhaseDirectoryContext): CustomIdentityInde
       .filter(heading => heading.level >= 2 && heading.level <= 4)
       .flatMap(heading => heading.text.match(headingId)?.[1] ?? []);
     const recorded = new Set(Object.values(options.directoryIds ?? {}));
+    const recordedByFold = new Map<string, string[]>();
+    for (const id of recorded) {
+      const key = recordedPhaseKey(id);
+      const aliases = recordedByFold.get(key);
+      if (aliases) aliases.push(id);
+      else recordedByFold.set(key, [id]);
+    }
     const ids = new Set([...headings, ...options.knownIds ?? [], ...recorded]);
     index = {
-      roadmap: options.roadmap, knownIds: options.knownIds, explicitIds: new Set(options.knownIds ?? []), ids, recorded, recordedByFold: new Map([...recorded].map(id => [recordedPhaseKey(id), id])), order: new Map([...ids].map((id, i) => [id, i])),
+      roadmap: options.roadmap, knownIds: options.knownIds, explicitIds: new Set(options.knownIds ?? []), ids, recorded, recordedByFold, order: new Map([...ids].map((id, i) => [id, i])),
       prefixes: [...ids].filter(token => token && !UNSAFE_PHASE_DIRECTORY_PART_RE.test(token))
         .sort((a, b) => b.length - a.length)
         .map(token => ({id: token, prefix: phaseDirectoryName(token, '')})),
@@ -1488,31 +1497,20 @@ function customIdentityIndex(options: PhaseDirectoryContext): CustomIdentityInde
 function validateCustomPhaseIds(ids: string[], context: PhaseDirectoryContext): void {
   const index = customIdentityIndex(context);
   const known = new Set(index.ids);
-  const collides = (id: string, other: string): boolean => {
-    const a = id.toLowerCase();
-    const b = other.toLowerCase();
-    return a.startsWith(`${b}-`) || b.startsWith(`${a}-`);
-  };
+  const prospective = {...context, knownIds: [...context.knownIds ?? [], ...ids]};
   for (const id of ids) {
     validateCustomPhaseId(id);
-    const collision = [...known].find(other => collides(id, other));
+    if (context.projectCode && id.toLowerCase().startsWith(`${context.projectCode}-`.toLowerCase())) {
+      throw new PhaseDirectoryNameError(`Custom ID ${id} already begins with project_code ${context.projectCode}; pass the ID without its project prefix`);
+    }
+    const collision = [...known].find(other => recordedPhaseKey(id) === recordedPhaseKey(other));
     if (collision) {
-      const source = index.recorded.has(collision) || index.explicitIds.has(collision) ? 'recorded' : 'declared or pending';
-      throw new PhaseDirectoryNameError(`Custom ID ${id} has a segment-prefix collision with ${source} ID ${collision}; choose a distinct ID`);
+      throw new PhaseDirectoryNameError(`Custom ID ${id} collides with existing or pending ID ${collision}; choose a distinct ID`, 'collision');
     }
     for (const dir of context.unmarkedDirectories ?? []) {
-      if (customDirectoryCandidates(dir, context).length > 0) continue;
-      // Without a marker or a declared owner, every segment boundary before
-      // the final slug is plausible. Refuse an uncertain collision; recording
-      // the true owner lets later writes use that exact ID instead of guessing.
-      for (const body of customDirectoryBodies(dir, context.projectCode)) {
-        const segments = body.split('-');
-        for (let end = 1; end < segments.length; end++) {
-          const candidate = segments.slice(0, end).join('-');
-          if (collides(id, candidate)) {
-            throw new PhaseDirectoryNameError(`Custom ID ${id} has a segment-prefix collision with possible markerless ID ${candidate} in ${dir}; write the owning ID into ${dir}/${CUSTOM_PHASE_ID_FILE} and retry`);
-          }
-        }
+      const candidates = customDirectoryCandidates(dir, prospective);
+      if (candidates.some(candidate => recordedPhaseKey(candidate) === recordedPhaseKey(id))) {
+        throw new PhaseDirectoryNameError(`Custom ID ${id} would claim markerless directory ${dir}; candidates: ${candidates.join(', ')}. Write the owning ID into ${dir}/${CUSTOM_PHASE_ID_FILE} and retry`, 'collision');
       }
     }
     known.add(id);
@@ -1528,7 +1526,8 @@ function customPhaseQuery(id: string, options: PhaseDirectoryContext): CustomPha
   const index = customIdentityIndex(options);
   // Markers are authoritative; only legacy-shaped IDs share their ordinary
   // numeric padding normalization. Custom digit-leading IDs never collapse.
-  const recorded = index.recordedByFold.get(recordedPhaseKey(body));
+  const aliases = index.recordedByFold.get(recordedPhaseKey(body)) ?? [];
+  const recorded = index.recorded.has(id) ? id : index.recorded.has(body) ? body : aliases.length === 1 ? aliases[0] : undefined;
   if (recorded !== undefined) id = recorded;
   const listed = index.ids.has(id);
   // Legacy numeric tokens (including configured display prefixes) keep their
@@ -1541,7 +1540,7 @@ function customPhaseQuery(id: string, options: PhaseDirectoryContext): CustomPha
   if (!listed && !options.directoryIds?.[id] && body.includes('-') && LEGACY_PHASE_ID_RE.test(body.split('-')[0])) return null;
   // Listed identities outrank the query; a directory's slug never invents an ID.
   return {
-    id, listed: listed, projectCode: options.projectCode, directoryIds: options.directoryIds,
+    id, listed: listed, recordedId: recorded, projectCode: options.projectCode, directoryIds: options.directoryIds,
     prefixes: listed ? index.prefixes : [...index.prefixes, {id, prefix: phaseDirectoryName(id, '')}],
   };
 }
@@ -1606,6 +1605,7 @@ function customDirectoryCandidates(dir: string, context: PhaseDirectoryContext):
 
 function customPhaseDirectoryParts(dir: string, query: CustomPhaseQuery): { id: string; slug: string } | null {
   const owner = customDirectoryOwner(dir, query);
+  if (query.recordedId !== undefined) return owner?.id === query.recordedId ? owner : null;
   return owner?.id.toLowerCase() === query.id.toLowerCase() ? owner : null;
 }
 

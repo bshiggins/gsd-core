@@ -1465,7 +1465,7 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
   const naming = phaseDirectoryOptions(cwd, undefined, '');
   if (customId != null) {
     const usage = phaseLocatorMod.customPhaseNamingUsage(cwd, naming);
-    if (usage) error(usage, ERROR_REASON.USAGE);
+    if (usage) error(usage, ERROR_REASON.PHASE_NAMING_NOT_CUSTOM);
   }
   const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
   if (!fs.existsSync(roadmapPath)) {
@@ -1492,7 +1492,7 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
         _dirName = phaseDirectoryName(String(_newPhaseId), slug, projectCode);
       }
       catch (cause) {
-        if (cause instanceof PhaseDirectoryNameError) error(cause.message, ERROR_REASON.USAGE);
+        if (cause instanceof PhaseDirectoryNameError) error(cause.message, cause.kind === 'collision' ? ERROR_REASON.PHASE_ID_COLLISION : ERROR_REASON.USAGE);
         throw cause;
       }
     } else {
@@ -1618,7 +1618,7 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
   }
   const naming = phaseDirectoryOptions(cwd, undefined, '');
   if (descriptions.includes('--id')) {
-    error(phaseLocatorMod.customPhaseNamingUsage(cwd, naming) ?? '--id is not supported by phase add-batch', ERROR_REASON.USAGE);
+    error(phaseLocatorMod.customPhaseNamingUsage(cwd, naming) ?? '--id is not supported by phase add-batch', naming.phaseNaming === 'custom' ? ERROR_REASON.USAGE : ERROR_REASON.PHASE_NAMING_NOT_CUSTOM);
   }
   const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
   if (!fs.existsSync(roadmapPath)) {
@@ -1692,7 +1692,7 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
         return {description, slug, newPhaseId, dirName, dirPath};
       });
     } catch (cause) {
-      if (cause instanceof PhaseDirectoryNameError) error(cause.message, ERROR_REASON.USAGE);
+      if (cause instanceof PhaseDirectoryNameError) error(cause.message, cause.kind === 'collision' ? ERROR_REASON.PHASE_ID_COLLISION : ERROR_REASON.USAGE);
       throw cause;
     }
     const added: Record<string, unknown>[] = [];
@@ -2086,7 +2086,7 @@ function assertUnambiguousCustomDirectories(dirs: string[], context: ReturnType<
   for (const dir of dirs) {
     const candidates = phaseIdMod.customDirectoryCandidates(dir, context);
     if (candidates.length > 1) {
-      error(`Ambiguous custom phase directory ${dir}; candidates: ${candidates.join(', ')}. Refusing removal or rename without ${CUSTOM_PHASE_ID_FILE}. Write the owning ID into ${dir}/${CUSTOM_PHASE_ID_FILE} and retry`, ERROR_REASON.USAGE);
+      error(`Ambiguous custom phase directory ${dir}; candidates: ${candidates.join(', ')}. Refusing removal or rename without ${CUSTOM_PHASE_ID_FILE}. Write the owning ID into ${dir}/${CUSTOM_PHASE_ID_FILE} and retry`, ERROR_REASON.AMBIGUOUS_PHASE_OWNER, {candidates, marker_path: toPosixPath(path.join(dir, CUSTOM_PHASE_ID_FILE))});
     }
   }
 }
@@ -2709,10 +2709,7 @@ function cmdPhaseRemove(
     || phaseIdMod.customDirectoryCandidates(targetDir, directoryContext).length > 0);
   const stableIds = new Set(subdirs.flatMap(dir => phaseIdMod.customDirectoryCandidates(dir, directoryContext))
     .map(id => (isCustomPhaseId(id) ? id : normalizePhaseName(id)).toLowerCase()));
-  if (targetDir && directoryContext.phaseNaming === 'custom'
-    && isCustomPhaseId(targetPhase) && !directoryContext.directoryIds?.[targetDir]) {
-    error(`Cannot prove ownership of custom phase directory ${targetDir}; refusing removal without ${CUSTOM_PHASE_ID_FILE}. Write the owning ID into ${targetDir}/${CUSTOM_PHASE_ID_FILE} and retry`, ERROR_REASON.USAGE);
-  }
+
 
   if (targetDir && !force) {
     // #3183: canonical summary set (root+nested) from the single owner —

@@ -3821,7 +3821,7 @@ function cmdScaffold(cwd: string, type: string, options: ScaffoldOptions, raw: b
           scaffoldConfig.phaseNaming === 'custom' && isCustomPhaseId(phase) ? phase : padded, slug || '', scaffoldProjectCode,
         );
       } catch (cause) {
-        if (cause instanceof PhaseDirectoryNameError) error(cause.message, ERROR_REASON.USAGE);
+        if (cause instanceof PhaseDirectoryNameError) error(cause.message, cause.kind === 'collision' ? ERROR_REASON.PHASE_ID_COLLISION : ERROR_REASON.USAGE);
         throw cause;
       }
       const phasesParent = planningPaths(cwd).phases;
