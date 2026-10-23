@@ -11,6 +11,89 @@ const locator = require('../gsd-core/bin/lib/phase-locator.cjs');
 
 function options(code, naming = 'custom') { return {phaseNaming: naming, projectCode: code}; }
 
+
+for (const code of [null, 'CCM']) {
+  for (const writer of ['add', 'scaffold']) {
+    test(`phase directory collision: ${writer} cannot replace a different owner's marker, code ${code}`, () => {
+      const cwd = fixture(code);
+      try {
+        const [firstId, firstTitle, nextId, nextTitle, basename] = code
+          ? ['SETUP', '2 t', 'SETUP-2', 't', 'CCM-SETUP-2-t']
+          : ['A', 'b x', 'A-b', 'x', 'A-b-x'];
+        add(cwd, firstId, firstTitle, code);
+        const marker = path.join(cwd, '.planning/phases', basename, '.phase-id');
+        const before = fs.readFileSync(marker, 'utf8');
+        const args = writer === 'add' ? ['phase', 'add', nextTitle, '--id', nextId]
+          : ['scaffold', 'phase-dir', '--phase', nextId, '--name', nextTitle];
+        const result = runGsdTools(['--json-errors', ...args], cwd, homeSandboxEnv(cwd));
+        assert.equal(result.success, false, result.output);
+        assert.equal(JSON.parse(result.error).reason, 'phase_id_collision');
+        assert.equal(fs.readFileSync(marker, 'utf8'), before);
+        assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), [basename]);
+        assert.equal(run(cwd, ['query', 'find-phase', firstId]).directory, `.planning/phases/${basename}`);
+        assert.equal(run(cwd, ['roadmap', 'get-phase', nextId]).found, false);
+      } finally { cleanup(cwd); }
+    });
+  }
+}
+test('phase directory collision: add-batch refuses an occupied target before creating any entry', () => {
+  const cwd = fixture(null);
+  try {
+    const occupied = path.join(cwd, '.planning/phases/SECOND-second');
+    fs.mkdirSync(occupied);
+    fs.writeFileSync(path.join(occupied, '.phase-id'), 'OTHER');
+    const result = runGsdTools(['--json-errors', 'phase', 'add-batch', 'First', 'Second'], cwd, homeSandboxEnv(cwd));
+    assert.equal(result.success, false, result.output);
+    assert.equal(JSON.parse(result.error).reason, 'phase_id_collision');
+    assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), ['SECOND-second']);
+    assert.equal(fs.readFileSync(path.join(occupied, '.phase-id'), 'utf8'), 'OTHER');
+    assert.deepEqual(run(cwd, ['query', 'roadmap.analyze']).phases, []);
+  } finally { cleanup(cwd); }
+});
+test('phase directory collision: shared batch preflight refuses distinct ids mapping to one target', () => {
+  const cwd = fixture(null);
+  try {
+    // CLI batches derive IDs from titles; exercise the exported writer seam's
+    // explicit entry shape used by every writer without patching global I/O.
+    const lib = path.resolve(__dirname, '../gsd-core/bin/lib');
+    const script = `const {setJsonErrorMode} = require(${JSON.stringify(path.join(lib, 'io.cjs'))}); setJsonErrorMode(true);
+      const {ExitError} = require(${JSON.stringify(path.join(lib, 'cli-exit.cjs'))});
+      const locator = require(${JSON.stringify(path.join(lib, 'phase-locator.cjs'))});
+      try { locator.createPhaseDirectories(${JSON.stringify(cwd)}, [{id:'A',slug:'b-x'}, {id:'A-b',slug:'x'}], locator.phaseDirectoryOptions(${JSON.stringify(cwd)})); }
+      catch (cause) { if (cause instanceof ExitError) process.exitCode = cause.code; else throw cause; }`;
+    const result = require('./helpers/process-seam.cjs').runNode(['-e', script], {
+      timeoutMs: PROBE_TIMEOUT_MS, env: {...process.env, ...homeSandboxEnv(cwd)},
+    });
+    assert.notEqual(result.exitCode, 0, result.stdout);
+    assert.equal(JSON.parse(result.stderr).reason, 'phase_id_collision');
+    assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), []);
+  } finally { cleanup(cwd); }
+});
+test('phase directory collision: numeric scaffold refuses a markerless directory', () => {
+  const cwd = fixture(null, 'sequential');
+  try {
+    fs.mkdirSync(path.join(cwd, '.planning/phases/07-existing'));
+    const result = runGsdTools(['--json-errors', 'scaffold', 'phase-dir', '--phase', '7', '--name', 'Existing'], cwd, homeSandboxEnv(cwd));
+    assert.equal(result.success, false, result.output);
+    assert.equal(JSON.parse(result.error).reason, 'phase_id_collision');
+    assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases/07-existing')), []);
+  } finally { cleanup(cwd); }
+});
+test('phase directory collision: insert refuses an occupied file without changing the roadmap', () => {
+  const cwd = fixture(null);
+  try {
+    add(cwd, '3', 'Parent');
+    const occupied = path.join(cwd, '.planning/phases/03.1-extra');
+    fs.writeFileSync(occupied, 'keep');
+    const before = run(cwd, ['query', 'roadmap.analyze']).phases;
+    const result = runGsdTools(['--json-errors', 'phase', 'insert', '3', 'Extra'], cwd, homeSandboxEnv(cwd));
+    assert.equal(result.success, false, result.output);
+    assert.equal(JSON.parse(result.error).reason, 'phase_id_collision');
+    assert.equal(fs.readFileSync(occupied, 'utf8'), 'keep');
+    assert.deepEqual(run(cwd, ['query', 'roadmap.analyze']).phases, before);
+  } finally { cleanup(cwd); }
+});
+
 for (const reverse of [false, true]) {
   for (const command of ['find-phase', 'init.plan-phase', 'init.execute-phase', 'init.phase-op', 'remove']) {
     test(`custom identity precedence: ${command} prefers a recorded id over a basename, reverse ${reverse}`, () => {

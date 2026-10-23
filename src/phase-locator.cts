@@ -347,12 +347,17 @@ function createPhaseDirectories<T extends PhaseDirectoryWrite>(cwd: string, entr
   try {
     const recorded = entries.filter(entry => entry.recordIdentity ?? context.phaseNaming === 'custom');
     if (recorded.length > 0) phaseIdModule.validateCustomPhaseIds(recorded.map(entry => entry.id), context);
+    const pendingPaths = new Set<string>();
     prepared = entries.map(entry => {
       // Validate the raw ID before legacy scaffold normalization can discard it.
       phaseIdModule.phaseDirectoryName(entry.id, '', context.projectCode);
       const dirName = phaseIdModule.phaseDirectoryName(entry.directoryId ?? entry.id, entry.slug, context.projectCode);
       const dirPath = path.resolve(phasesRoot, dirName);
       if (path.dirname(dirPath) !== phasesRoot) error('Phase directory escapes the phases directory', ERROR_REASON.USAGE);
+      if (pendingPaths.has(dirPath) || fs.lstatSync(dirPath, {throwIfNoEntry: false}) !== undefined) {
+        throw new phaseIdModule.PhaseDirectoryNameError(`Phase directory ${dirName} already exists or is claimed by another pending entry; choose a distinct ID or title`, 'collision');
+      }
+      pendingPaths.add(dirPath);
       return {...entry, dirName, dirPath, recordIdentity: entry.recordIdentity ?? context.phaseNaming === 'custom'};
     });
   } catch (cause) {
