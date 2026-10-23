@@ -156,6 +156,19 @@ test('custom directory handles: remove accepts a full basename and removes its h
     assert.equal(run(cwd, ['roadmap', 'get-phase', 'PRODUCT-BOUNDARY']).found, false);
   } finally { cleanup(cwd); }
 });
+test('numeric insertion family: inserted decimals follow their unrecorded parent renumbering', () => {
+  const cwd = fixture(null);
+  try {
+    for (const [id, name] of [['01', 'one'], ['02', 'two'], ['03', 'three']]) {
+      fs.mkdirSync(path.join(cwd, '.planning/phases', `${id}-${name}`));
+      fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), `\n### Phase ${Number(id)}: ${name}\n`);
+    }
+    run(cwd, ['phase', 'insert', '2', 'Extra']);
+    run(cwd, ['phase', 'remove', '1', '--force']);
+    assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')).sort(), ['01-two', '01.1-extra', '02-three'].sort());
+    assert.equal(run(cwd, ['query', 'find-phase', '1.1']).directory, '.planning/phases/01.1-extra');
+  } finally { cleanup(cwd); }
+});
 for (const naming of ['custom', 'sequential']) {
   test(`batch directory safety: ${naming} rejects a project code that escapes phases`, () => {
     const cwd = fixture('../x', naming);
@@ -1011,7 +1024,7 @@ test('legacy removal identity: removing a recorded numeric target leaves legacy 
 });
 
 for (const code of [null, 'CCM']) {
-  test(`recorded numeric aliases: inserted 03.1 resolves and removes as 3.1 with code ${code}`, () => {
+  test(`inserted numeric aliases: 03.1 resolves and removes as 3.1 with code ${code}`, () => {
     const cwd = fixture(code);
     try {
       fs.mkdirSync(path.join(cwd, '.planning/phases', `${code ? `${code}-` : ''}03-base`));

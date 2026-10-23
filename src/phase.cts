@@ -1925,7 +1925,11 @@ function cmdPhaseInsert(
 
     platformEnsureDir(dirPath);
     platformWriteSync(path.join(dirPath, '.gitkeep'), '');
-    if (insertConfig.phaseNaming === 'custom') platformWriteSync(path.join(dirPath, CUSTOM_PHASE_ID_FILE), _decimalPhase);
+    // An inserted child inherits its parent's identity policy: legacy numeric
+    // families must still renumber together when their parent moves.
+    if (phaseIdMod.customPhaseQuery(afterPhase, {...insertConfig, roadmap: rawContent})) {
+      platformWriteSync(path.join(dirPath, CUSTOM_PHASE_ID_FILE), _decimalPhase);
+    }
 
     let updatedContent: string;
 
