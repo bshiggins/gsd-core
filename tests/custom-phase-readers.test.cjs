@@ -692,7 +692,7 @@ test('custom naming policy: explicit project naming and project code agree at ev
 });
 
 for (const target of ['A', 'A-B']) for (const code of [null, 'CCM']) {
-  test(`custom mutation safety: markerless prefix owners refuse removing ${target} with code ${code} (#5186)`, () => {
+  test(`custom mutation safety: ${target === 'A' ? 'a unique marked owner preserves its markerless sibling' : 'an ambiguous markerless owner refuses removal'} with code ${code} (#5186)`, () => {
     const cwd = fixture(code);
     try {
       const short = add(cwd, 'A', 'First', code);
@@ -700,12 +700,20 @@ for (const target of ['A', 'A-B']) for (const code of [null, 'CCM']) {
       fs.unlinkSync(path.join(cwd, long, '.phase-id'));
       const roadmap = fs.readFileSync(path.join(cwd, '.planning/ROADMAP.md'), 'utf8');
       const result = runGsdTools(['--json-errors', 'phase', 'remove', target, '--force'], cwd, homeSandboxEnv(cwd));
-      assert.equal(result.success, false, result.output);
-      assert.equal(JSON.parse(result.error).reason, 'ambiguous_phase_owner');
-      assert.deepEqual(JSON.parse(result.error).candidates.sort(), ['A', 'A-B']);
-      assert.equal(fs.existsSync(path.join(cwd, short)), true);
+      if (target === 'A') {
+        assert.equal(result.success, true, result.error);
+        assert.equal(JSON.parse(result.output).directory_deleted, path.basename(short));
+        assert.equal(fs.existsSync(path.join(cwd, short)), false);
+        assert.equal(run(cwd, ['roadmap', 'get-phase', 'A']).found, false);
+        assert.equal(run(cwd, ['roadmap', 'get-phase', 'A-B']).found, true);
+      } else {
+        assert.equal(result.success, false, result.output);
+        assert.equal(JSON.parse(result.error).reason, 'ambiguous_phase_owner');
+        assert.deepEqual(JSON.parse(result.error).candidates.sort(), ['A', 'A-B']);
+        assert.equal(fs.existsSync(path.join(cwd, short)), true);
+        assert.equal(fs.readFileSync(path.join(cwd, '.planning/ROADMAP.md'), 'utf8'), roadmap);
+      }
       assert.equal(fs.existsSync(path.join(cwd, long)), true);
-      assert.equal(fs.readFileSync(path.join(cwd, '.planning/ROADMAP.md'), 'utf8'), roadmap);
     } finally { cleanup(cwd); }
   });
 }
