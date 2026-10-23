@@ -188,6 +188,26 @@ test('custom reader order: phases list uses roadmap order', () => {
     assert.deepEqual(run(cwd, ['phases', 'list']).directories, dirs);
   } finally { cleanup(cwd); }
 });
+test('custom naming value: uppercase CUSTOM writes and resolves custom ids', () => {
+  const cwd = fixture('CCM', 'CUSTOM');
+  try {
+    const dir = add(cwd, 'AUTH', 'Boundary', 'CCM');
+    assert.equal(run(cwd, ['query', 'find-phase', 'AUTH']).directory, dir);
+  } finally { cleanup(cwd); }
+});
+test('custom naming value: corrupt project config reports a parse failure', () => {
+  const cwd = fixture(null);
+  try {
+    fs.mkdirSync(path.join(cwd, '.gsd'));
+    fs.writeFileSync(path.join(cwd, '.gsd/defaults.json'), JSON.stringify({phase_naming: 'custom'}));
+    fs.writeFileSync(path.join(cwd, '.planning/config.json'), '{ invalid');
+    const result = runGsdTools(['--json-errors', 'phase', 'add', 'Other', '--id', 'AUTH'], cwd, {...homeSandboxEnv(cwd), GSD_HOME: cwd});
+    assert.equal(result.success, false);
+    assert.equal(JSON.parse(result.error).reason, 'config_parse_failed');
+    assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), []);
+  } finally { cleanup(cwd); }
+});
+
 for (const naming of ['custom', 'sequential']) {
   test(`batch directory safety: ${naming} rejects a project code that escapes phases`, () => {
     const cwd = fixture('../x', naming);

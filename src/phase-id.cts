@@ -1455,11 +1455,11 @@ function recordedPhaseKey(id: string): string {
 }
 
 const CUSTOM_PHASE_ID_FILE = '.phase-id';
-type PhaseDirectoryContext = { phaseNaming: unknown; projectCode: string | null; roadmap: string; knownIds: string[]; directoryIds?: Record<string, string>; unmarkedDirectories?: string[]; directoryIdsByRoot?: Record<string, Record<string, string>> };
+type PhaseDirectoryContext = { phaseNaming: unknown; projectCode: string | null; roadmap: string; knownIds: string[]; directoryIds?: Record<string, string>; unmarkedDirectories?: string[]; directoryIdsByRoot?: Record<string, Record<string, string>>; configError?: {path: string; message: string} };
 
 /** Naming policy is supplied by the config owner; grammar remains pure. */
 function phaseDirectoryContext(config: Record<string, unknown>, roadmap = '', knownIds: string[] = []): PhaseDirectoryContext {
-  return { phaseNaming: config.phase_naming, projectCode: config.project_code as string | null ?? null, roadmap, knownIds };
+  return { phaseNaming: typeof config.phase_naming === 'string' ? config.phase_naming.toLowerCase() : config.phase_naming, projectCode: config.project_code as string | null ?? null, roadmap, knownIds };
 }
 
 /** Custom scans reuse the numeric source verbatim outside configured custom projects. */

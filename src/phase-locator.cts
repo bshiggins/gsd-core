@@ -219,12 +219,18 @@ function phaseDirectoryOptions(cwd: string, config?: Record<string, unknown>, ro
   // Replace this projection if the loader gains a quiet option; parity tests
   // guard workstream, project, corrupt-file and global-default precedence.
   let naming = config;
+  let configError: {path: string; message: string} | undefined;
   if (naming === undefined) {
     const readConfig = (file: string): Record<string, unknown> | null => {
       try {
         const value: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
-        return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
-      } catch { return null; }
+        if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+        configError = {path: file, message: 'configuration must be a JSON object'};
+        return null;
+      } catch (cause) {
+        if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') configError = {path: file, message: (cause as Error).message};
+        return null;
+      }
     };
     const activeWs = ws === undefined ? resolveEnvWorkstream() : ws?.trim() || null;
     const root = activeWs ? readConfig(path.join(planningRoot(cwd), 'config.json')) : null;
@@ -239,7 +245,8 @@ function phaseDirectoryOptions(cwd: string, config?: Record<string, unknown>, ro
     };
   }
   const context = phaseDirectoryContext(naming, roadmap ?? '');
-  if (naming.phase_naming !== 'custom') return context;
+  if (configError) context.configError = configError;
+  if (context.phaseNaming !== 'custom') return context;
   // Load directory-owned IDs once for this scope, including archive fallback.
   // Old directories have no marker: reads retain heading hints, but removal
   // refuses to infer their ownership from a mutable roadmap or slug.
@@ -305,11 +312,12 @@ function phaseDirectoryContextForRoot(context: ReturnType<typeof phaseDirectoryO
 /** Usage guidance for every custom-ID writer, using the resolved naming policy. */
 function customPhaseNamingUsage(cwd: string, context: ReturnType<typeof phaseDirectoryOptions>): string | null {
   if (context.phaseNaming === 'custom') return null;
+  if (context.configError) return `Cannot read phase naming from ${context.configError.path}: ${context.configError.message}. Repair the project config before using a custom ID`;
   let message = 'phase_naming is not custom for this project; configure phase_naming as "custom" before using a custom ID';
   try {
     const defaultsPath = path.join(resolveGsdHome(), '.gsd', 'defaults.json');
     const defaults = JSON.parse(fs.readFileSync(defaultsPath, 'utf8')) as Record<string, unknown>;
-    if (defaults.phase_naming === 'custom' && fs.existsSync(path.join(planningDir(cwd), 'config.json'))) {
+    if (typeof defaults.phase_naming === 'string' && defaults.phase_naming.toLowerCase() === 'custom' && fs.existsSync(path.join(planningDir(cwd), 'config.json'))) {
       message += `; project config shadows phase_naming from ${defaultsPath}`;
     }
   } catch { /* Missing/unusable defaults do not change effective naming. */ }

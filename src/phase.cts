@@ -1466,7 +1466,7 @@ function cmdPhaseAdd(cwd: string, description: string, raw: boolean, customId?: 
   const naming = phaseDirectoryOptions(cwd, undefined, '');
   if (customId != null) {
     const usage = phaseLocatorMod.customPhaseNamingUsage(cwd, naming);
-    if (usage) error(usage, ERROR_REASON.PHASE_NAMING_NOT_CUSTOM);
+    if (usage) error(usage, naming.configError ? ERROR_REASON.CONFIG_PARSE_FAILED : ERROR_REASON.PHASE_NAMING_NOT_CUSTOM);
   }
   const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
   if (!fs.existsSync(roadmapPath)) {
@@ -1619,7 +1619,7 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
   }
   const naming = phaseDirectoryOptions(cwd, undefined, '');
   if (descriptions.includes('--id')) {
-    error(phaseLocatorMod.customPhaseNamingUsage(cwd, naming) ?? '--id is not supported by phase add-batch', naming.phaseNaming === 'custom' ? ERROR_REASON.USAGE : ERROR_REASON.PHASE_NAMING_NOT_CUSTOM);
+    error(phaseLocatorMod.customPhaseNamingUsage(cwd, naming) ?? '--id is not supported by phase add-batch', naming.phaseNaming === 'custom' ? ERROR_REASON.USAGE : naming.configError ? ERROR_REASON.CONFIG_PARSE_FAILED : ERROR_REASON.PHASE_NAMING_NOT_CUSTOM);
   }
   const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
   if (!fs.existsSync(roadmapPath)) {
