@@ -9049,6 +9049,7 @@ describe('#5179 preflight branch coverage', () => {
     const staleSkill = path.join(skillsTarget, 'gsd-stale');
     fs.mkdirSync(staleSkill, { recursive: true });
     fs.writeFileSync(path.join(staleSkill, 'SKILL.md'), '# stale skill\n');
+    fs.writeFileSync(path.join(staleSkill, CAPABILITY_SKILL_MARKER), 'retired-fixture-capability\n');
     fs.writeFileSync(path.join(skillsTarget, 'user-skill.md'), '# keep user skill\n');
     const skillsDir = path.join(configDir, 'skills');
     try {
