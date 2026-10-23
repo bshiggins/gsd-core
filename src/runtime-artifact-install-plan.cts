@@ -205,8 +205,11 @@ function requiredRuntimeSurfaceSources(
 function shouldInstallCodexAgentConfig(
   behaviors: { tomlConfigInstall?: boolean },
   installMode: string,
+  resolvedProfile: ResolvedProfile,
 ): boolean {
-  return behaviors.tomlConfigInstall === true && !isMinimalMode(installMode);
+  return behaviors.tomlConfigInstall === true && (
+    !isMinimalMode(installMode) || (resolvedProfile.agents instanceof Set && resolvedProfile.agents.size > 0)
+  );
 }
 
 function copyWithPathReplacementSymlinkRefusalMessage(destDir: string, installRoot: string): string {
