@@ -97,10 +97,10 @@ for (const verb of ['add', 'scaffold']) {
         ? `require(${JSON.stringify(path.join(lib, 'phase.cjs'))}).cmdPhaseAdd(${JSON.stringify(cwd)}, 'x', false, 'bad\\0id')`
         : `require(${JSON.stringify(path.join(lib, 'commands.cjs'))}).cmdScaffold(${JSON.stringify(cwd)}, 'phase-dir', {phase: 'bad\\0id', name: 'Foo'}, false)`;
       const script = `require(${JSON.stringify(path.join(lib, 'io.cjs'))}).setJsonErrorMode(true); ${call}`;
-      const result = require('node:child_process').spawnSync(process.execPath, ['-e', script], {
-        encoding: 'utf8', timeout: PROBE_TIMEOUT_MS, env: {...process.env, ...homeSandboxEnv(cwd)},
+      const result = require('./helpers/process-seam.cjs').runNode(['-e', script], {
+        timeoutMs: PROBE_TIMEOUT_MS, env: {...process.env, ...homeSandboxEnv(cwd)},
       });
-      assert.notEqual(result.status, 0, result.stdout);
+      assert.notEqual(result.exitCode, 0, result.stdout);
       assert.match(result.stderr, /"reason":"usage"/);
       assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), []);
     } finally { cleanup(cwd); }

@@ -6,7 +6,7 @@ const fc = require('fast-check');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 // Generated round trips each spawn add, find, and analyze commands.
 const ROUND_TRIP_TIMEOUT_MS = 120000;
-const { createTempProject, cleanup, runGsdTools, homeSandboxEnv } = require('./helpers.cjs');
+const { createTempProject, cleanup, runGsdTools, homeSandboxEnv, toPosixPath } = require('./helpers.cjs');
 const locator = require('../gsd-core/bin/lib/phase-locator.cjs');
 
 function fixture(code, naming = 'custom') {
@@ -159,7 +159,7 @@ for (const length of [59, 60, 61]) {
     try {
       const dir = add(cwd, 'BOUNDARY', 'a'.repeat(length), 'CCM');
       const init = run(cwd, ['query', 'init.plan-phase', 'BOUNDARY']);
-      assert.equal(init.expected_phase_dir, path.join(cwd, dir));
+      assert.equal(init.expected_phase_dir, toPosixPath(path.join(cwd, dir)));
       assert.equal(init.phase_dir, init.expected_phase_dir);
     } finally { cleanup(cwd); }
   });
@@ -546,7 +546,7 @@ test('custom ownership scope: active and archived directories with the same base
     fs.renameSync(path.join(cwd, created), path.join(cwd, active));
     assert.equal(path.basename(active), path.basename(archived));
     fs.writeFileSync(path.join(cwd, '.planning/ROADMAP.md'), '# Roadmap\n');
-    for (const [id, expected] of [['CCM-setup', active], ['setup-extra', path.relative(cwd, archived)]]) {
+    for (const [id, expected] of [['CCM-setup', active], ['setup-extra', toPosixPath(path.relative(cwd, archived))]]) {
       assert.equal(run(cwd, ['query', 'find-phase', id]).directory, expected);
       assert.equal(locator.findPhaseInternal(cwd, id).directory, expected);
     }
@@ -565,7 +565,7 @@ test('custom ownership scope: root active identities stay separate from the ambi
     const root = locator.phaseDirectoryOptions(cwd, undefined, '', null);
     assert.equal(root.directoryIds['ARCHIVE-boundary'], undefined);
     assert.equal(root.directoryIdsByRoot[path.dirname(archived)]['ARCHIVE-boundary'], 'ARCHIVE');
-    assert.equal(locator.findPhaseInternal(cwd, 'ARCHIVE').directory, path.relative(cwd, archived));
+    assert.equal(locator.findPhaseInternal(cwd, 'ARCHIVE').directory, toPosixPath(path.relative(cwd, archived)));
   } finally {
     if (previous === undefined) delete process.env.GSD_WORKSTREAM;
     else process.env.GSD_WORKSTREAM = previous;
@@ -749,7 +749,10 @@ for (const kind of ['oversized', 'symlink', 'fifo']) {
         const target = path.join(cwd, 'identity.txt');
         fs.writeFileSync(target, 'AUTH');
         fs.symlinkSync(target, marker);
-      } else require('node:child_process').execFileSync('mkfifo', [marker], {timeout: PROBE_TIMEOUT_MS});
+      } else {
+        const fifo = require('./helpers/process-seam.cjs').runHook(marker, [], {interpreter: 'mkfifo', timeoutMs: PROBE_TIMEOUT_MS});
+        assert.equal(fifo.exitCode, 0, fifo.stderr);
+      }
       const script = `const locator = require(${JSON.stringify(require.resolve('../gsd-core/bin/lib/phase-locator.cjs'))}); process.stdout.write(JSON.stringify(locator.phaseDirectoryOptions(process.cwd(), {phase_naming:'custom'}, '').directoryIds));`;
       const result = require('./helpers/process-seam.cjs').runNode(['-e', script], {
         cwd, env: {...process.env, ...homeSandboxEnv(cwd)}, timeoutMs: PROBE_TIMEOUT_MS,
@@ -773,7 +776,7 @@ test('archive scope compatibility: null workstream retains the environment fallb
     process.env.GSD_WORKSTREAM = 'alpha';
     const result = runGsdTools(['query', 'find-phase', 'AUTH'], cwd, {...homeSandboxEnv(cwd), GSD_WORKSTREAM: 'alpha'});
     assert.equal(result.success, true, result.error || result.output);
-    assert.equal(JSON.parse(result.output).directory, path.relative(cwd, archived));
+    assert.equal(JSON.parse(result.output).directory, toPosixPath(path.relative(cwd, archived)));
     // The exported archive reader forwards null to the private enumeration seam.
     const phases = locator.getArchivedPhaseDirs(cwd, null);
     assert.ok(phases.some(entry => entry.fullPath === archived), JSON.stringify(phases));
