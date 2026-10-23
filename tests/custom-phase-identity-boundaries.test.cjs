@@ -2,21 +2,10 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { createTempProject, cleanup, runGsdTools, homeSandboxEnv } = require('./helpers.cjs');
+const { createCustomPhaseProject: fixture, runCustomPhaseCommand: run, cleanup, runGsdTools, homeSandboxEnv } = require('./helpers.cjs');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const phaseId = require('../gsd-core/bin/lib/phase-id.cjs');
 
-function fixture(code = null) {
-  const cwd = fs.realpathSync(createTempProject());
-  fs.writeFileSync(path.join(cwd, '.planning/config.json'), JSON.stringify({phase_naming: 'custom', project_code: code}));
-  fs.writeFileSync(path.join(cwd, '.planning/ROADMAP.md'), '# Roadmap\n\n## v1.0 Current\n\n## Phases\n');
-  return cwd;
-}
-function run(cwd, args) {
-  const result = runGsdTools(args, cwd, homeSandboxEnv(cwd));
-  assert.equal(result.success, true, result.error || result.output);
-  return JSON.parse(result.output);
-}
 for (const code of [null, 'CCM']) for (const title of ['2024 roadmap', '3 steps']) {
   test(`custom directory lookup: add then find digit-leading title ${title}, code ${code}`, () => {
     const cwd = fixture(code);
@@ -78,14 +67,14 @@ for (const id of ['../evil', 'bad/id', 'bad\\id', 'bad..id']) for (const verb of
       const args = verb === 'add' ? ['query', 'phase.add', 'x', '--id', id] : ['scaffold', 'phase-dir', '--phase', id, '--name', 'Foo'];
       const result = runGsdTools(['--json-errors', ...args], cwd, homeSandboxEnv(cwd));
       assert.equal(result.success, false, result.output);
-      assert.match(result.error, /"reason":"usage"/);
+      assert.equal(JSON.parse(result.error).reason, 'usage');
       assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning')).sort(), before);
       assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), []);
     } finally { cleanup(cwd); }
   });
 }
 test('custom directory safety: writer owner rejects NUL before constructing a path', () => {
-  assert.throws(() => phaseId.phaseDirectoryName('bad\0id', 'x'), /phase id/i);
+  assert.throws(() => phaseId.phaseDirectoryName('bad\0id', 'x'), phaseId.PhaseDirectoryNameError);
 });
 for (const verb of ['add', 'scaffold']) {
   test(`custom directory safety: ${verb} rejects NUL through its command entry point`, () => {
@@ -96,12 +85,12 @@ for (const verb of ['add', 'scaffold']) {
       const call = verb === 'add'
         ? `require(${JSON.stringify(path.join(lib, 'phase.cjs'))}).cmdPhaseAdd(${JSON.stringify(cwd)}, 'x', false, 'bad\\0id')`
         : `require(${JSON.stringify(path.join(lib, 'commands.cjs'))}).cmdScaffold(${JSON.stringify(cwd)}, 'phase-dir', {phase: 'bad\\0id', name: 'Foo'}, false)`;
-      const script = `require(${JSON.stringify(path.join(lib, 'io.cjs'))}).setJsonErrorMode(true); ${call}`;
+      const script = `require(${JSON.stringify(path.join(lib, 'io.cjs'))}).setJsonErrorMode(true); const {ExitError} = require(${JSON.stringify(path.join(lib, 'cli-exit.cjs'))}); try { ${call} } catch (cause) { if (cause instanceof ExitError) process.exitCode = cause.code; else throw cause; }`;
       const result = require('./helpers/process-seam.cjs').runNode(['-e', script], {
         timeoutMs: PROBE_TIMEOUT_MS, env: {...process.env, ...homeSandboxEnv(cwd)},
       });
       assert.notEqual(result.exitCode, 0, result.stdout);
-      assert.match(result.stderr, /"reason":"usage"/);
+      assert.equal(JSON.parse(result.stderr).reason, 'usage');
       assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), []);
     } finally { cleanup(cwd); }
   });

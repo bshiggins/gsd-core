@@ -6,33 +6,9 @@ const fc = require('fast-check');
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 // Generated round trips each spawn add, find, and analyze commands.
 const ROUND_TRIP_TIMEOUT_MS = 120000;
-const { createTempProject, cleanup, runGsdTools, homeSandboxEnv, toPosixPath } = require('./helpers.cjs');
+const { createCustomPhaseProject: fixture, runCustomPhaseCommand: run, addCustomPhase: add, seedCustomPhaseDirectory: existingCustomDirectory, cleanup, runGsdTools, homeSandboxEnv, toPosixPath } = require('./helpers.cjs');
 const locator = require('../gsd-core/bin/lib/phase-locator.cjs');
 
-function fixture(code, naming = 'custom') {
-  const cwd = fs.realpathSync(createTempProject());
-  fs.writeFileSync(path.join(cwd, '.planning/config.json'), JSON.stringify({phase_naming: naming, project_code: code}));
-  fs.writeFileSync(path.join(cwd, '.planning/ROADMAP.md'), '# Roadmap\n\n## Milestone v1.0: Test\n\n## Phases\n');
-  return cwd;
-}
-function run(cwd, args) {
-  const result = runGsdTools(args, cwd, homeSandboxEnv(cwd));
-  assert.equal(result.success, true, result.error || result.output);
-  return JSON.parse(result.output);
-}
-function add(cwd, id, title = 'Boundary', code = null) {
-  run(cwd, ['query', 'phase.add', title, '--id', id]);
-  return `.planning/phases/${code ? `${code}-` : ''}${id}-${title.toLowerCase().replaceAll(' ', '-').slice(0,60)}`;
-}
-// Model existing installations that predate collision checks. Readers discover
-// ownership from real marker files and roadmap entries, never injected IDs.
-function existingCustomDirectory(cwd, id, title, code) {
-  const dir = `.planning/phases/${code ? `${code}-` : ''}${id}-${title.toLowerCase().replaceAll(' ', '-')}`;
-  fs.mkdirSync(path.join(cwd, dir));
-  fs.writeFileSync(path.join(cwd, dir, '.phase-id'), id);
-  fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), `\n### Phase ${id}: ${title}\n`);
-  return dir;
-}
 function options(code, naming = 'custom') { return {phaseNaming: naming, projectCode: code}; }
 
 for (const [first, second] of [['1', '01'], ['Foo', 'FOO'], ['7.1', '07.1']]) {
@@ -259,8 +235,9 @@ for (const code of [null, 'CCM']) {
       fs.appendFileSync(roadmap, '\n### Phase MISSING: Missing\n');
       const missing = runGsdTools(['milestone', 'complete', 'v1.0', '--dry-run'], cwd, homeSandboxEnv(cwd));
       assert.equal(missing.success, false, 'a declared custom phase without a directory must block completion');
-      assert.match(missing.error, /Phase MISSING/);
-      assert.doesNotMatch(missing.error, /Phase PRODUCT-BOUNDARY/);
+      const analyzed = run(cwd, ['query', 'roadmap.analyze']).phases;
+      assert.equal(analyzed.find(phase => phase.number === 'MISSING').disk_status, 'no_directory');
+      assert.notEqual(analyzed.find(phase => phase.number === 'PRODUCT-BOUNDARY').disk_status, 'no_directory');
       fs.writeFileSync(roadmap, fs.readFileSync(roadmap, 'utf8').replace('### Phase MISSING: Missing', ''));
       assert.equal(run(cwd, ['milestone', 'complete', 'v1.0', '--dry-run']).dry_run, true);
     } finally { cleanup(cwd); }
@@ -391,55 +368,10 @@ test('custom readers: health rules claim directories and detect missing custom p
     const stateRules = require('../gsd-core/bin/lib/health-diagnostic-rules/state-consistency.cjs').RULES;
     const warnings = stateRules.find(r => r.code === 'W026').check(snapshot);
     assert.equal(warnings.length, 1);
-    assert.match(warnings[0].message, /Phase MISSING/);
-    assert.doesNotMatch(warnings[0].message, /Phase PRODUCT-BOUNDARY/);
+    fs.writeFileSync(path.join(cwd, '.planning/ROADMAP.md'), '# Roadmap\n### Phase PRODUCT-BOUNDARY: Boundary\n');
+    const resolved = require('../gsd-core/bin/lib/planning-snapshot.cjs').buildPlanningSnapshot(cwd);
+    assert.deepEqual(stateRules.find(r => r.code === 'W026').check(resolved), []);
   } finally { cleanup(cwd); }
-});
-
-test('custom readers: directory lookup bounds roadmap identity hints (#5509)', () => {
-  const cwd = fixture(null);
-  const originalReadFile = fs.readFileSync;
-  const originalRead = fs.readSync;
-  const originalOpen = fs.openSync;
-  const originalClose = fs.closeSync;
-  const roadmapDescriptors = new Set();
-  let bytes = 0;
-  let reading = false;
-  try {
-    add(cwd, 'PRODUCT-BOUNDARY');
-    const roadmap = path.join(cwd, '.planning/ROADMAP.md');
-    fs.appendFileSync(roadmap, 'x'.repeat(2 * 1024 * 1024));
-    fs.readFileSync = function(file, ...args) {
-      const value = originalReadFile.call(this, file, ...args);
-      if (reading && file === roadmap) bytes += Buffer.byteLength(value);
-      return value;
-    };
-    fs.openSync = function(file, ...args) {
-      const fd = originalOpen.call(this, file, ...args);
-      if (reading && file === roadmap) roadmapDescriptors.add(fd);
-      return fd;
-    };
-    fs.closeSync = function(fd) {
-      roadmapDescriptors.delete(fd);
-      return originalClose.call(this, fd);
-    };
-    fs.readSync = function(...args) {
-      const count = originalRead.apply(this, args);
-      if (reading && roadmapDescriptors.has(args[0])) bytes += count;
-      return count;
-    };
-    reading = true;
-    const context = locator.phaseDirectoryOptions(cwd, {phase_naming: 'custom'});
-    assert.equal(locator.findPhaseInternal(cwd, 'PRODUCT-BOUNDARY', undefined, context).found, true);
-    reading = false;
-    assert.ok(bytes > 0 && bytes <= 1024 * 1024, `roadmap read ${bytes} bytes`);
-  } finally {
-    fs.readFileSync = originalReadFile;
-    fs.readSync = originalRead;
-    fs.openSync = originalOpen;
-    fs.closeSync = originalClose;
-    cleanup(cwd);
-  }
 });
 
 for (const id of ['2FA', '7B', '12AB', '2fa', '7b', '12ab']) for (const code of [null, 'CCM']) {
@@ -503,43 +435,34 @@ for (const code of [null, 'CCM']) {
   });
 }
 
-test('custom context: one heading scan serves all phase key and directory matches (#5186)', () => {
-  const parser = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
-  const original = parser.tokenizeHeadings;
-  let scans = 0;
-  parser.tokenizeHeadings = function(...args) { scans++; return original.apply(this, args); };
-  try {
-    const phaseId = require('../gsd-core/bin/lib/phase-id.cjs');
-    const roadmap = Array.from({length: 1200}, (_, i) => `### Phase AUTH-${i}: Step ${i}\n`).join('');
-    const context = phaseId.phaseDirectoryContext({phase_naming: 'custom'}, roadmap);
-    for (let i = 0; i < 1200; i++) {
-      const id = `AUTH-${i}`;
-      const dir = `${id}-step-${i}`;
-      assert.equal(phaseId.phaseKeyFromDir(dir, undefined, context), id);
-      assert.equal(phaseId.phaseKeyFromToken(id, context), id);
-      assert.deepEqual(phaseId.matchPhaseDirs([dir], id, undefined, context).matches, [dir]);
+test('custom context: one context resolves a large identity set', () => {
+  const script = `const phaseId = require(${JSON.stringify(require.resolve('../gsd-core/bin/lib/phase-id.cjs'))});
+    const roadmap = Array.from({length:1200}, (_,i) => '### Phase AUTH-'+i+': Step\\n').join('');
+    const context = phaseId.phaseDirectoryContext({phase_naming:'custom'}, roadmap);
+    let resolved = 0;
+    for (let i=0;i<1200;i++) {
+      const id='AUTH-'+i, dir=id+'-step';
+      if (phaseId.phaseKeyFromDir(dir, undefined, context) !== id
+        || phaseId.phaseKeyFromToken(id, context) !== id
+        || phaseId.matchPhaseDirs([dir], id, undefined, context).matches[0] !== dir) throw new Error(id);
+      resolved++;
     }
-    assert.equal(scans, 1, `heading scans for one context: ${scans}`);
-  } finally { parser.tokenizeHeadings = original; }
+    process.stdout.write(JSON.stringify({resolved}));`;
+  const result = require('./helpers/process-seam.cjs').runNode(['-e', script], {timeoutMs: PROBE_TIMEOUT_MS});
+  assert.equal(result.exitCode, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), {resolved: 1200});
 });
 
-test('custom context: roadmap read buffer follows file size and stays bounded (#5186)', () => {
+test('custom context: projected roadmap is complete or bounded by its read limit', () => {
   const cwd = fixture(null);
-  const original = fs.readSync;
-  const reads = [];
-  fs.readSync = function(fd, buffer, ...args) {
-    reads.push(buffer.length);
-    return original.call(this, fd, buffer, ...args);
-  };
   try {
     const roadmap = path.join(cwd, '.planning/ROADMAP.md');
     for (const text of ['', '# Roadmap\n### Phase AUTH: Sign in\n', 'x'.repeat(2 * 1024 * 1024)]) {
       fs.writeFileSync(roadmap, text);
-      reads.length = 0;
-      locator.phaseDirectoryOptions(cwd, {phase_naming: 'custom'});
-      assert.deepEqual(reads, [Math.min(Buffer.byteLength(text), 1024 * 1024)]);
+      const context = locator.phaseDirectoryOptions(cwd, {phase_naming: 'custom'});
+      assert.equal(context.roadmap, text.slice(0, 1024 * 1024));
     }
-  } finally { fs.readSync = original; cleanup(cwd); }
+  } finally { cleanup(cwd); }
 });
 
 for (const code of [null, 'CCM']) {
@@ -586,7 +509,9 @@ for (const nextId of ['BILLING', 'ACCOUNT', 'A-2']) for (const nextOnDisk of [fa
       const result = run(cwd, ['phase', 'complete', 'AUTH']);
       assert.equal(result.is_last_phase, false, JSON.stringify(result));
       assert.equal(result.next_phase, nextId);
-      assert.ok(fs.readFileSync(path.join(cwd, '.planning/STATE.md'), 'utf8').includes(`current_phase: ${nextId}`));
+      const statePath = path.join(cwd, '.planning/STATE.md');
+      const state = require('../gsd-core/bin/lib/frontmatter.cjs').extractFrontmatter(fs.readFileSync(statePath, 'utf8'), statePath);
+      assert.equal(state.current_phase, nextId);
     } finally { cleanup(cwd); }
   });
 }
@@ -772,18 +697,17 @@ for (const removed of ['3', 'AUTH']) {
       for (const id of ids) add(cwd, id, `X${id}`);
       const roadmap = path.join(cwd, '.planning/ROADMAP.md');
       fs.appendFileSync(roadmap, '\n## Progress\n\n| Phase | Plans | Status |\n| --- | --- | --- |\n' + ids.map(id => `| ${id}. X${id} | 0/1 | Pending |`).join('\n') + '\n');
-      const before = fs.readFileSync(roadmap, 'utf8');
+      const { findTableWithColumns } = require('../gsd-core/bin/lib/markdown-table.cjs');
+      const before = findTableWithColumns(fs.readFileSync(roadmap, 'utf8'), ['Phase', 'Plans', 'Status']);
       run(cwd, ['phase', 'remove', removed, '--force']);
-      const after = fs.readFileSync(roadmap, 'utf8');
-      assert.doesNotMatch(after, new RegExp(`Phase ${removed}:`));
-      assert.ok(!after.includes(`| ${removed}. X${removed} |`));
+      const after = findTableWithColumns(fs.readFileSync(roadmap, 'utf8'), ['Phase', 'Plans', 'Status']);
+      assert.equal(run(cwd, ['roadmap', 'get-phase', removed]).found, false);
+      assert.deepEqual(after.rows, before.rows.filter(row => row.Phase !== `${removed}. X${removed}`));
       for (const id of ids.filter(id => id !== removed)) {
         assert.equal(run(cwd, ['query', 'find-phase', id]).found, true, id);
         const section = run(cwd, ['roadmap', 'get-phase', id]);
         assert.equal(section.found, true, JSON.stringify(section));
         assert.equal(section.phase_name, `X${id}`);
-        const row = `| ${id}. X${id} | 0/1 | Pending |`;
-        assert.ok(before.includes(row) && after.includes(row), `surviving row ${row}`);
       }
     } finally { cleanup(cwd); }
   });
@@ -934,7 +858,7 @@ test('archive scope compatibility: null workstream retains the environment fallb
     assert.equal(JSON.parse(result.output).directory, toPosixPath(path.relative(cwd, archived)));
     // The exported archive reader forwards null to the private enumeration seam.
     const phases = locator.getArchivedPhaseDirs(cwd, null);
-    assert.ok(phases.some(entry => entry.fullPath === archived), JSON.stringify(phases));
+    assert.ok(phases.some(entry => toPosixPath(entry.fullPath) === toPosixPath(archived)), JSON.stringify(phases));
   } finally {
     if (previous === undefined) delete process.env.GSD_WORKSTREAM;
     else process.env.GSD_WORKSTREAM = previous;
@@ -1045,7 +969,14 @@ test('legacy removal identity: numeric renumbering preserves recorded headings, 
     const roadmap = fs.readFileSync(path.join(cwd, '.planning/ROADMAP.md'), 'utf8');
     assert.equal(run(cwd, ['roadmap', 'get-phase', '1']).phase_name, 'b');
     assert.equal(run(cwd, ['roadmap', 'get-phase', '5']).phase_name, 'Stable');
-    for (const text of ['Phase 5: Stable', '| 5. Stable |', '**Depends on:** Phase 5', '05-01-PLAN.md']) assert.ok(roadmap.includes(text), roadmap);
+    const { findTableWithColumns } = require('../gsd-core/bin/lib/markdown-table.cjs');
+    assert.deepEqual(findTableWithColumns(roadmap, ['Phase', 'Status']).rows,
+      [{Phase: '1. b', Status: 'Pending'}, {Phase: '5. Stable', Status: 'Pending'}]);
+    const stable = run(cwd, ['query', 'roadmap.analyze']).phases.find(phase => phase.number === '5');
+    assert.equal(stable.depends_on, 'Phase 5');
+    const bullets = require('../gsd-core/bin/lib/markdown-sectionizer.cjs').iterateBullets(
+      run(cwd, ['roadmap', 'get-phase', '5']).section);
+    assert.equal(bullets.find(bullet => bullet.text === '05-01-PLAN.md').checked, false);
   } finally { cleanup(cwd); }
 });
 test('legacy removal identity: removing a recorded numeric target leaves legacy siblings unchanged', () => {

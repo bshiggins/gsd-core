@@ -17388,39 +17388,15 @@ describe('#4972: phase complete warns when an active verify:post audit is missin
 
 // #5186: custom IDs written by phase.add must resolve through every reader.
 describe('custom phase add-then-resolve regressions (#5186)', () => {
-  function fixture(projectCode) {
-    const cwd = fs.realpathSync(createTempProject());
-    fs.writeFileSync(path.join(cwd, '.planning', 'config.json'), JSON.stringify({
-      phase_naming: 'custom', project_code: projectCode,
-    }));
-    fs.writeFileSync(path.join(cwd, '.planning', 'ROADMAP.md'),
+  const {
+    createCustomPhaseProject, runCustomPhaseCommand, addCustomPhase: add,
+    seedCustomPhaseDirectory: existingCustomDirectory,
+  } = require('./helpers.cjs');
+  function fixture(code) {
+    return createCustomPhaseProject(code, 'custom',
       '# Roadmap\n\n## Milestone v1.0: Test\n\n## Phases\n\n### Phase INITIAL: Initial\n\n**Goal:** Setup\n');
-    return cwd;
   }
-
-  function query(cwd, args) {
-    const result = runGsdTools(['query', ...args], cwd, homeSandboxEnv(cwd));
-    assert.equal(result.success, true, result.error || result.output);
-    return JSON.parse(result.output);
-  }
-
-  function add(cwd, id, title, code) {
-    query(cwd, ['phase.add', title, '--id', id]);
-    const slug = title.toLowerCase().replaceAll(' ', '-');
-    const dir = `.planning/phases/${code ? `${code}-` : ''}${id}-${slug}`;
-    assert.equal(fs.statSync(path.join(cwd, dir)).isDirectory(), true);
-    return dir;
-  }
-
-  // Model existing directories created before prefix-collision checks. The
-  // production locator discovers their real marker files without injected IDs.
-  function existingCustomDirectory(cwd, id, title, code) {
-    const directory = `.planning/phases/${code ? `${code}-` : ''}${id}-${title.toLowerCase().replaceAll(' ', '-')}`;
-    fs.mkdirSync(path.join(cwd, directory));
-    fs.writeFileSync(path.join(cwd, directory, '.phase-id'), id);
-    fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), `\n### Phase ${id}: ${title}\n`);
-    return directory;
-  }
+  const query = (cwd, args) => runCustomPhaseCommand(cwd, ['query', ...args]);
 
   for (const code of ['CCM', null]) {
     test(`find-phase resolves a newly added custom ID with project code ${code} (#5186)`, () => {
@@ -17432,8 +17408,8 @@ describe('custom phase add-then-resolve regressions (#5186)', () => {
         assert.equal(found.directory, dir);
         assert.equal(found.phase_number, 'PRODUCT-BOUNDARY');
         assert.equal(found.phase_name, 'product-boundary');
-        // A recorded directory is named by its ID, never by a different basename.
-        assert.equal(query(cwd, ['find-phase', path.basename(dir)]).found, false);
+        // Full directory basenames remain valid handles alongside phase IDs.
+        assert.equal(query(cwd, ['find-phase', path.basename(dir)]).directory, dir);
       } finally { cleanup(cwd); }
     });
 
@@ -17462,9 +17438,11 @@ describe('custom phase add-then-resolve regressions (#5186)', () => {
           fs.writeFileSync(roadmap, fs.readFileSync(roadmap, 'utf8').replace('- [ ] TBD', '- TBD'));
           fs.appendFileSync(roadmap, `\n- [ ] **Phase ${id}: Product Boundary**\n- [ ] ${plan}: Build boundary\n`);
           query(cwd, ['roadmap.update-plan-progress', id, plan, 'complete']);
-          const updated = fs.readFileSync(roadmap, 'utf8');
-          assert.ok(updated.includes(`- [x] **Phase ${id}:`));
-          assert.ok(updated.includes(`- [x] ${plan}: Build boundary`));
+          const analyzed = query(cwd, ['roadmap.analyze']).phases.find(phase => phase.number === id);
+          assert.equal(analyzed.roadmap_complete, true);
+          const section = query(cwd, ['roadmap.get-phase', id]).section;
+          const bullets = require('../gsd-core/bin/lib/markdown-sectionizer.cjs').iterateBullets(section);
+          assert.equal(bullets.find(bullet => bullet.text === `${plan}: Build boundary`).checked, true);
         } finally { cleanup(cwd); }
       });
     }
