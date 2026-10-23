@@ -284,7 +284,8 @@ function cmdPhasesList(cwd: string, options: PhaseListOptions, raw: boolean): vo
       const enumerated = listMilestonePhaseDirs(phasesDir, { cwd });
       phaseScope = enumerated.scope;
       dirs = [...enumerated.value, ...archivedLabels];
-      dirs.sort((a, b) => comparePhaseNum(a, b));
+      const directoryContext = phaseDirectoryOptions(cwd);
+      dirs.sort((a, b) => comparePhaseNum(a, b, directoryContext));
     }
 
     if (type) {

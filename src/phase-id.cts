@@ -793,7 +793,12 @@ function phaseMarkdownRegexSourceExact(phaseNum: unknown): string | null {
 function comparePhaseNum(a: unknown, b: unknown, context?: PhaseDirectoryContext): number {
   if (context?.phaseNaming === 'custom') {
     const index = customIdentityIndex(context);
-    const first = String(a), second = String(b);
+    const identity = (value: unknown): string => {
+      const text = String(value);
+      const query = customPhaseQuery(text, context);
+      return query ? customDirectoryOwner(text, query)?.id ?? query.id : text;
+    };
+    const first = identity(a), second = identity(b);
     // Arbitrary custom IDs have no numeric ordering: use their declared order.
     // Unrecorded legacy numeric phases retain the original comparator below.
     if (isCustomPhaseId(first) || isCustomPhaseId(second) || index.recorded.has(first) || index.recorded.has(second)) {

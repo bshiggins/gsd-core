@@ -110,6 +110,9 @@ const {
   comparePhaseNum,
   phaseDirectoryName,
   customPhaseQuery,
+  customDirectoryOwner,
+  phaseScanTokenSource,
+  phaseKeyFromToken,
   phaseDirectoryContext,
   normalizePhaseName,
   stripProjectCodePrefix,
@@ -2982,7 +2985,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
   // phase's own (first) checkbox — anchoring alone does not fully close
   // that "last-match-wins" composition defect.
   const _cbPattern = new RegExp(
-    `^[ \\t]*-[ \\t]*\\[(x| )\\][ \\t]*(?:\\*\\*)?${phaseHeadingPrefix}(${PHASE_NUMBER_TOKEN_SOURCE})[:\\s]`,
+    `^[ \\t]*-[ \\t]*\\[(x| )\\][ \\t]*(?:\\*\\*)?${phaseHeadingPrefix}(${phaseScanTokenSource(directoryContext)})[:\\s]`,
     'gim',
   );
   let _cbMatch: RegExpExecArray | null;
@@ -2996,7 +2999,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
 
   // #1729: `(?:\s*\([^)\n]{0,200}\))?` tolerates a pre-colon ( ) tag (literal mirror of OPTIONAL_PHASE_TAG_SOURCE).
   const phasePattern = new RegExp(
-    `#{2,4}\\s*${phaseHeadingPrefix}(${PHASE_NUMBER_TOKEN_SOURCE})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n]+)`,
+    `#{2,4}\\s*${phaseHeadingPrefix}(${phaseScanTokenSource(directoryContext)})(?:\\s*\\([^)\\n]{0,200}\\))?\\s*:\\s*([^\\n]+)`,
     'gi',
   );
   const phases: Record<string, unknown>[] = [];
@@ -3021,7 +3024,7 @@ function cmdInitManager(cwd: string, raw: boolean): void {
     const sectionStart = match.index;
     const restOfContent = content.slice(sectionStart);
     const nextHeader = restOfContent.match(new RegExp(
-      `\\n#{2,4}\\s+${phaseHeadingPrefixNoCapture}\\d[\\d.]*`,
+      `\\n#{2,4}\\s+${phaseHeadingPrefixNoCapture}${phaseScanTokenSource(directoryContext)}`,
       'i',
     ));
     const sectionEnd = nextHeader
@@ -3791,6 +3794,7 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
   }
 
   const phasesDir = path.join(planningDir(cwd), 'phases');
+  const directoryContext = phaseDirectoryOptions(cwd, config);
   const phases: Record<string, unknown>[] = [];
   let currentPhase: Record<string, unknown> | null = null;
   let nextPhase: Record<string, unknown> | null = null;
@@ -3808,7 +3812,7 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
     // buildPhaseHeadingScanRegex (phase-id.cts) so this scan also recognizes
     // bracket-convention headings instead of hand-rolling a literal `Phase\s+`.
     const { regex: headingPattern, phaseNumGroup: hNumGroup, phaseNameGroup: hNameGroup } = buildPhaseHeadingScanRegex(
-      PHASE_HEADING_BASELINE.ANY_BRACKET, progressConvention,
+      PHASE_HEADING_BASELINE.ANY_BRACKET, progressConvention, directoryContext,
     );
     let hm: RegExpExecArray | null;
     while ((hm = headingPattern.exec(roadmapContent)) !== null) {
@@ -3842,7 +3846,7 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
     // matched (by absorbing the bracket text). This does NOT migrate the site
     // onto phaseHeadingPrefixSrcFor / the bracket convention — that stays
     // out of scope per the comment above (#4984 revert, pinned census).
-    const cbPattern = new RegExp(`^[ \\t]*-[ \\t]*\\[(x| )\\][ \\t]*(?:\\*\\*)?(?:\\[[^\\]\\n]{0,200}\\]\\s*)?Phase\\s+(${PHASE_NUMBER_TOKEN_SOURCE})[:\\s]`, 'gim');
+    const cbPattern = new RegExp(`^[ \\t]*-[ \\t]*\\[(x| )\\][ \\t]*(?:\\*\\*)?(?:\\[[^\\]\\n]{0,200}\\]\\s*)?Phase\\s+(${phaseScanTokenSource(directoryContext)})[:\\s]`, 'gim');
     let cbm: RegExpExecArray | null;
     while ((cbm = cbPattern.exec(roadmapContent)) !== null) {
       const cbKey = cbm[2];
@@ -3866,10 +3870,12 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
     const dirs = listMilestonePhaseDirs(phasesDir, { cwd }).value;
 
     for (const dir of dirs) {
-      const dirMatch = dir.match(new RegExp(`^(${PHASE_NUMBER_TOKEN_SOURCE})-?(.*)`, 'i'));
-      const phaseNumber = dirMatch ? dirMatch[1] : dir;
-      const phaseName = dirMatch && dirMatch[2] ? dirMatch[2] : null;
-      seenPhaseNums.add(phaseNumber.replace(/^0+/, '') || '0');
+      const dirMatch = dir.match(new RegExp(`^(${phaseScanTokenSource(directoryContext)})-?(.*)`, 'i'));
+      const query = customPhaseQuery(dir, directoryContext);
+      const owner = query && customDirectoryOwner(dir, query);
+      const phaseNumber = owner ? owner.id : dirMatch ? dirMatch[1] : dir;
+      const phaseName = owner ? owner.slug : dirMatch && dirMatch[2] ? dirMatch[2] : null;
+      seenPhaseNums.add((phaseKeyFromToken(phaseNumber, directoryContext) ?? phaseNumber).toLowerCase());
 
       const phasePath = path.join(phasesDir, dir);
       const phaseFiles = fs.readdirSync(phasePath);
@@ -3931,7 +3937,7 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
   }
 
   for (const [num, name] of roadmapPhaseNames) {
-    const stripped = num.replace(/^0+/, '') || '0';
+    const stripped = (phaseKeyFromToken(num, directoryContext) ?? num).toLowerCase();
     if (!seenPhaseNums.has(stripped)) {
       const checkboxComplete =
         roadmapCheckboxStates.get(num) === true ||
@@ -3971,7 +3977,7 @@ function cmdInitProgress(cwd: string, raw: boolean, options: Record<string, unkn
     }
   }
 
-  phases.sort((a, b) => comparePhaseNum(a['number'], b['number']));
+  phases.sort((a, b) => comparePhaseNum(a['number'], b['number'], directoryContext));
 
   // #3581: the frontier is ROADMAP ORDER, not artifact presence. The disk loop
   // above could claim nextPhase from a stray out-of-order artifact directory

@@ -566,10 +566,12 @@ function listMilestonePhaseDirs(
   // Without a cwd there is nothing to scope AGAINST — the caller asked for an
   // unscoped read, which is a real answer (mirrors extractCurrentMilestoneScoped's
   // row 1). Sentinels are still refused: they are never milestone phases.
+  let directoryContext: ReturnType<typeof phaseDirectoryOptions> | undefined;
   let inWindow: (dirName: string) => boolean = () => true;
   let scope: Scope = SCOPE.COMPLETE;
   if (cwd) {
-    const filter = getMilestonePhaseFilter(cwd, versionOverride, phaseIdConvention, ws, phaseDirectoryOptions(cwd, undefined, undefined, ws));
+    directoryContext = phaseDirectoryOptions(cwd, undefined, undefined, ws);
+    const filter = getMilestonePhaseFilter(cwd, versionOverride, phaseIdConvention, ws, directoryContext);
     inWindow = filter;
     scope = filter.scope;
   }
@@ -593,7 +595,7 @@ function listMilestonePhaseDirs(
 
   const value = names
     .filter((name) => inWindow(name) && !isSentinelPhaseId(name, phaseIdConvention ?? undefined))
-    .sort((a, b) => comparePhaseNum(a, b));
+    .sort((a, b) => comparePhaseNum(a, b, directoryContext));
 
   return { value, scope };
 }

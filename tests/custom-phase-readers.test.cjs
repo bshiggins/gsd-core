@@ -169,6 +169,25 @@ test('numeric insertion family: inserted decimals follow their unrecorded parent
     assert.equal(run(cwd, ['query', 'find-phase', '1.1']).directory, '.planning/phases/01.1-extra');
   } finally { cleanup(cwd); }
 });
+for (const command of ['init.progress', 'init.manager', 'progress']) {
+  test(`custom reader order: ${command} reports ids in roadmap order`, () => {
+    const cwd = fixture('CCM');
+    try {
+      for (const id of ['ZETA', 'ALPHA', 'MIDDLE']) add(cwd, id, 'Boundary', 'CCM');
+      fs.writeFileSync(path.join(cwd, '.planning/STATE.md'), '---\ncurrent_phase: ZETA\nstatus: planning\n---\n# State\n');
+      const result = run(cwd, ['query', command]);
+      assert.deepEqual(result.phases.map(phase => phase.number), ['ZETA', 'ALPHA', 'MIDDLE']);
+      assert.ok(result.phases.every(phase => typeof phase.name === 'string' && phase.name.length > 0));
+    } finally { cleanup(cwd); }
+  });
+}
+test('custom reader order: phases list uses roadmap order', () => {
+  const cwd = fixture('CCM');
+  try {
+    const dirs = ['ZETA', 'ALPHA', 'MIDDLE'].map(id => path.basename(add(cwd, id, 'Boundary', 'CCM')));
+    assert.deepEqual(run(cwd, ['phases', 'list']).directories, dirs);
+  } finally { cleanup(cwd); }
+});
 for (const naming of ['custom', 'sequential']) {
   test(`batch directory safety: ${naming} rejects a project code that escapes phases`, () => {
     const cwd = fixture('../x', naming);
