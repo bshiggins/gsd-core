@@ -28,7 +28,7 @@ const {
 // already used for the same CLI call elsewhere in this file (runPhaseComplete
 // above, and `run()` below at 15000ms for a lighter query-only call).
 const PHASE_COMPLETE_TIMEOUT_MS = 60000;
-const { runGsdTools, homeSandboxEnv, createTempProject, cleanup } = require('./helpers.cjs');
+const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 const { splitTableRow } = require('../gsd-core/bin/lib/markdown-table.cjs');
 const { splitLines } = require('../gsd-core/bin/lib/text-lines.cjs');
 const fc = require('fast-check');
