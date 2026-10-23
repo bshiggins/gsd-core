@@ -1625,7 +1625,7 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
     error('ROADMAP.md not found');
   }
   const projectCode = (naming.projectCode as string) || '';
-  const prefix = projectCode ? `${projectCode}-` : '';
+  const phasesRoot = path.resolve(planningDir(cwd), 'phases');
 
   const results = withPlanningLock(cwd, () => {
     let rawContent = fs.readFileSync(roadmapPath, 'utf-8');
@@ -1674,27 +1674,29 @@ function cmdPhaseAddBatch(cwd: string, descriptions: string[], raw: boolean): vo
         if (num > maxPhase) maxPhase = num;
       }
     }
-    const prepared = descriptions.map(description => ({description, slug: generateSlugInternal(description) || ''}));
-    if (naming.phaseNaming === 'custom') {
-      try { validateCustomPhaseIds(prepared.map(({slug}) => slug.toUpperCase()), {...naming, roadmap: rawContent}); }
-      catch (cause) {
-        if (cause instanceof PhaseDirectoryNameError) error(cause.message, ERROR_REASON.USAGE);
-        throw cause;
+    const entries = descriptions.map(description => ({description, slug: generateSlugInternal(description) || ''}));
+    let prepared: {description: string; slug: string; newPhaseId: number | string; dirName: string; dirPath: string}[];
+    try {
+      if (naming.phaseNaming === 'custom') {
+        validateCustomPhaseIds(entries.map(({slug}) => slug.toUpperCase()), {...naming, roadmap: rawContent});
       }
+      prepared = entries.map(({description, slug}) => {
+        const newPhaseId = naming.phaseNaming === 'custom' ? slug.toUpperCase() : ++maxPhase;
+        const dirName = phaseDirectoryName(
+          typeof newPhaseId === 'number' ? String(newPhaseId).padStart(2, '0') : newPhaseId,
+          slug,
+          projectCode,
+        );
+        const dirPath = path.resolve(phasesRoot, dirName);
+        if (path.dirname(dirPath) !== phasesRoot) error('Phase directory escapes the phases directory', ERROR_REASON.USAGE);
+        return {description, slug, newPhaseId, dirName, dirPath};
+      });
+    } catch (cause) {
+      if (cause instanceof PhaseDirectoryNameError) error(cause.message, ERROR_REASON.USAGE);
+      throw cause;
     }
     const added: Record<string, unknown>[] = [];
-    for (const {description, slug} of prepared) {
-      let newPhaseId: number | string;
-      let dirName: string;
-      if (naming.phaseNaming === 'custom') {
-        newPhaseId = slug.toUpperCase();
-        dirName = `${prefix}${newPhaseId}-${slug}`;
-      } else {
-        maxPhase += 1;
-        newPhaseId = maxPhase;
-        dirName = `${prefix}${String(newPhaseId).padStart(2, '0')}-${slug}`;
-      }
-      const dirPath = path.join(planningDir(cwd), 'phases', dirName);
+    for (const {description, slug, newPhaseId, dirName, dirPath} of prepared) {
       platformEnsureDir(dirPath);
       platformWriteSync(path.join(dirPath, '.gitkeep'), '');
       if (naming.phaseNaming === 'custom') platformWriteSync(path.join(dirPath, CUSTOM_PHASE_ID_FILE), String(newPhaseId));

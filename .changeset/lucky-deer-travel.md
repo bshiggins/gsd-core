@@ -8,3 +8,5 @@ pr: 5509
 `phase.add --id` now returns a usage error unless effective `phase_naming` is `custom`: its previous behavior wrote an unresolvable directory in other naming modes. Project config continues to shadow global defaults, and the usage error explains that case. Custom add, add-batch and scaffold share collision checks against recorded IDs, roadmap declarations, markerless directory owners and other IDs in the same batch. New custom IDs reject whitespace, colons and a leading bracket. Existing non-custom scaffold behavior remains available.
 
 Unmarked legacy numeric phases retain padding-tolerant removal and renumbering in custom-naming projects. Recorded and known custom identities remain stable on disk and in the roadmap.
+
+`phase.add-batch` rejects unsafe directory components, including project codes containing paths, before creating any phase directories or updating the roadmap.

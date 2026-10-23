@@ -35,6 +35,38 @@ function existingCustomDirectory(cwd, id, title, code) {
 }
 function options(code, naming = 'custom') { return {phaseNaming: naming, projectCode: code}; }
 
+for (const naming of ['custom', 'sequential']) {
+  test(`batch directory safety: ${naming} rejects a project code that escapes phases`, () => {
+    const cwd = fixture('../x', naming);
+    try {
+      const planning = path.join(cwd, '.planning');
+      const beforeEntries = fs.readdirSync(planning).sort();
+      const roadmapPath = path.join(planning, 'ROADMAP.md');
+      const beforeRoadmap = fs.readFileSync(roadmapPath, 'utf8');
+      const result = runGsdTools(['--json-errors', 'phase', 'add-batch', 'Alpha', 'Beta'], cwd, homeSandboxEnv(cwd));
+      assert.equal(result.success, false, result.output);
+      assert.match(result.error, /"reason":"usage"/);
+      assert.deepEqual(fs.readdirSync(path.join(planning, 'phases')), []);
+      assert.deepEqual(fs.readdirSync(planning).sort(), beforeEntries, 'no phase directory may be written beside phases/');
+      assert.equal(fs.readFileSync(roadmapPath, 'utf8'), beforeRoadmap);
+    } finally { cleanup(cwd); }
+  });
+  for (const code of [null, 'LOCAL']) {
+    test(`batch directory safety: ${naming} preserves normal batches with code ${code}`, () => {
+      const cwd = fixture(code, naming);
+      try {
+        const result = run(cwd, ['phase', 'add-batch', 'Alpha', 'Beta']);
+        const names = naming === 'custom' ? ['ALPHA-alpha', 'BETA-beta'] : ['01-alpha', '02-beta'];
+        const expected = names.map(name => `.planning/phases/${code ? `${code}-` : ''}${name}`);
+        assert.equal(result.count, 2);
+        assert.deepEqual(result.phases.map(phase => phase.directory), expected);
+        assert.deepEqual(result.phases.map(phase => phase.phase_number), naming === 'custom' ? ['ALPHA', 'BETA'] : [1, 2]);
+        for (const dir of expected) assert.ok(fs.statSync(path.join(cwd, dir)).isDirectory());
+      } finally { cleanup(cwd); }
+    });
+  }
+}
+
 for (const code of [null, 'CCM']) {
   test(`custom readers: roadmap analyze sees disk with code ${code} (#5509)`, () => {
     const cwd = fixture(code);
