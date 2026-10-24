@@ -814,7 +814,7 @@ const {
   shouldInstallCombinedFamily,
   isLegacyFlatLocalInstall,
   shouldInstallStandaloneAgents,
-  shouldInstallCodexAgentConfig,
+  codexAgentRolesEnabled,
   copyWithPathReplacementSymlinkRefusalMessage,
   installRuntimeArtifactsSymlinkRefusalMessage,
   installOpencodeFamilySkillsSymlinkRefusalMessage,
@@ -949,7 +949,7 @@ function preflightInstallSymlinkDestinations(runtime, configDir, scope, installM
 
   if (behaviors.tomlConfigInstall) hooksSurface.resolveCodexHooksJsonDestination(configDir);
 
-  if (shouldInstallCodexAgentConfig(behaviors, installMode, agentProfile)) {
+  if (behaviors.tomlConfigInstall && codexAgentRolesEnabled(installMode, agentProfile)) {
     const configPath = assertDestWithinConfigHome(configDir, 'config.toml');
     const agentsTomlDir = assertDestWithinConfigHome(configDir, 'agents');
     const resolvedRoot = path.resolve(configDir);
@@ -11186,7 +11186,10 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // #5503: Codex registers agent roles in config.toml. That used to be gated on "minimal mode"
   // because minimal staged no agents; gate it on whether the resolved profile stages any.
   const _codexAgentRolesEnabled = () =>
-    shouldInstallCodexAgentConfig(hostBehaviorsFor(runtime), _effectiveInstallMode, _resolvedProfile);
+    codexAgentRolesEnabled(_effectiveInstallMode, _resolvedProfile);
+  // Preserve rollback eligibility from the original profile, before preflight
+  // resolves the committed surface for the later writers.
+  const _codexPreConfigRollbackArmed = _codexAgentRolesEnabled();
   const persistActiveProfileMarker = () => {
     try {
       writeActiveProfile(targetDir, _activeProfileName);
@@ -11591,7 +11594,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   // The full restoreCodexSnapshot() (defined inside the config block) additionally
   // handles config.toml and the staged hooks/ tree, which are not yet touched
   // at this point in the pipeline.
-  const _codexPreConfigRollback = !hostBehaviorsFor(runtime).tomlConfigInstall || !_codexAgentRolesEnabled() ? null : () => {
+  const _codexPreConfigRollback = !hostBehaviorsFor(runtime).tomlConfigInstall || !_codexPreConfigRollbackArmed ? null : () => {
     rollbackInstallerMigrations();
     // skills/gsd-* — pass 1: restore snapshot entries (may be absent if deleted mid-install).
     const _earlySkillsDir = _resolveSkillsRootDir(runtime, targetDir, _installScopeId);

@@ -8996,6 +8996,51 @@ describe('#5179 install root resolution', () => {
   });
 });
 
+describe('#5179 Codex rollback arming', () => {
+  test('a core install keeps its pre-surface rollback when the committed surface selects zero agents', (t) => {
+    const root = createTempDir('gsd-5179-core-rollback-');
+    t.after(() => cleanup(root));
+    const { configDir } = runMinimalInstall({ runtime: 'codex', scope: 'global', root });
+    const versionPath = path.join(configDir, 'gsd-core', 'VERSION');
+    fs.writeFileSync(versionPath, '0.0.1\n');
+    const surface = {
+      baseProfile: 'core', disabledClusters: [], explicitAdds: [],
+      explicitRemoves: [...MANIFEST.keys()].filter((stem) => !stem.startsWith('_')),
+    };
+    fs.writeFileSync(path.join(configDir, '.gsd-surface.json'), JSON.stringify(surface));
+    const { resolveSurface } = require('../gsd-core/bin/lib/surface.cjs');
+    assert.equal(resolveSurface(configDir, MANIFEST).agents.size, 0, 'the committed surface must select no agents');
+    const script = `
+      const fs = require('node:fs');
+      process.env.GSD_TEST_MODE = '1';
+      process.argv = [process.execPath, ${JSON.stringify(INSTALL_SCRIPT)}, '--profile=core'];
+      const installer = require(${JSON.stringify(INSTALL_SCRIPT)});
+      const originalWrite = fs.writeFileSync;
+      let injected = false;
+      fs.writeFileSync = (file, ...args) => {
+        const result = originalWrite(file, ...args);
+        if (file === ${JSON.stringify(versionPath)} && !injected) {
+          injected = true;
+          throw new Error('synthetic VERSION failure');
+        }
+        return result;
+      };
+      try {
+        installer.install(true, 'codex', ${JSON.stringify(configDir)});
+        throw new Error('the fault was not raised');
+      } catch (error) {
+        if (error.message !== 'synthetic VERSION failure') throw error;
+      }
+      if (!injected) throw new Error('the VERSION writer was not reached');
+    `;
+    const result = runNode(['-e', script], {
+      cwd: root, env: installerEnv({ HOME: root, USERPROFILE: root }), timeoutMs: INSTALL_TIMEOUT_MS,
+    });
+    assert.equal(result.exitCode, 0, `${result.stdout}\n${result.stderr}`);
+    assert.equal(fs.readFileSync(versionPath, 'utf8'), '0.0.1\n', 'the armed pre-config rollback must restore VERSION');
+  });
+});
+
 describe('#5179 preflight branch coverage', () => {
   const branches = [
     { branch: 'gsd-core is symlinked', destination: 'gsd-core', refusal: /copyWithPathReplacement: destDir/ },
