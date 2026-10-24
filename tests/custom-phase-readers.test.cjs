@@ -11,6 +11,32 @@ const locator = require('../gsd-core/bin/lib/phase-locator.cjs');
 
 function options(code, naming = 'custom') { return {phaseNaming: naming, projectCode: code}; }
 
+for (const id of ['999', '0', '0.5', '00-00']) for (const writer of ['add', 'scaffold']) {
+  test(`custom hidden identity: ${writer} refuses reader-excluded ${id}`, () => {
+    const cwd = fixture(null);
+    try {
+      const args = writer === 'add' ? ['phase', 'add', 'Hidden', '--id', id]
+        : ['scaffold', 'phase-dir', '--phase', id, '--name', 'Hidden'];
+      const result = runGsdTools(['--json-errors', ...args], cwd, homeSandboxEnv(cwd));
+      assert.equal(result.success, false, result.output);
+      assert.equal(JSON.parse(result.error).reason, 'phase_id_collision');
+      assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), []);
+      assert.deepEqual(run(cwd, ['query', 'roadmap.analyze']).phases, []);
+    } finally { cleanup(cwd); }
+  });
+}
+for (const title of ['999', '0']) {
+  test(`custom hidden identity: a batch refuses reader-excluded ${title} before writing`, () => {
+    const cwd = fixture(null);
+    try {
+      const result = runGsdTools(['--json-errors', 'phase', 'add-batch', 'Visible', title], cwd, homeSandboxEnv(cwd));
+      assert.equal(result.success, false, result.output);
+      assert.equal(JSON.parse(result.error).reason, 'phase_id_collision');
+      assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), []);
+      assert.deepEqual(run(cwd, ['query', 'roadmap.analyze']).phases, []);
+    } finally { cleanup(cwd); }
+  });
+}
 for (const [ids, checked, expected] of [
   [['SETUP', 'SETUP-2', 'API'], null, 'SETUP-2'],
   [['X', 'A', 'A-b', 'B'], 'A-b', 'A'],

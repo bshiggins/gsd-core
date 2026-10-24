@@ -1516,6 +1516,11 @@ function validateCustomPhaseIds(ids: string[], context: PhaseDirectoryContext): 
   const prospective = {...context, knownIds: [...context.knownIds ?? [], ...ids]};
   for (const id of ids) {
     validateCustomPhaseId(id);
+    // The same sentinel grammar filters phases list and roadmap.analyze.
+    // Refuse identities those readers would hide rather than creating orphans.
+    if (isSentinelPhaseId(id)) {
+      throw new PhaseDirectoryNameError(`Custom ID ${id} is reserved for backlog or icebox phases and would be hidden by phase readers; choose a visible ID`, 'collision');
+    }
     if (context.projectCode && id.toLowerCase().startsWith(`${context.projectCode}-`.toLowerCase())) {
       throw new PhaseDirectoryNameError(`Custom ID ${id} already begins with project_code ${context.projectCode}; pass the ID without its project prefix`);
     }
