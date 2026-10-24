@@ -191,3 +191,20 @@ describe('#5179 uninstall plan install roots', () => {
     assert.deepStrictEqual(plan.items, [{ kind: 'agents', destDir: path.join(alternateHome, 'agents') }]);
   });
 });
+
+
+describe('#5179 plan roots reject malformed homes', () => {
+  for (const home of [false, 42]) {
+    for (const operation of ['install', 'uninstall']) {
+      test(`${operation} plan rejects home: ${home}`, () => {
+        const layout = {
+          runtime: 'claude', configDir: path.join(os.tmpdir(), 'gsd-invalid-home'), scope: 'local',
+          kinds: [{ kind: 'agents', home, destSubpath: 'agents', stage: () => '/tmp/staged-agents' }],
+        };
+        assert.throws(() => operation === 'install'
+          ? createRuntimeArtifactInstallPlan({ layout, resolvedProfile: { name: 'core' } })
+          : createRuntimeArtifactUninstallPlan(layout), { name: 'TypeError' });
+      });
+    }
+  }
+});

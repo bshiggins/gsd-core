@@ -8963,8 +8963,6 @@ describe('#5179 install root resolution', () => {
     ['missing home', {}],
     ['empty home', { home: '' }],
     ['null home', { home: null }],
-    ['numeric home', { home: 42 }],
-    ['boolean home', { home: false }],
   ]) {
     test(`falls back to configDir for ${label}`, () => {
       const configDir = path.join(os.tmpdir(), 'gsd-5179-config');

@@ -174,6 +174,9 @@ function resolveRuntimeArtifactDestination(configDir: string, kind: ArtifactKind
 }
 
 function resolveRuntimeArtifactInstallRoot(configDir: string, kind: Pick<ArtifactKind, 'home'> | null | undefined): string {
+  if (kind?.home != null && typeof kind.home !== 'string') {
+    throw new TypeError('Artifact home must be a string, null, or undefined');
+  }
   return (kind && typeof kind.home === 'string' && kind.home !== '') ? kind.home : configDir;
 }
 
