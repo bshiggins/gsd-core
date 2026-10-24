@@ -8895,7 +8895,7 @@ describe('#5179 install refusal preserves the previous install', () => {
 
 function prepareInstallSymlinkBranchUpgrade(t, {
   runtime = 'claude', scope = 'global', destination, surface = null, upgradeArgs = [],
-  allowOptIn = false, refreshFile = null,
+  allowOptIn = false, refreshFile = null, staleBytes = '# stale previous install bytes\n',
 }) {
   const root = createTempDir('gsd-5179-branch-');
   t.after(() => cleanup(root));
@@ -8928,7 +8928,7 @@ function prepareInstallSymlinkBranchUpgrade(t, {
   if (refreshFile !== null) {
     const file = isDirectory ? path.join(dest, refreshFile) : dest;
     expectedRefreshedBytes = fs.readFileSync(file);
-    fs.writeFileSync(file, '# stale previous install bytes\n');
+    fs.writeFileSync(file, staleBytes);
   }
 
   const before = snapshotInstallSymlinkTree(root, 'previous-install');
@@ -9001,6 +9001,7 @@ describe('#5179 install root resolution', () => {
 describe('#5179 preflight branch coverage', () => {
   const branches = [
     { branch: 'gsd-core is symlinked', destination: 'gsd-core', refusal: /copyWithPathReplacement: destDir/ },
+    { branch: 'Codex hooks.json is symlinked', runtime: 'codex', destination: 'hooks.json', refusal: /hooks\.json at .* contains a symlink/ },
     { branch: 'Codex config.toml is symlinked', runtime: 'codex', destination: 'config.toml', refusal: /installCodexConfig: a Codex config path/ },
     { branch: 'the Codex agents directory is symlinked', runtime: 'codex', destination: 'agents', refusal: /installRuntimeArtifacts: destDir/ },
     { branch: 'a Codex agent toml is symlinked', runtime: 'codex', destination: 'agents/gsd-planner.toml', refusal: /installCodexConfig: agent toml path/ },
@@ -9041,6 +9042,18 @@ describe('#5179 preflight branch coverage', () => {
       assert.deepStrictEqual(fs.readFileSync(installedFile), fixture.expectedRefreshedBytes, 'the installed destination must contain refreshed bytes');
     });
   }
+
+  test('allows opted-in Codex hooks.json and refreshes its symlink target', (t) => {
+    const fixture = prepareInstallSymlinkBranchUpgrade(t, {
+      runtime: 'codex', destination: 'hooks.json', allowOptIn: true,
+      refreshFile: '', staleBytes: '{"hooks":{}}\n',
+    });
+    if (!fixture) return;
+    assert.equal(fixture.result.exitCode, 0, fixture.output);
+    assert.doesNotMatch(fixture.output, /refusing to/);
+    assert.equal(fs.lstatSync(fixture.dest).isSymbolicLink(), true, 'the opted-in hooks writer follows the symlink');
+    assert.deepStrictEqual(fs.readFileSync(fs.realpathSync(fixture.dest)), fixture.expectedRefreshedBytes);
+  });
 
   test('does not newly refuse symlinked legacy-flat local commands', (t) => {
     const fixture = prepareInstallSymlinkBranchUpgrade(t, { scope: 'local', destination: 'commands' });

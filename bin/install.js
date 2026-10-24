@@ -947,6 +947,8 @@ function preflightInstallSymlinkDestinations(runtime, configDir, scope, installM
     }
   }
 
+  if (behaviors.tomlConfigInstall) hooksSurface.resolveCodexHooksJsonDestination(configDir);
+
   if (shouldInstallCodexAgentConfig(behaviors, installMode, agentProfile)) {
     const configPath = assertDestWithinConfigHome(configDir, 'config.toml');
     const agentsTomlDir = assertDestWithinConfigHome(configDir, 'agents');
