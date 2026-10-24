@@ -170,7 +170,6 @@ describe('createRuntimeArtifactInstallPlan', () => {
   });
 });
 
-
 describe('#5179 uninstall plan install roots', () => {
   test('an empty-string home falls back to configDir', () => {
     const configDir = path.join(os.tmpdir(), 'gsd-uninstall-plan-config');
@@ -191,7 +190,6 @@ describe('#5179 uninstall plan install roots', () => {
     assert.deepStrictEqual(plan.items, [{ kind: 'agents', destDir: path.join(alternateHome, 'agents') }]);
   });
 });
-
 
 describe('#5179 plan roots reject malformed homes', () => {
   for (const home of [false, 42]) {

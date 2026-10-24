@@ -164,9 +164,12 @@ function prepareInstallSymlinkUpgrade(t, { allowOptIn = false } = {}) {
     throw error;
   }
 
+  let refreshedSkillFile;
+  let expectedSkillBytes;
   if (allowOptIn) {
-    const skillName = fs.readdirSync(skillsTarget).find((entry) => entry.startsWith('gsd-'));
-    fs.writeFileSync(path.join(skillsTarget, skillName, 'SKILL.md'), 'stale temp fixture content\n');
+    refreshedSkillFile = path.join(skillsTarget, 'gsd-help', 'SKILL.md');
+    expectedSkillBytes = fs.readFileSync(refreshedSkillFile);
+    fs.writeFileSync(refreshedSkillFile, 'stale temp fixture content\n');
   }
 
   const beforeTarget = snapshotInstallSymlinkTree(skillsTarget, 'skills-target');
@@ -199,6 +202,8 @@ function prepareInstallSymlinkUpgrade(t, { allowOptIn = false } = {}) {
     after,
     beforeTarget,
     afterTarget,
+    expectedSkillBytes,
+    refreshedSkillBytes: refreshedSkillFile ? fs.readFileSync(refreshedSkillFile) : null,
   };
 }
 
@@ -8829,7 +8834,7 @@ describe('#5179 install refusal preserves the previous install', () => {
     if (!fixture) return;
 
     assert.equal(fixture.result.exitCode, 0, fixture.output);
-    assert.notDeepStrictEqual(fixture.afterTarget, fixture.beforeTarget, 'the opted-in install must write through the symlink');
+    assert.deepStrictEqual(fixture.refreshedSkillBytes, fixture.expectedSkillBytes, 'the opted-in install must restore the SKILL.md bytes through the symlink');
   });
 
   test('checks a kind with an alternate home against that home', (t) => {
@@ -9157,7 +9162,7 @@ describe('#5179 preflight branch coverage', () => {
     const fixture = prepareInstallSymlinkBranchUpgrade(t, {
       runtime: 'codex', destination: 'agents/gsd-ai-researcher.toml',
       surface: { baseProfile: 'standard', disabledClusters: [], explicitAdds: [], explicitRemoves: [] },
-      upgradeArgs: ['--profile', 'standard'],
+      upgradeArgs: ['--profile=standard'],
     });
     if (!fixture) return;
     assert.equal(fixture.result.exitCode, 0, fixture.output);
@@ -9190,7 +9195,7 @@ describe('#5179 preflight branch coverage', () => {
     const fixture = prepareInstallSymlinkBranchUpgrade(t, {
       runtime: 'codex', destination: 'agents/gsd-ai-researcher.toml',
       surface: { baseProfile: 'standard', disabledClusters: [], explicitAdds: ['ai-integration-phase'], explicitRemoves: [] },
-      upgradeArgs: ['--profile', 'standard'],
+      upgradeArgs: ['--profile=standard'],
     });
     if (fixture) assertInstallSymlinkBranchPreserved(fixture, /installCodexConfig: agent toml path/);
   });
