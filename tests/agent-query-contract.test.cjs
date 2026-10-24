@@ -11,6 +11,10 @@ const commandAliases = require('../gsd-core/bin/lib/command-aliases.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const AGENT_PATH = path.join(ROOT, 'agents', 'gsd-plan-checker.md');
+const DOCUMENTED_ROOTS = [
+  'agents', path.join('gsd-core', 'workflows'), 'commands',
+  'skills', path.join('pi', 'package-skills'), path.join('pi', 'package-agents'),
+];
 // The runtime probes render output for these roots instead of rejecting an
 // unknown subcommand, so they have no router-level subcommand list.
 const ROOT_ONLY = new Set(['progress', 'stats']);
@@ -23,6 +27,13 @@ function markdownFiles(dir) {
   });
 }
 
+function isExecutableCall(line, index) {
+  const before = line.slice(0, index);
+  // Ignore grammatical mentions; count shell starts, control operators/substitutions,
+  // and Markdown code spans so embedded calls remain covered without a word list.
+  return !before.trim() || /(?:\$\(\s*|&&\s*|\|\|\s*|\|\s*|;\s*|\b(?:if|then|do|else|elif|while|until)\s*|`[^`]*$)$/.test(before);
+}
+
 function queryNames(content) {
   const names = [];
   for (const line of content.split(/\r?\n/)) {
@@ -30,10 +41,7 @@ function queryNames(content) {
     const re = /\b(?:gsd_run|gsd-tools)\s+query\s+([\w.-]+)(?:\s+([\w.-]+))?/g;
     let match;
     while ((match = re.exec(line))) {
-      const before = line.slice(0, match.index);
-      // Ignore grammatical mentions; count shell starts, shell control operators/substitutions,
-      // and Markdown code spans so embedded executable calls remain covered without a word list.
-      if (before.trim() && !/(?:\$\(\s*|&&\s*|\|\|\s*|\|\s*|;\s*|\b(?:if|then|do|else|elif|while|until)\s*|`[^`]*$)$/.test(before)) continue;
+      if (!isExecutableCall(line, match.index)) continue;
       names.push([match[1], match[2]].filter(Boolean));
     }
   }
@@ -46,7 +54,7 @@ test('queryNames finds every generated executable call and skips prose mentions'
     fc.stringMatching(/^[a-z][a-z0-9-]{0,7}$/),
   ).map(([root, subcommand]) => `${root}.${subcommand}`);
   const secondToken = fc.option(fc.stringMatching(/^[a-z][a-z0-9-]{0,7}$/), { nil: undefined });
-  const invoker = fc.constantFrom('gsd_run', 'gsd-tools');
+  const invoker = fc.constantFrom('gsd_run', 'gsd-tools', 'gsd_run --cwd X', 'gsd_run --cwd "path with spaces"');
   const placement = fc.constantFrom(
     (call) => call,
     (call) => `$(${call})`,
@@ -108,7 +116,7 @@ function runtimeRegisteredNames() {
   }
   const subcommands = new Map();
   const dottedRoots = new Set();
-  for (const root of ['agents', path.join('gsd-core', 'workflows'), 'commands']) {
+  for (const root of DOCUMENTED_ROOTS) {
     for (const file of markdownFiles(path.join(ROOT, root))) {
       for (const [name] of queryNames(fs.readFileSync(file, 'utf8'))) {
         const commandRoot = name.split('.')[0];
@@ -170,7 +178,7 @@ function findUnregisteredQueries(files, registry) {
 }
 
 test('every documented query names a registered command', () => {
-  const files = ['agents', path.join('gsd-core', 'workflows'), 'commands']
+  const files = DOCUMENTED_ROOTS
     .flatMap((root) => markdownFiles(path.join(ROOT, root)));
   const names = documentedQueryNames(files);
   const registered = runtimeRegisteredNames();
@@ -211,9 +219,10 @@ test('a bad subcommand under a registered non-family root is rejected', () => {
 function frontmatterCalls(agent) {
   const calls = [];
   for (const line of agent.split(/\r?\n/)) {
-    const re = /\bgsd_run\s+query\s+frontmatter\.get\s+(.+?)(?=\s*(?:\)|\|\||&&|\||;|$))/g;
+    const re = /\b(?:gsd_run|gsd-tools)\s+query\s+frontmatter\.get\s+(.+?)(?=\s*(?:\)|\|\||&&|\||;|`|$))/g;
     let match;
     while ((match = re.exec(line))) {
+      if (!isExecutableCall(line, match.index)) continue;
       const args = [...match[1].matchAll(/"(?:\\.|[^"\\])*"|'[^']*'|[^\s]+/g)]
         .map(([word]) => word.replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/, (_whole, doubleQuoted, singleQuoted) => doubleQuoted ?? singleQuoted));
       if (args.length) calls.push({ planExpression: args[0], args: args.slice(1) });
@@ -221,6 +230,23 @@ function frontmatterCalls(agent) {
   }
   return calls;
 }
+
+test('every documented frontmatter.get call accepts its argument form', (t) => {
+  const dir = createTempProject('agent-query-arguments-');
+  t.after(() => cleanup(dir));
+  const fixturePath = path.join(dir, 'fixture.md');
+  fs.writeFileSync(fixturePath, '---\nstatus: complete\ndepends_on: []\nmust_haves: {}\nfiles_modified: []\n---\n');
+  const failures = [];
+  for (const root of DOCUMENTED_ROOTS) {
+    for (const file of markdownFiles(path.join(ROOT, root))) {
+      for (const call of frontmatterCalls(fs.readFileSync(file, 'utf8'))) {
+        const result = runGsdTools(['query', 'frontmatter.get', fixturePath, ...call.args], dir);
+        if (!result.success) failures.push(`${path.relative(ROOT, file).split(path.sep).join('/')}: ${call.args.join(' ')}: ${result.error}`);
+      }
+    }
+  }
+  assert.deepEqual(failures, []);
+});
 
 test('plan-checker frontmatter.get calls return must_haves and files_modified', (t) => {
   const calls = frontmatterCalls(fs.readFileSync(AGENT_PATH, 'utf8'));
