@@ -789,6 +789,7 @@ const {
   discoverInstallerMigrations,
   MANIFEST_SCHEMA_VERSION,
   readInstallManifest,
+  readInstallState,
   recordHostGeneration,
   runInstallerMigrations,
 } = require(path.join(_gsdLibDir, 'installer-migrations.cjs'));
@@ -912,7 +913,7 @@ function isSkillsRuntimeInstall(runtime, scope) {
   return Array.isArray(scopeLayout) && scopeLayout.length > 0;
 }
 
-function preflightInstallSymlinkDestinations(runtime, configDir, scope, installMode, agentProfile, packageRoot) {
+function preflightInstallSymlinkDestinations(runtime, configDir, scope, installMode, agentProfile, packageRoot, installerMigrations) {
   const check = (installRoot, destination, message) => {
     if (hasExistingSymlinkBetween(path.resolve(installRoot), destination, { allowOptInFollow: isSymlinkedDestOptIn() })) {
       throw new Error(message);
@@ -947,8 +948,6 @@ function preflightInstallSymlinkDestinations(runtime, configDir, scope, installM
     }
   }
 
-  if (behaviors.tomlConfigInstall) hooksSurface.resolveCodexHooksJsonDestination(configDir);
-
   if (behaviors.tomlConfigInstall && codexAgentRolesEnabled(installMode, agentProfile)) {
     const configPath = assertDestWithinConfigHome(configDir, 'config.toml');
     const agentsTomlDir = assertDestWithinConfigHome(configDir, 'agents');
@@ -966,6 +965,36 @@ function preflightInstallSymlinkDestinations(runtime, configDir, scope, installM
       if (hasExistingSymlinkBetween(resolvedRoot, agentTomlPath, { allowOptInFollow: isSymlinkedDestOptIn() })) {
         throw new Error(installCodexAgentTomlSymlinkRefusalMessage(agentTomlPath));
       }
+    }
+  }
+
+  if (resolveInstallPlan(runtime).installSurface === 'codex-toml') {
+    const appliedIds = new Set(readInstallState(configDir).appliedMigrations
+      .filter((entry) => entry && typeof entry.id === 'string').map((entry) => entry.id));
+    const migrations = installerMigrations || discoverInstallerMigrations({
+      migrationsDir: path.join(_gsdLibDir, 'installer-migrations'),
+    });
+    // Pending migrations can replace hooks.json (bundled migration 002) or
+    // rewrite config inputs (injected migrations). Do not execute their plans
+    // twice or predict filesystem publication/fallbacks: defer this check to
+    // the reconciler until they are applied. A future pure migration projection
+    // could safely extend preflight to these installs.
+    if (migrations.some((migration) =>
+      !appliedIds.has(migration.id) &&
+      (!migration.runtimes?.length || migration.runtimes.includes(runtime)) &&
+      (!migration.scopes?.length || migration.scopes.includes(scope)))) return;
+    const configPath = path.join(configDir, 'config.toml');
+    let configContent = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '';
+    if (codexAgentRolesEnabled(installMode, agentProfile)) {
+      // The managed config block contains no roster-dependent fields (#2406).
+      // If that changes, pass the writer's selected roster to both projections.
+      configContent = mergeCodexConfigContent(configContent, generateCodexConfigBlock([], configDir));
+    }
+    const prepared = prepareCodexHooksConfig(configContent);
+    // Extended-event cleanup reconciles hooks.json even when SessionStart has
+    // no script/runner. Inline/scalar features may leave reconciliation off.
+    if (hasEnabledCodexHooksFeature(prepared.content)) {
+      hooksSurface.resolveCodexHooksJsonDestination(configDir);
     }
   }
 }
@@ -6663,13 +6692,13 @@ function splitTopLevelKeys(content) {
 }
 
 function mergeCodexConfig(configPath, gsdBlock) {
-  // Case 1: No config.toml — create fresh
-  if (!fs.existsSync(configPath)) {
-    atomicWriteFileSync(configPath, gsdBlock + '\n');
-    return;
-  }
+  const existing = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : null;
+  atomicWriteFileSync(configPath, mergeCodexConfigContent(existing, gsdBlock));
+}
 
-  const existing = fs.readFileSync(configPath, 'utf8');
+function mergeCodexConfigContent(existing, gsdBlock) {
+  // Case 1: No config.toml — create fresh
+  if (existing === null) return gsdBlock + '\n';
   const eol = detectLineEnding(existing);
   // #2088 review: the bare `[agents]` table is purged below (Case 2/3 via
   // stripLeakedGsdCodexSections) to keep a single managed `[agents]`. Preserve
@@ -6728,8 +6757,7 @@ function mergeCodexConfig(configPath, gsdBlock) {
     if (beforeSplit.rest) parts.push(beforeSplit.rest);
     parts.push(normalizedGsdBlock);
     if (afterTables) parts.push(afterTables);
-    atomicWriteFileSync(configPath, parts.join(eol + eol) + eol);
-    return;
+    return parts.join(eol + eol) + eol;
   }
 
   // Case 3: No marker — append GSD block
@@ -6740,7 +6768,7 @@ function mergeCodexConfig(configPath, gsdBlock) {
     content = normalizedGsdBlock + eol;
   }
 
-  atomicWriteFileSync(configPath, content);
+  return content;
 }
 
 /**
@@ -6923,6 +6951,19 @@ function ensureCodexHooksFeature(configContent) {
   // No table headers — append [features] after top-level keys
   const needsGap = configContent.length > 0 && !configContent.endsWith(eol + eol);
   return { content: configContent + (needsGap ? eol : '') + featuresBlock, ownership: 'section' };
+}
+
+function prepareCodexHooksConfig(configContent) {
+  // Strip GSD-owned legacy blocks before migrating user hooks (#2698).
+  // Share this exact projection with preflight, including inline/scalar
+  // features values that ensureCodexHooksFeature deliberately preserves.
+  const stripped = stripStaleGsdHookBlocks(configContent);
+  const migrated = migrateCodexHooksMapFormat(stripped);
+  const feature = ensureCodexHooksFeature(migrated);
+  return {
+    content: setManagedCodexHooksOwnership(feature.content, feature.ownership),
+    migrated: migrated !== stripped,
+  };
 }
 
 function hasEnabledCodexHooksFeature(configContent) {
@@ -11230,7 +11271,7 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
   }
   // Preflight and _stageAgents use the same resolved profile and shared file
   // selector; core's agent roles follow #5503's profile-derived selection too.
-  preflightInstallSymlinkDestinations(runtime, targetDir, _installScopeId, _effectiveInstallMode, _resolvedProfile, src);
+  preflightInstallSymlinkDestinations(runtime, targetDir, _installScopeId, _effectiveInstallMode, _resolvedProfile, src, options.installerMigrations);
 
   // #2875 (#1874-F19 anti-inertness, test-matrix C7): recover any user
   // artifact orphaned by a PRIOR install run that died between staging and
@@ -13241,34 +13282,12 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
     // failure (#2760 fix 3) — not to the post-agent-merge state.
     const preWriteBackup = codexConfigPreInstallSnapshot;
     try {
-      let configContent = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf-8') : '';
-      const eol = detectLineEnding(configContent);
-
-      // Strip ALL prior GSD-managed hook blocks BEFORE migration so the migration
-      // only touches user-authored hooks, not GSD-owned stale entries. Running
-      // strip after migration causes Shape 1 (legacy gsd-update-check filename)
-      // to be converted by migration before the strip regex can match it (#2698).
-      //
-      // Historical shapes stripped, in order:
-      //   Shape 1 — legacy gsd-update-check filename (pre-#1755): flat [[hooks]] + event
-      //   Shape 2 — flat [[hooks]] + event = "SessionStart" (#2637 era, never correct)
-      //   Shape 4 — correct two-block nested (strip before shape 3 to avoid orphaned header)
-      //   Shape 3 — single-block [[hooks.SessionStart]] without nested .hooks (#2760 era)
-      configContent = stripStaleGsdHookBlocks(configContent);
-
-      // Migrate legacy [hooks] map format and flat [[hooks]] AoT entries to the
-      // namespaced [[hooks.<EVENT>]] form after stripping GSD-managed stale blocks.
-      // Running migration after strip ensures only user-authored hooks are migrated
-      // (#2698 regression: migration before strip converts stale GSD blocks before
-      // the strip regexes can match their original shape).
-      const migratedContent = migrateCodexHooksMapFormat(configContent);
-      if (migratedContent !== configContent) {
-        configContent = migratedContent;
+      const existingConfigContent = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf-8') : '';
+      const prepared = prepareCodexHooksConfig(existingConfigContent);
+      const configContent = prepared.content;
+      if (prepared.migrated) {
         console.log(`  ${green}✓${reset} Migrated legacy Codex [hooks] format to two-level nested AoT`);
       }
-
-      const codexHooksFeature = ensureCodexHooksFeature(configContent);
-      configContent = setManagedCodexHooksOwnership(codexHooksFeature.content, codexHooksFeature.ownership);
 
       // GSD-managed Codex hook payloads now live in hooks.json to avoid mixed
       // representation warnings when a single layer contains both hooks.json

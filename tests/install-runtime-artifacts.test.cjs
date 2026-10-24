@@ -8900,7 +8900,7 @@ describe('#5179 install refusal preserves the previous install', () => {
 
 function prepareInstallSymlinkBranchUpgrade(t, {
   runtime = 'claude', scope = 'global', destination, surface = null, upgradeArgs = [],
-  allowOptIn = false, refreshFile = null, staleBytes = '# stale previous install bytes\n',
+  allowOptIn = false, refreshFile = null, staleBytes = '# stale previous install bytes\n', configContent = null, pendingMigrations = false,
 }) {
   const root = createTempDir('gsd-5179-branch-');
   t.after(() => cleanup(root));
@@ -8913,6 +8913,9 @@ function prepareInstallSymlinkBranchUpgrade(t, {
   if (surface) {
     fs.writeFileSync(path.join(configDir, '.gsd-surface.json'), JSON.stringify(surface) + '\n');
   }
+
+  if (configContent !== null) fs.writeFileSync(path.join(configDir, 'config.toml'), configContent);
+  if (pendingMigrations) cleanup(path.join(configDir, 'gsd-install-state.json'));
 
   const dest = path.join(configDir, destination);
   assert.ok(fs.existsSync(dest), `the previous install must contain ${destination}`);
@@ -8936,6 +8939,7 @@ function prepareInstallSymlinkBranchUpgrade(t, {
     fs.writeFileSync(file, staleBytes);
   }
 
+  const previousDestinationBytes = isDirectory ? null : fs.readFileSync(dest);
   const before = snapshotInstallSymlinkTree(root, 'previous-install');
   const args = [INSTALL_SCRIPT, `--${runtime}`, `--${scope}`, '--no-legacy-cleanup', ...upgradeArgs];
   if (scope === 'global') args.push('--config-dir', configDir);
@@ -8947,7 +8951,7 @@ function prepareInstallSymlinkBranchUpgrade(t, {
   return {
     result, output: stripAnsi(`${result.stdout}\n${result.stderr}`),
     before, after: snapshotInstallSymlinkTree(root, 'previous-install'),
-    configDir, dest, expectedRefreshedBytes,
+    configDir, dest, expectedRefreshedBytes, previousDestinationBytes,
   };
 }
 
@@ -9090,6 +9094,35 @@ describe('#5179 preflight branch coverage', () => {
       assert.deepStrictEqual(fs.readFileSync(installedFile), fixture.expectedRefreshedBytes, 'the installed destination must contain refreshed bytes');
     });
   }
+
+  for (const [shape, configContent] of [
+    ['inline features', 'features = { other_feature = true }\n'],
+    ['scalar features', 'features = "disabled"\n'],
+    ['inline hooks feature', 'features = { hooks = true }\n'],
+  ]) {
+    test(`does not refuse symlinked Codex hooks.json when ${shape} skip hook reconciliation`, (t) => {
+      const fixture = prepareInstallSymlinkBranchUpgrade(t, {
+        runtime: 'codex', destination: 'hooks.json', configContent,
+      });
+      if (!fixture) return;
+      assert.equal(fixture.result.exitCode, 0, fixture.output);
+      assert.doesNotMatch(fixture.output, /refusing to/);
+      assert.equal(fs.lstatSync(fixture.dest).isSymbolicLink(), true);
+      assert.deepStrictEqual(fs.readFileSync(fixture.dest), fixture.previousDestinationBytes, 'a no-reconciliation install must leave hooks.json bytes untouched');
+      assert.equal(fs.readFileSync(path.join(fixture.configDir, 'gsd-core', 'VERSION'), 'utf8'), require('../package.json').version);
+    });
+  }
+
+  test('does not newly refuse symlinked Codex hooks.json before pending migrations replace it', (t) => {
+    const fixture = prepareInstallSymlinkBranchUpgrade(t, {
+      runtime: 'codex', destination: 'hooks.json', pendingMigrations: true,
+    });
+    if (!fixture) return;
+    assert.equal(fixture.result.exitCode, 0, fixture.output);
+    assert.doesNotMatch(fixture.output, /refusing to/);
+    assert.equal(fs.lstatSync(fixture.dest).isSymbolicLink(), false);
+    assert.deepStrictEqual(fs.readFileSync(fixture.dest), fixture.previousDestinationBytes);
+  });
 
   test('allows opted-in Codex hooks.json and refreshes its symlink target', (t) => {
     const fixture = prepareInstallSymlinkBranchUpgrade(t, {
