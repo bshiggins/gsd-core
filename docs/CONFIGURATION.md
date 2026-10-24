@@ -276,13 +276,20 @@ Custom IDs must be nonempty and contain no whitespace, colons, path separators,
 ID, roadmap declaration or another ID in the batch are refused, including case
 and numeric-padding aliases. Prefix pairs such as `SETUP` and `SETUP-2` are
 allowed when their directory-owned markers establish separate identities.
+IDs in the readers' reserved backlog and icebox ranges are also refused
+(for example `0`, `0.5`, `00-00` and `999`); those phases would be hidden from
+ordinary phase listings. Digit-leading IDs such as `2FA` and `7B` remain valid.
 
 New custom directories contain a regular UTF-8 `.phase-id` file with the exact
 ID, without the project prefix or slug. Readers use that record even after
 roadmap edits or archival. Existing markerless custom directories continue to
 resolve and can be removed when exactly one known owner matches. An ambiguous
 removal or rename refuses and names the candidates; write the correct owning ID
-into that directory's `.phase-id` to resolve the ambiguity. Numeric phases
+into that directory's `.phase-id` to resolve the ambiguity. Read-only lookups
+can also refuse to choose between ambiguous markerless owners, including
+overlapping `SETUP` / `SETUP-2` directory names. Put the exact owning ID, without
+the project prefix or title slug, in each affected directory's `.phase-id` and
+retry the lookup. Numeric phases
 without custom identity records, including their inserted decimal children,
 retain numeric renumbering.
 

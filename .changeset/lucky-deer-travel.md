@@ -7,4 +7,6 @@ pr: 5509
 
 `phase.add --id` now returns a usage error unless effective `phase_naming` is `custom`, because its previous behavior wrote an unresolvable directory. Custom writers reject unreadable IDs, IDs already carrying the project prefix, equivalent recorded/declared/batch IDs and writes that would claim markerless directories. Marked prefix pairs remain supported. Add, add-batch, insert and scaffold refuse occupied directory targets or duplicate batch destinations before writing, preserving existing identity markers. Add-batch validates all directory components and containment before writing.
 
+Custom IDs in the readers' reserved backlog or icebox ranges are refused before writing, so ordinary listings cannot hide a newly created custom phase. Completion keeps prefix-related recorded IDs distinct and persists the next declared phase to STATE.md; checkbox and requirement updates bind to that exact identity.
+
 Legacy numeric families retain padding-tolerant removal and renumbering, including inserted decimal children. Smart-entry failure detection handles numeric phases in custom projects and continues past dangling symlinks in the phase tree.
