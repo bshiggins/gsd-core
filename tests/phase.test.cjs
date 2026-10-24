@@ -17555,8 +17555,10 @@ describe('custom phase add-then-resolve regressions (#5186)', () => {
   });
 
   test('fast-check custom phase add-then-resolve round trip (#5186)', () => {
+    // Zero-leading tokens belong to the readers' reserved backlog range;
+    // refusal cases live in custom-phase-readers. Keep 1-9 and lowercase here.
     const word = fc.tuple(
-      fc.constantFrom(...'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'),
+      fc.constantFrom(...'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz123456789'),
       fc.array(fc.constantFrom(...'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'), { minLength: 1, maxLength: 7 }),
     ).map(([head, tail]) => head + tail.join(''));
     fc.assert(fc.property(word, word, fc.boolean(), fc.tuple(fc.constantFrom('2024', '3', 'Property', 'a2'), fc.constantFrom('roadmap', 'steps', 'Boundary')).map(words => words.join(' ')), (head, tail, prefixed, title) => {
