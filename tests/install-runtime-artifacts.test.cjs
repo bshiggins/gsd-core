@@ -9001,8 +9001,6 @@ describe('#5179 install root resolution', () => {
 describe('#5179 preflight branch coverage', () => {
   const branches = [
     { branch: 'gsd-core is symlinked', destination: 'gsd-core', refusal: /copyWithPathReplacement: destDir/ },
-    { branch: 'the commands corpus is symlinked', destination: 'gsd-core/commands/gsd', refusal: /syncRuntimeSurfaceCorpus: destination/ },
-    { branch: 'the agents corpus is symlinked', destination: 'gsd-core/agents', refusal: /syncRuntimeSurfaceCorpus: destination/ },
     { branch: 'Codex config.toml is symlinked', runtime: 'codex', destination: 'config.toml', refusal: /installCodexConfig: a Codex config path/ },
     { branch: 'the Codex agents directory is symlinked', runtime: 'codex', destination: 'agents', refusal: /installRuntimeArtifacts: destDir/ },
     { branch: 'a Codex agent toml is symlinked', runtime: 'codex', destination: 'agents/gsd-planner.toml', refusal: /installCodexConfig: agent toml path/ },
@@ -9018,6 +9016,19 @@ describe('#5179 preflight branch coverage', () => {
 
   for (const row of [
     { branch: 'commands corpus', destination: 'gsd-core/commands/gsd', refreshFile: 'help.md' },
+    { branch: 'agents corpus', destination: 'gsd-core/agents', refreshFile: 'gsd-planner.md' },
+  ]) {
+    test(`does not newly refuse a symlinked ${row.branch} subdirectory`, (t) => {
+      const fixture = prepareInstallSymlinkBranchUpgrade(t, row);
+      if (!fixture) return;
+      assert.equal(fixture.result.exitCode, 0, fixture.output);
+      assert.doesNotMatch(fixture.output, /refusing to/);
+      assert.equal(fs.lstatSync(fixture.dest).isSymbolicLink(), false);
+      assert.deepStrictEqual(fs.readFileSync(path.join(fixture.dest, row.refreshFile)), fixture.expectedRefreshedBytes);
+    });
+  }
+
+  for (const row of [
     { branch: 'Codex agent TOML', runtime: 'codex', destination: 'agents/gsd-planner.toml', refreshFile: '' },
   ]) {
     test(`allows opted-in ${row.branch} replacement with refreshed bytes`, (t) => {

@@ -814,13 +814,11 @@ const {
   shouldInstallCombinedFamily,
   isLegacyFlatLocalInstall,
   shouldInstallStandaloneAgents,
-  requiredRuntimeSurfaceSources,
   shouldInstallCodexAgentConfig,
   copyWithPathReplacementSymlinkRefusalMessage,
   installRuntimeArtifactsSymlinkRefusalMessage,
   installOpencodeFamilySkillsSymlinkRefusalMessage,
   installAgentsKindStandaloneSymlinkRefusalMessage,
-  syncRuntimeSurfaceCorpusSymlinkRefusalMessage,
   installCodexConfigSymlinkRefusalMessage,
   installCodexAgentTomlSymlinkRefusalMessage,
   createRuntimeArtifactInstallPlan,
@@ -946,26 +944,6 @@ function preflightInstallSymlinkDestinations(runtime, configDir, scope, installM
         throw new Error(installAgentsKindStandaloneSymlinkRefusalMessage(dest, installRoot));
       }
       throw new Error(installRuntimeArtifactsSymlinkRefusalMessage(dest, installRoot));
-    }
-  }
-
-  if (scope === 'global') {
-    const required = requiredRuntimeSurfaceSources(layout, scope);
-    if (required.has('commands')) {
-      const destination = path.join(configDir, 'gsd-core', 'commands', 'gsd');
-      check(
-        configDir,
-        destination,
-        syncRuntimeSurfaceCorpusSymlinkRefusalMessage(destination, configDir),
-      );
-    }
-    if (required.has('agents')) {
-      const destination = path.join(configDir, 'gsd-core', 'agents');
-      check(
-        configDir,
-        destination,
-        syncRuntimeSurfaceCorpusSymlinkRefusalMessage(destination, configDir),
-      );
     }
   }
 
