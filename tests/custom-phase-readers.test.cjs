@@ -67,7 +67,9 @@ test('custom reader context: health does not group distinct recorded ids sharing
     for (const id of ['2FA-first', '2FA-second']) add(cwd, id);
     const home = path.join(cwd, 'home');
     fs.mkdirSync(home);
-    const response = runGsdTools(['validate', 'health'], cwd, {...homeSandboxEnv(cwd), HOME: home});
+    const env = homeSandboxEnv(home);
+    assert.equal(env.USERPROFILE, home, 'Windows health checks must use the sandbox home too');
+    const response = runGsdTools(['validate', 'health'], cwd, env);
     assert.equal(response.success, true, response.error);
     const result = JSON.parse(response.output);
     assert.equal(result.errors.some(error => error.code === 'E010'), false);
