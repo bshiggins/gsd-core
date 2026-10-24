@@ -348,7 +348,7 @@ function detectVerifyFailed(cwd: string, currentPhaseRaw: string | null): boolea
         return { name, phaseToken: parts ? parts.id : phaseTokenFromDirName(name) };
       })
       .filter((entry): entry is { name: string; phaseToken: string } => entry.phaseToken !== null)
-      .sort((a, b) => comparePhaseNum(a.phaseToken, b.phaseToken) || a.name.localeCompare(b.name))
+      .sort((a, b) => comparePhaseNum(a.phaseToken, b.phaseToken, directoryContext) || a.name.localeCompare(b.name))
       .map((entry) => entry.name);
   } catch {
     return false;

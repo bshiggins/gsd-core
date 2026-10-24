@@ -37,6 +37,82 @@ for (const title of ['999', '0']) {
     } finally { cleanup(cwd); }
   });
 }
+test('custom reader context: smart-entry chooses the latest declared phase without a current phase', () => {
+  const cwd = fixture(null);
+  try {
+    for (const [id, status] of [['ZETA', 'passed'], ['ALPHA', 'failed']]) {
+      const dir = add(cwd, id);
+      fs.writeFileSync(path.join(cwd, dir, `${id}-01-SUMMARY.md`), `# Summary\nSTATUS: ${status}\n`);
+    }
+    fs.writeFileSync(path.join(cwd, '.planning/STATE.md'), '# State\n');
+    assert.equal(require('../gsd-core/bin/lib/smart-entry.cjs').classifyProject(cwd).signals.verify_failed, true);
+  } finally { cleanup(cwd); }
+});
+test('custom reader context: health does not group distinct recorded ids sharing a token prefix', () => {
+  const cwd = fixture(null);
+  try {
+    for (const id of ['2FA-first', '2FA-second']) add(cwd, id);
+    const home = path.join(cwd, 'home');
+    fs.mkdirSync(home);
+    const response = runGsdTools(['validate', 'health'], cwd, {...homeSandboxEnv(cwd), HOME: home});
+    assert.equal(response.success, true, response.error);
+    const result = JSON.parse(response.output);
+    assert.equal(result.errors.some(error => error.code === 'E010'), false);
+    assert.deepEqual(result.warnings.filter(warning => warning.code === 'W023'), []);
+  } finally { cleanup(cwd); }
+});
+for (const guarded of [false, true]) {
+  test(`custom reader context: state complete-phase resolves custom identity with superseded guard ${guarded}`, () => {
+    const cwd = fixture(null);
+    try {
+      for (const id of ['AUTH', 'BILLING']) add(cwd, id);
+      const current = guarded ? 'BILLING' : 'AUTH';
+      const statePath = path.join(cwd, '.planning/STATE.md');
+      fs.writeFileSync(statePath, `---\ncurrent_phase: ${current}\nstatus: executing\n---\n# State\n\n## Current Position\nPhase: ${current} (Boundary)\nStatus: Executing\n`);
+      const before = fs.readFileSync(statePath, 'utf8');
+      const result = run(cwd, ['state', 'complete-phase', ...(guarded ? ['--phase', 'AUTH'] : [])]);
+      assert.equal(result.phase, 'AUTH');
+      if (guarded) {
+        assert.equal(result.idempotent, true);
+        assert.equal(fs.readFileSync(statePath, 'utf8'), before);
+      } else {
+        assert.ok(result.updated.length > 0);
+        const state = require('../gsd-core/bin/lib/frontmatter.cjs').extractFrontmatter(fs.readFileSync(statePath, 'utf8'), statePath);
+        assert.equal(state.current_phase, 'AUTH');
+      }
+    } finally { cleanup(cwd); }
+  });
+}
+test('custom reader context: planning-inspect binds a custom goal to its declared identity', () => {
+  const cwd = fixture(null);
+  try {
+    const dir = add(cwd, 'PRODUCT-BOUNDARY');
+    fs.writeFileSync(path.join(cwd, '.planning/ROADMAP.md'), '# Roadmap\n## Milestone v1.0: Test\n## Phases\n### Phase PRODUCT-BOUNDARY: Boundary\nDeliver a stable custom identity.\n');
+    const phase = run(cwd, ['query', 'planning.inspect']).phases.find(phase => phase.dir === path.basename(dir));
+    assert.equal(phase.phase_id, 'PRODUCT-BOUNDARY');
+    assert.deepEqual(phase.goal, {value: 'Deliver a stable custom identity.', scope: 'complete'});
+  } finally { cleanup(cwd); }
+});
+test('custom reader context: phase complete updates only the custom checkbox and requirement section', () => {
+  const cwd = fixture(null);
+  try {
+    for (const id of ['A-2', '2']) add(cwd, id);
+    fs.writeFileSync(path.join(cwd, '.planning/ROADMAP.md'), '# Roadmap\n## Milestone v1.0: Test\n## Phases\n- [ ] Phase A-2: Custom\n- [ ] Phase 2: Numeric\n### Phase A-2: Custom\n**Requirements:** REQ-01\n### Phase 2: Numeric\n**Requirements:** REQ-02\n');
+    fs.writeFileSync(path.join(cwd, '.planning/REQUIREMENTS.md'), '# Requirements\n- [ ] **REQ-01**: Custom\n- [ ] **REQ-02**: Numeric\n\n## Traceability\n| Requirement | Phase | Status |\n| --- | --- | --- |\n| REQ-01 | Phase A-2 | Pending |\n| REQ-02 | Phase 2 | Pending |\n');
+    const dir = path.join(cwd, '.planning/phases/A-2-boundary');
+    fs.writeFileSync(path.join(dir, 'A-2-01-PLAN.md'), '---\nphase: A-2\nplan: 01\n---\n# Plan\n');
+    fs.writeFileSync(path.join(dir, 'A-2-01-SUMMARY.md'), '---\nstatus: complete\n---\n# Summary\n');
+    fs.writeFileSync(path.join(dir, 'A-2-VERIFICATION.md'), '---\nstatus: passed\n---\n# Verification\n');
+    run(cwd, ['phase', 'complete', 'A-2']);
+    const phases = run(cwd, ['query', 'roadmap.analyze']).phases;
+    assert.equal(phases.find(phase => phase.number === 'A-2').roadmap_complete, true);
+    assert.equal(phases.find(phase => phase.number === '2').roadmap_complete, false);
+    const rows = run(cwd, ['query', 'planning.inspect']).requirements;
+    assert.equal(rows.find(row => row.id === 'REQ-01').complete, true);
+    assert.equal(rows.find(row => row.id === 'REQ-02').complete, false);
+  } finally { cleanup(cwd); }
+});
+
 for (const [ids, checked, expected] of [
   [['SETUP', 'SETUP-2', 'API'], null, 'SETUP-2'],
   [['X', 'A', 'A-b', 'B'], 'A-b', 'A'],

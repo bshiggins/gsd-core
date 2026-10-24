@@ -1093,10 +1093,10 @@ function extractDependencyTokens(sectionBody: string): string[] {
  * sibling phase whose TITLE merely mentions this phase's number is never
  * hijacked.
  */
-function findPhaseRoadmapSection(cwd: string, roadmapText: string, phaseId: string): string | null {
+function findPhaseRoadmapSection(cwd: string, roadmapText: string, phaseId: string, directoryContext: phaseIdMod.PhaseDirectoryContext): string | null {
   const scoped = extractCurrentMilestone(roadmapText, cwd);
   const headingRe = new RegExp(
-    `^(?:\\[[^\\]]{1,200}\\]\\s*)?Phase\\s+${phaseMarkdownRegexSource(phaseId)}(?=[\\s:(]|$)`,
+    `^(?:\\[[^\\]]{1,200}\\]\\s*)?Phase\\s+${phaseMarkdownRegexSource(phaseId, directoryContext)}(?=[\\s:(]|$)`,
     'i',
   );
   const section = collectSection(scoped, (h) => headingRe.test(h.text));
@@ -1130,6 +1130,7 @@ function buildPhaseGoalAndDependencies(
   phaseId: string | null,
   phaseDirLabel: string,
   diagnostics: Diagnostic[],
+  directoryContext: phaseIdMod.PhaseDirectoryContext,
 ): { goal: ScopedText; dependencies: ScopedTextList } {
   if (!roadmapDoc.readable || roadmapDoc.text === null) {
     diagnostics.push({
@@ -1153,7 +1154,7 @@ function buildPhaseGoalAndDependencies(
       dependencies: { value: [], scope: SCOPE.UNSCOPED },
     };
   }
-  const sectionBody = findPhaseRoadmapSection(cwd, roadmapDoc.text, phaseId);
+  const sectionBody = findPhaseRoadmapSection(cwd, roadmapDoc.text, phaseId, directoryContext);
   if (sectionBody === null) {
     diagnostics.push({
       code: INSPECT_DIAGNOSTIC.ROADMAP_UNSCOPED,
@@ -1298,8 +1299,10 @@ function buildPlanningInspectResult(cwd: string): {
     }
 
     const token = /^(\d+(?:\.\d+)*)/.exec(phase.dir);
-    const phaseId = token ? token[1] : null;
-    const { goal, dependencies } = buildPhaseGoalAndDependencies(cwd, roadmapDoc, phaseId, phase.dir, diagnostics);
+    const custom = phaseIdMod.customPhaseQuery(phase.dir, directoryContext);
+    const owner = custom && phaseIdMod.customPhaseDirectoryParts(phase.dir, custom);
+    const phaseId = owner ? owner.id : token ? token[1] : null;
+    const { goal, dependencies } = buildPhaseGoalAndDependencies(cwd, roadmapDoc, phaseId, phase.dir, diagnostics, directoryContext);
 
     // `uat.foldScope`, NOT `uat.scope` (#3078 round-8). The two currently
     // agree at every call site — see `buildUatRows` for why the field is

@@ -593,7 +593,7 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
       const dirs = entries
         .filter((e) => e.isDirectory())
         .map((e) => e.name)
-        .sort((a, b) => comparePhaseNum(a, b));
+        .sort((a, b) => comparePhaseNum(a, b, searchContext));
 
       // #2237: fail loud when multiple directories match the same bare phase
       // number — prevents cross-project file writes when unrelated projects
@@ -877,7 +877,7 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
     const dirs = entries
       .filter((e) => e.isDirectory())
       .map((e) => e.name)
-      .sort((a, b) => comparePhaseNum(a, b));
+      .sort((a, b) => comparePhaseNum(a, b, directoryContext));
     // #2528: selection delegates to the canonical two-pass matcher shared with
     // the locator and the find-phase scan (this site previously first-matched
     // with `.find()` and had no multi-match guard — the #2237 fail-loud rule
@@ -4106,7 +4106,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
         const originalRoadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
         roadmapContent = originalRoadmapContent;
 
-        const phaseEscaped = phaseMarkdownRegexSource(phaseNum);
+        const phaseEscaped = phaseMarkdownRegexSource(phaseNum, directoryContext);
         // #2067: the gap between `]` and `Phase N` must allow only whitespace /
         // markdown bold emphasis — NOT greedy `.*`. A greedy gap matched a later
         // phase whose description merely mentioned the completed phase number,
@@ -4426,7 +4426,7 @@ function cmdPhaseComplete(cwd: string, phaseNum: string, raw: boolean): void {
 
         const reqPath = path.join(planningDir(cwd), 'REQUIREMENTS.md');
         if (fs.existsSync(reqPath)) {
-          const phaseEsc = phaseMarkdownRegexSource(phaseNum);
+          const phaseEsc = phaseMarkdownRegexSource(phaseNum, directoryContext);
           const currentMilestoneRoadmap = extractCurrentMilestone(roadmapContent, cwd);
           // #5007 (Phase 6 / ADR-4910 §8): this site captures the entire
           // section BODY through to the next heading (via its own

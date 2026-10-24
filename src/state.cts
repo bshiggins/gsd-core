@@ -7160,7 +7160,7 @@ function cmdStateRebuild(cwd: string, options: StateRebuildOptions, raw: boolean
  * that the phase execution is finished and the project is ready for the next phase.
  * Implements the `gsd state complete-phase` subcommand (issue #2735).
  */
-function resolvePhaseIdForCompletePhase(fm: Record<string, unknown>, body: string, overridePhase: string | undefined): string | null {
+function resolvePhaseIdForCompletePhase(fm: Record<string, unknown>, body: string, overridePhase: string | undefined, directoryContext: PhaseDirectoryContext): string | null {
   // #3187: route through the single #1760 fallback-chain owner (fm scalar
   // then body field) instead of two raw stateExtractField calls on
   // frontmatter-blind content — a STATE.md whose phase lives only in
@@ -7179,7 +7179,7 @@ function resolvePhaseIdForCompletePhase(fm: Record<string, unknown>, body: strin
   // "Phase 0.5 complete". A canonical token at the start of the value
   // (3, 03, 3A, 3.3, 10.2, "3 of 5", "1 — Setup") is preserved; a milestone
   // closure line yields null, so the caller's "unable to resolve" guard fires.
-  return parsePhaseFromProse(candidate).phase;
+  return parsePhaseFromProse(candidate, directoryContext).phase;
 }
 
 /**
@@ -7234,7 +7234,8 @@ function cmdStateCompletePhase(cwd: string, raw: boolean, overridePhase?: string
     return;
   }
 
-  const resolvedPhase = resolvePhaseIdForCompletePhase(fm, body, overridePhase);
+  const directoryContext = phaseDirectoryOptions(cwd);
+  const resolvedPhase = resolvePhaseIdForCompletePhase(fm, body, overridePhase, directoryContext);
   if (!resolvedPhase || /^phase$/i.test(resolvedPhase)) {
     output({ error: 'Unable to resolve current phase. Pass an explicit phase: state complete-phase --phase <N>' }, raw, undefined);
     return;
@@ -7252,7 +7253,7 @@ function cmdStateCompletePhase(cwd: string, raw: boolean, overridePhase?: string
   const existingCurrentPhaseRaw = stateFieldValue(fm, body, 'current_phase', 'Current Phase').value || '';
   // #2125: same canonical parser as resolvePhaseIdForCompletePhase so the two
   // sites cannot diverge on the token they extract.
-  const existingCurrentPhase = parsePhaseFromProse(existingCurrentPhaseRaw).phase;
+  const existingCurrentPhase = parsePhaseFromProse(existingCurrentPhaseRaw, directoryContext).phase;
   if (existingCurrentPhase && existingCurrentPhase !== resolvedPhase) {
     output(
       { updated: [], phase: resolvedPhase, idempotent: true, note: 'phase already superseded; no-op' },
