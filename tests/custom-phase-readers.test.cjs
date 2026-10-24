@@ -11,6 +11,49 @@ const locator = require('../gsd-core/bin/lib/phase-locator.cjs');
 
 function options(code, naming = 'custom') { return {phaseNaming: naming, projectCode: code}; }
 
+for (const [ids, checked, expected] of [
+  [['SETUP', 'SETUP-2', 'API'], null, 'SETUP-2'],
+  [['X', 'A', 'A-b', 'B'], 'A-b', 'A'],
+]) {
+  test(`custom lifecycle identity: completing ${ids[0]} advances to distinct recorded ${expected}`, () => {
+    const cwd = fixture(null);
+    try {
+      for (const id of ids) add(cwd, id);
+      if (checked) fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), `\n- [x] Phase ${checked}: Complete\n`);
+      const current = ids[0], dir = path.join(cwd, '.planning/phases', `${current}-boundary`);
+      fs.writeFileSync(path.join(dir, `${current}-01-PLAN.md`), `---\nphase: ${current}\nplan: 01\n---\n# Plan\n`);
+      fs.writeFileSync(path.join(dir, `${current}-01-SUMMARY.md`), '---\nstatus: complete\n---\n# Summary\n');
+      fs.writeFileSync(path.join(dir, `${current}-VERIFICATION.md`), '---\nstatus: passed\n---\n# Verification\n');
+      fs.writeFileSync(path.join(cwd, '.planning/STATE.md'), `---\ncurrent_phase: ${current}\nstatus: executing\n---\n# State\n\n## Current Position\nPhase: ${current} (Boundary)\nStatus: Executing\n`);
+      const result = run(cwd, ['phase', 'complete', current]);
+      assert.equal(result.next_phase, expected);
+      const statePath = path.join(cwd, '.planning/STATE.md');
+      const state = require('../gsd-core/bin/lib/frontmatter.cjs').extractFrontmatter(fs.readFileSync(statePath, 'utf8'), statePath);
+      assert.equal(state.current_phase, expected);
+      assert.equal(state.current_phase, result.next_phase);
+      if (checked) {
+        const phases = run(cwd, ['query', 'roadmap.analyze']).phases;
+        assert.equal(phases.find(p => p.number === 'A').roadmap_complete, false);
+        assert.equal(phases.find(p => p.number === 'A-b').roadmap_complete, true);
+      }
+    } finally { cleanup(cwd); }
+  });
+}
+test('custom lifecycle identity: a checked longer id does not compare equal to its recorded prefix', () => {
+  const cwd = fixture(null);
+  try {
+    for (const id of ['A', 'A-b', 'B']) add(cwd, id);
+    const phaseId = require('../gsd-core/bin/lib/phase-id.cjs');
+    const context = locator.phaseDirectoryOptions(cwd);
+    fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), '\n- [x] Phase A-b: Complete\n');
+    const completed = run(cwd, ['query', 'roadmap.analyze']).phases.filter(p => p.roadmap_complete).map(p => p.number);
+    assert.deepEqual(completed, ['A-b']);
+    assert.equal(completed.some(id => phaseId.comparePhaseNum('A', id, context) === 0), false);
+    assert.equal(phaseId.comparePhaseNum('A', 'A-b', context), -1);
+    assert.equal(phaseId.comparePhaseNum('A-b', 'B', context), -1);
+  } finally { cleanup(cwd); }
+});
+
 
 test('markerless ownership: removing a unique shorter id preserves the longer declared owner', () => {
   const cwd = fixture('CCM');

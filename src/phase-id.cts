@@ -805,8 +805,9 @@ function comparePhaseNum(a: unknown, b: unknown, context?: PhaseDirectoryContext
     const index = customIdentityIndex(context);
     const identity = (value: unknown): string => {
       const text = String(value);
+      if (index.recorded.has(text)) return text;
       const query = customPhaseQuery(text, context);
-      return query ? customDirectoryOwner(text, query)?.id ?? query.id : text;
+      return query?.recordedId ?? (query ? customDirectoryOwner(text, query)?.id ?? query.id : text);
     };
     const first = identity(a), second = identity(b);
     // Arbitrary custom IDs have no numeric ordering: use their declared order.
