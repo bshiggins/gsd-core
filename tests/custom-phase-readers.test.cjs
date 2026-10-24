@@ -11,6 +11,19 @@ const locator = require('../gsd-core/bin/lib/phase-locator.cjs');
 
 function options(code, naming = 'custom') { return {phaseNaming: naming, projectCode: code}; }
 
+test('custom completion compatibility: a padded recorded id accepts its unpadded query', () => {
+  const cwd = fixture(null);
+  try {
+    const dir = add(cwd, '03');
+    fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), '\n- [ ] Phase 03: Boundary\n');
+    fs.writeFileSync(path.join(cwd, dir, '03-01-PLAN.md'), '---\nphase: 03\nplan: 01\n---\n# Plan\n');
+    fs.writeFileSync(path.join(cwd, dir, '03-01-SUMMARY.md'), '---\nstatus: complete\n---\n# Summary\n');
+    fs.writeFileSync(path.join(cwd, dir, '03-VERIFICATION.md'), '---\nstatus: passed\n---\n# Verification\n');
+    run(cwd, ['phase', 'complete', '3']);
+    assert.equal(run(cwd, ['query', 'roadmap.analyze']).phases.find(phase => phase.number === '03').roadmap_complete, true);
+  } finally { cleanup(cwd); }
+});
+
 for (const id of ['999', '0', '0.5', '00-00']) for (const writer of ['add', 'scaffold']) {
   test(`custom hidden identity: ${writer} refuses reader-excluded ${id}`, () => {
     const cwd = fixture(null);

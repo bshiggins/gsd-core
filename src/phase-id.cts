@@ -759,7 +759,8 @@ function isSentinelPhaseDir(dirName: string): boolean {
  * prose regardless of zero-padding on either side.
  */
 function phaseMarkdownRegexSource(phaseNum: unknown, context?: PhaseDirectoryContext): string {
-  if (context && customPhaseQuery(String(phaseNum), context)) return escapeRegex(String(phaseNum));
+  const custom = context && customPhaseQuery(String(phaseNum), context);
+  if (custom) return escapeRegex(custom.id);
   const stripped = stripProjectCodePrefix(phaseNum);
 
   // Milestone-prefixed IDs: M-NN or M-N-N (deep).
