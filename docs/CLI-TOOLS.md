@@ -215,7 +215,9 @@ these commands work on the active milestone's `[CODE.MM] NN` identities:
   two-digit form (`02.03`, not `2.3`). The legacy `999` backlog parent keeps
   its upstream spelling.
 - `phase remove <phase>` accepts a bare number (`2`, `02`), a qualified id
-  (`CK.02-02`, `CK.02-01.01`) or the display form (`[CK.02] 02`). It deletes
+  (`CK.02-02`, `CK.02-01.01`) or the display form (`[CK.02] 02`). A qualified
+  directory name with a slug (`CK.02-02-two`) is accepted only when the slug
+  exactly matches the selected directory. It deletes
   the phase, renumbers the milestone's later phases and sub-phases on disk and
   in `ROADMAP.md` from one mapping, and leaves shipped and archived history
   byte-identical. It refuses, before anything is deleted or renamed, in the
@@ -223,6 +225,8 @@ these commands work on the active milestone's `[CODE.MM] NN` identities:
 
 `phase remove` refuses, with nothing changed, when:
 
+- a qualified argument carries a slug that does not exactly match the
+  directory for its phase number;
 - the target has neither a directory nor a live heading or checklist row in the
   active milestone window, or the argument names a `.00` sub-phase;
 - the phase is outside the active milestone, has executed plans (without

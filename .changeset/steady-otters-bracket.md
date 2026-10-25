@@ -12,3 +12,4 @@ pr: 4773
 - `null`, `sequential` and `milestone-prefixed` projects are unchanged.
 
 - Bracket `phase remove` refuses nonexistent targets and `.00` sub-phases before changing any files.
+- Slug-bearing bracket removal arguments must exactly match the selected directory slug.

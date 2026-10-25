@@ -2357,7 +2357,7 @@ function canonicalizeBracketPhaseArgument(
   context: BracketWriteContext,
   targetPhase: string,
   actionVerb: string,
-): { normalized: string; isDecimal: boolean } {
+): { normalized: string; isDecimal: boolean; slug?: string } {
   const isQualified = targetPhase.startsWith('[') || targetPhase.includes('-');
   if (isQualified) {
     let qualifiedId: ReturnType<typeof parsePhaseId> | null = null;
@@ -2375,7 +2375,9 @@ function canonicalizeBracketPhaseArgument(
       );
     }
     const isDecimal = qualifiedId.subphase !== undefined;
-    return { normalized: isDecimal ? `${qualifiedId.phase}.${qualifiedId.subphase}` : qualifiedId.phase, isDecimal };
+    const prefix = bracketDirPrefix(qualifiedId);
+    const slug = targetPhase.startsWith(prefix) ? targetPhase.slice(prefix.length) : undefined;
+    return { normalized: isDecimal ? `${qualifiedId.phase}.${qualifiedId.subphase}` : qualifiedId.phase, isDecimal, slug };
   }
   const canonicalToken = phaseToken(targetPhase);
   if (canonicalToken === null) {
@@ -5056,10 +5058,11 @@ function cmdPhaseRemove(
   // the destructive path.
   let normalized: string;
   let isDecimal: boolean;
+  let requestedSlug: string | undefined;
   let removedInt: number;
   let removedSubphase: number | undefined;
   if (removeContext) {
-    ({ normalized, isDecimal } = canonicalizeBracketPhaseArgument(removeContext, targetPhase, 'remove'));
+    ({ normalized, isDecimal, slug: requestedSlug } = canonicalizeBracketPhaseArgument(removeContext, targetPhase, 'remove'));
     const [phasePart, subphasePart] = normalized.split('.');
     removedInt = Number(phasePart);
     removedSubphase = subphasePart === undefined ? undefined : Number(subphasePart);
@@ -5084,11 +5087,18 @@ function cmdPhaseRemove(
   const candidateDirs = removeContext
     ? bracketIdsInContext(phasesDir, removeContext).map(({ dir }) => dir)
     : subdirs;
-  const { matches: phaseDirMatches } = matchPhaseDirs(
+  let { matches: phaseDirMatches } = matchPhaseDirs(
     candidateDirs,
     normalized,
     removeConvention === 'bracket' ? 'bracket' : undefined,
   );
+  if (removeContext && requestedSlug !== undefined) {
+    phaseDirMatches = phaseDirMatches.filter((dir) =>
+      bracketDirSlug(dir, parsePhaseId(dir)) === requestedSlug);
+    if (phaseDirMatches.length !== 1) {
+      error(`Cannot remove ${targetPhase}: its slug does not exactly match a directory for phase ${normalized}.`, ERROR_REASON.USAGE);
+    }
+  }
   if (phaseDirMatches.length > 1) {
     output(
       {

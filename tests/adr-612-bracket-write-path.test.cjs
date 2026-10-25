@@ -934,6 +934,28 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     }
   });
 
+  describe('review 1025 Major-2 qualified removal keeps its slug', () => {
+    for (const argument of ['CK.02-02-thre', 'CK.02-02-three']) {
+      test(`${argument} refuses a slug mismatch without writing`, () => {
+        const dir = removalFixture(['01', '02', '03']);
+        const before = snapshotTree(planning(dir));
+        const result = runGsdTools(['--json-errors', 'phase', 'remove', argument, '--force'], dir, { HOME: dir, USERPROFILE: dir });
+        assert.equal(result.success, false, result.output);
+        const payload = JSON.parse(result.error);
+        assert.equal(payload.reason, 'usage');
+        assert.match(payload.message, /slug.*match/i);
+        assert.deepEqual(snapshotTree(planning(dir)), before);
+      });
+    }
+    test('the exact qualified directory slug remains removable', () => {
+      const dir = removalFixture(['01', '02', '03']);
+      const out = run(['phase', 'remove', 'CK.02-02-two', '--force'], dir);
+      assert.equal(out.removed, 'CK.02-02-two');
+      assert.equal(fs.existsSync(planning(dir, 'phases', 'CK.02-02-two')), false);
+      assert.equal(fs.existsSync(planning(dir, 'phases', 'CK.02-02-three')), true);
+    });
+  });
+
   // #4304: under the bracket convention a supplied phase id and
   // phase_naming "custom" have no write semantics yet (their precedence is
   // the #5067 ruling). The writers refuse both before any write instead of
