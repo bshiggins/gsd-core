@@ -11,13 +11,15 @@ const commandAliases = require('../gsd-core/bin/lib/command-aliases.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const AGENT_PATH = path.join(ROOT, 'agents', 'gsd-plan-checker.md');
+const SYNTHETIC_PATH = path.join(ROOT, 'tests', 'synthetic-query-contract.md');
 const DOCUMENTED_ROOTS = [
   'agents', path.join('gsd-core', 'workflows'), 'commands',
   'skills', path.join('pi', 'package-skills'), path.join('pi', 'package-agents'),
 ];
 // The runtime probes render output for these roots instead of rejecting an
 // unknown subcommand, so they have no router-level subcommand list.
-const ROOT_ONLY = new Set(['progress', 'stats']);
+const EXPECTED_ROOT_ONLY = new Set(['progress', 'stats']);
+const QUERY_PREFIX = String.raw`\b(?:gsd_run|gsd-tools)(?:\s+--cwd\s+(?:"(?:\\.|[^"\\])*"|'[^']*'|[^\s]+))?\s+query\s+`;
 
 function markdownFiles(dir) {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -38,7 +40,7 @@ function queryNames(content) {
   const names = [];
   for (const line of content.split(/\r?\n/)) {
     // Scan every occurrence, including shell substitutions, pipelines, and inline examples.
-    const re = /\b(?:gsd_run|gsd-tools)\s+query\s+([\w.-]+)(?:\s+([\w.-]+))?/g;
+    const re = new RegExp(`${QUERY_PREFIX}([\\w.-]+)(?:\\s+([\\w.-]+))?`, 'g');
     let match;
     while ((match = re.exec(line))) {
       if (!isExecutableCall(line, match.index)) continue;
@@ -127,7 +129,7 @@ function runtimeRegisteredNames() {
   const probeRoots = [...dottedRoots]
     .filter((root) => registered.has(root) && runtime.HOST_COMMAND_ROUTERS[root])
     .sort();
-  const rootOnly = new Set();
+  const probedRootOnly = new Set();
   const dir = createTempProject('agent-query-contract-probe-');
   try {
     for (const root of probeRoots) {
@@ -135,7 +137,7 @@ function runtimeRegisteredNames() {
       const error = result.error || '';
       const available = error.match(/Unknown\b[^\n]*\bsubcommand\b[^\n]*Available:\s*([^\r\n]+)/i);
       if (!available) {
-        rootOnly.add(root);
+        probedRootOnly.add(root);
         continue;
       }
       subcommands.set(root, new Set(available[1].split(/,\s*/).filter(Boolean)));
@@ -144,13 +146,13 @@ function runtimeRegisteredNames() {
     cleanup(dir);
   }
 
-  assert.deepEqual([...ROOT_ONLY].sort(), [...rootOnly].sort(),
-    'ROOT_ONLY must equal exactly the documented roots whose runtime probe does not report unknown subcommands');
+  assert.deepEqual([...EXPECTED_ROOT_ONLY].sort(), [...probedRootOnly].sort(),
+    'EXPECTED_ROOT_ONLY must equal exactly the documented roots whose runtime probe does not report unknown subcommands');
   runtimeRegisteredNamesCache = { registered, families, subcommands };
   return runtimeRegisteredNamesCache;
 }
 
-function registeredName(parts, registry) {
+function isRegistered(parts, registry) {
   const [name, subcommand] = parts;
   const root = name.split('.')[0];
   if (registry.families.has(root)) {
@@ -165,11 +167,9 @@ function registeredName(parts, registry) {
 function findUnregisteredQueries(files, registry) {
   const failures = [];
   for (const file of files) {
-    const filePath = typeof file === 'string' ? file : file.path;
-    const relative = path.relative(ROOT, filePath).split(path.sep).join('/');
-    const content = typeof file === 'string' ? fs.readFileSync(file, 'utf8') : file.content;
-    for (const parts of queryNames(content)) {
-      if (!registeredName(parts, registry)) {
+    const relative = path.relative(ROOT, file.path).split(path.sep).join('/');
+    for (const parts of queryNames(file.content)) {
+      if (!isRegistered(parts, registry)) {
         failures.push(`${relative}: ${parts.join(' ')}`);
       }
     }
@@ -182,24 +182,22 @@ test('every documented query names a registered command', () => {
     .flatMap((root) => markdownFiles(path.join(ROOT, root)));
   const names = documentedQueryNames(files);
   const registered = runtimeRegisteredNames();
-  assert.deepEqual(names.filter((parts) => !registeredName(parts, registered)).map((parts) => parts.join(' ')), []);
+  assert.deepEqual(names.filter((parts) => !isRegistered(parts, registered)).map((parts) => parts.join(' ')), []);
 
-  const syntheticPath = path.join(ROOT, 'tests', 'synthetic-query-contract.md');
   assert.deepEqual(findUnregisteredQueries([{
-    path: syntheticPath,
+    path: SYNTHETIC_PATH,
     content: 'gsd-tools query synthetic.unregistered\n',
   }], registered), ['tests/synthetic-query-contract.md: synthetic.unregistered']);
   assert.deepEqual(findUnregisteredQueries([{
-    path: syntheticPath,
+    path: SYNTHETIC_PATH,
     content: 'gsd-tools query verify.plan-structure\n',
   }], registered), []);
 });
 
 test('a bad subcommand under a registered non-family root is rejected', () => {
-  const syntheticPath = path.join(ROOT, 'tests', 'synthetic-query-contract.md');
   const registered = runtimeRegisteredNames();
   assert.deepEqual(findUnregisteredQueries([{
-    path: syntheticPath,
+    path: SYNTHETIC_PATH,
     content: [
       'gsd-tools query frontmatter.no-such-subcommand',
       'gsd-tools query worktree.no-such-subcommand',
@@ -219,13 +217,16 @@ test('a bad subcommand under a registered non-family root is rejected', () => {
 function frontmatterCalls(agent) {
   const calls = [];
   for (const line of agent.split(/\r?\n/)) {
-    const re = /\b(?:gsd_run|gsd-tools)\s+query\s+frontmatter\.get\s+(.+?)(?=\s*(?:\)|\|\||&&|\||;|`|$))/g;
+    const re = new RegExp(QUERY_PREFIX + 'frontmatter\\.get\\s+(.+?)(?=\\s*(?:\\)|\\|\\||&&|\\||;|`|$))', 'g');
     let match;
     while ((match = re.exec(line))) {
       if (!isExecutableCall(line, match.index)) continue;
       const args = [...match[1].matchAll(/"(?:\\.|[^"\\])*"|'[^']*'|[^\s]+/g)]
         .map(([word]) => word.replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/, (_whole, doubleQuoted, singleQuoted) => doubleQuoted ?? singleQuoted));
-      if (args.length) calls.push({ planExpression: args[0], args: args.slice(1) });
+      if (args.length) {
+        const fieldIndex = args.indexOf('--field');
+        calls.push({ planExpression: args[0], args: args.slice(1), field: fieldIndex >= 0 ? args[fieldIndex + 1] : args[1] });
+      }
     }
   }
   return calls;
@@ -265,17 +266,28 @@ test('plan-checker frontmatter.get calls return must_haves and files_modified', 
   ].join('\n'));
 
   for (const call of calls) {
-    const fieldIndex = call.args.indexOf('--field');
-    const field = fieldIndex >= 0 ? call.args[fieldIndex + 1] : call.args[0];
     const result = runGsdTools(['query', 'frontmatter.get', planPath, ...call.args], dir);
     assert.equal(result.success, true, `${call.planExpression} ${call.args.join(' ')}: ${result.error}`);
     const parsed = JSON.parse(result.output);
-    if (field === 'must_haves') assert.deepEqual(parsed.must_haves, expectedMustHaves);
-    if (field === 'files_modified') assert.deepEqual(parsed.files_modified, expectedFiles);
+    if (call.field === 'must_haves') assert.deepEqual(parsed.must_haves, expectedMustHaves);
+    if (call.field === 'files_modified') assert.deepEqual(parsed.files_modified, expectedFiles);
   }
-  const fields = new Set(calls.map((call) => call.args.includes('--field') ? call.args[call.args.indexOf('--field') + 1] : call.args[0]));
+  const fields = new Set(calls.map((call) => call.field));
   assert.ok(fields.has('must_haves'), 'expected a documented must_haves query');
   assert.ok(fields.has('files_modified'), 'expected a documented files_modified query');
+});
+
+test('missing must_haves is an error payload even when frontmatter.get exits zero', (t) => {
+  const dir = createTempProject('agent-query-missing-field-');
+  t.after(() => cleanup(dir));
+  const planPath = path.join(dir, 'PLAN.md');
+  fs.writeFileSync(planPath, '---\nphase: 1\n---\n# Plan\n');
+
+  const result = runGsdTools(['query', 'frontmatter.get', planPath, '--field', 'must_haves'], dir);
+  assert.equal(result.exitCode, 0, result.error);
+  const parsed = JSON.parse(result.output);
+  assert.equal(parsed.error, 'Field not found');
+  assert.equal(Object.hasOwn(parsed, 'must_haves'), false);
 });
 
 test('plan-checker verify.plan-structure fields match the runtime output', (t) => {
@@ -301,4 +313,28 @@ test('plan-checker verify.plan-structure fields match the runtime output', (t) =
   for (const field of ['name', 'hasFiles', 'hasAction', 'hasVerify', 'hasDone']) {
     assert.ok(Object.hasOwn(parsed.tasks[0], field), `task output is missing ${field}`);
   }
+});
+
+test('zero XML tasks produces a warning and an invalid plan exits one with JSON', (t) => {
+  const dir = createTempProject('agent-query-empty-structure-');
+  t.after(() => cleanup(dir));
+  const planPath = path.join(dir, 'PLAN.md');
+  fs.writeFileSync(planPath, [
+    '---', 'phase: 1', 'plan: 1', 'type: execute', 'wave: 1',
+    'depends_on: []', 'files_modified: []', 'autonomous: true',
+    'must_haves: {}', '---', '# Plan', '## Task 1', 'Markdown-only task.', '',
+  ].join('\n'));
+  const empty = runGsdTools(['query', 'verify.plan-structure', planPath], dir);
+  assert.equal(empty.exitCode, 0, empty.error);
+  const emptyParsed = JSON.parse(empty.output);
+  assert.equal(emptyParsed.task_count, 0);
+  assert.deepEqual(emptyParsed.tasks, []);
+  assert.ok(emptyParsed.warnings.includes('No <task> elements found'));
+
+  fs.writeFileSync(planPath, '# Plan without required frontmatter\n');
+  const invalid = runGsdTools(['query', 'verify.plan-structure', planPath], dir);
+  assert.equal(invalid.exitCode, 1);
+  const invalidParsed = JSON.parse(invalid.output);
+  assert.equal(invalidParsed.valid, false);
+  assert.ok(invalidParsed.errors.length > 0);
 });

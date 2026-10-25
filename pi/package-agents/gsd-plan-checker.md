@@ -796,6 +796,8 @@ MUST_HAVES=$(gsd_run query frontmatter.get "$PLAN_PATH" --field must_haves)
 
 Returns JSON: `{ "must_haves": { "truths": [...], "artifacts": [...], "key_links": [...] } }`
 
+If the result is `{ "error": "Field not found", ... }` (exit `0`), treat `must_haves` as missing and report a `must_haves_derivation` issue.
+
 **Expected structure:**
 
 ```yaml
@@ -881,7 +883,9 @@ gsd_run query verify.plan-structure "$PHASE_DIR/$PHASE-01-PLAN.md"
 gsd_run query frontmatter.get "$PHASE_DIR/$PHASE-01-PLAN.md" --field files_modified
 ```
 
-Use `task_count` from the structure result. Thresholds: 2-3 tasks/plan good, 4 warning, 5+ blocker (split required).
+Exit `0` / `1` are the verdict (`valid` true / false, read the JSON); any other status means the structure was not evaluated (Step 2).
+
+Use `task_count` from the structure result. Zero tasks (with the "No <task> elements found" warning) is a blocker. Thresholds: 2-3 tasks/plan good, 4 warning, 5+ blocker (split required).
 
 ## Step 9: Verify must_haves Derivation
 
