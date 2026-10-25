@@ -1091,7 +1091,7 @@ function cmdStateAdvancePlan(cwd: string, raw: boolean): void {
     // silently absorbed.
     const body = stripFrontmatter(content);
     const positionScope = matchCurrentPositionSection(body) ?? body;
-    const positionPhase = parseProsePhaseField(stateExtractField(positionScope, 'Phase')).phase;
+    const positionPhase = parseProsePhaseField(stateExtractField(positionScope, 'Phase'), resolvePhaseIdConvention(cwd), phaseDirectoryOptions(cwd)).phase;
     // #4093: a Current Position section with ZERO labeled fields has no
     // `Phase:` line either; frontmatter `current_phase` is the documented
     // survivor of body drift (the reporter's document still carried it, and
@@ -1644,7 +1644,7 @@ function cmdStateAddDecision(cwd: string, options: StateAddDecisionOptions, raw:
   if (!phaseId) {
     const rawState = fs.readFileSync(statePath, 'utf-8');
     const fm = extractFrontmatter(rawState, statePath) as Record<string, unknown>;
-    phaseId = resolveCurrentPhaseId(fm, stripFrontmatter(rawState)) ?? undefined;
+    phaseId = resolveCurrentPhaseId(fm, stripFrontmatter(rawState), resolvePhaseIdConvention(cwd), phaseDirectoryOptions(cwd)) ?? undefined;
   }
 
   const entry = `- [Phase ${phaseId || '?'}]: ${summaryText}${rationaleText ? ` — ${rationaleText}` : ''}`;
@@ -1792,7 +1792,7 @@ function cmdStateAddRoadmapEvolution(cwd: string, options: StateAddRoadmapEvolut
   if (!phaseId) {
     const rawState = fs.readFileSync(statePath, 'utf-8');
     const fm = extractFrontmatter(rawState, statePath) as Record<string, unknown>;
-    phaseId = resolveCurrentPhaseId(fm, stripFrontmatter(rawState)) ?? undefined;
+    phaseId = resolveCurrentPhaseId(fm, stripFrontmatter(rawState), resolvePhaseIdConvention(cwd), phaseDirectoryOptions(cwd)) ?? undefined;
   }
 
   const entry = `- Phase ${phaseId || '?'} ${actionText}${afterText}: ${flatNote}${urgentText}`;
@@ -2368,17 +2368,22 @@ function preferNewerLastActivity(
   }
 }
 
-function parseProsePhaseField(value: string | null, directoryContext?: PhaseDirectoryContext): { phase: string | null; name: string | null } {
+function parseProsePhaseField(
+  value: string | null,
+  convention?: string | null,
+  directoryContext?: PhaseDirectoryContext,
+): { phase: string | null; name: string | null } {
   // #2121 Phase 2 (#2125): delegate to the canonical anchored parser so this
   // module holds no independent prose phase-id regex. Drives #2111 — the
   // anchored parser returns { phase: null } for a "Milestone vX.Y complete"
   // body line (the old unanchored regex mined the minor-version digit, e.g.
   // v0.5 -> "5"), so syncStateFrontmatter's #905 guard preserves the real
   // current_phase instead of clobbering it.
-  return parsePhaseFromProse(value, directoryContext);
+  // #5626: under `milestone-prefixed` the id is the whole `M-NN`; the convention comes from its owner.
+  return parsePhaseFromProse(value, convention, directoryContext);
 }
 
-function resolveStatePhase(fm: Record<string, unknown>, body: string, directoryContext: PhaseDirectoryContext): {
+function resolveStatePhase(fm: Record<string, unknown>, body: string, convention?: string | null, directoryContext?: PhaseDirectoryContext): {
   phase: string | null;
   name: string | null;
   sources: {
@@ -2392,11 +2397,11 @@ function resolveStatePhase(fm: Record<string, unknown>, body: string, directoryC
   const legacyRaw = stateFieldValue(fm, currentPositionScope, null, 'Current Phase').value;
   const currentPositionRaw = stateFieldValue(fm, currentPositionScope, null, 'Phase').value;
   const sources = {
-    frontmatter: parseProsePhaseField(frontmatterRaw, directoryContext).phase,
-    legacy_current_phase: parseProsePhaseField(legacyRaw, directoryContext).phase,
-    current_position_phase: parseProsePhaseField(currentPositionRaw, directoryContext).phase,
+    frontmatter: parseProsePhaseField(frontmatterRaw, convention, directoryContext).phase,
+    legacy_current_phase: parseProsePhaseField(legacyRaw, convention, directoryContext).phase,
+    current_position_phase: parseProsePhaseField(currentPositionRaw, convention, directoryContext).phase,
   };
-  const prosePhase = parseProsePhaseField(currentPositionRaw, directoryContext);
+  const prosePhase = parseProsePhaseField(currentPositionRaw, convention, directoryContext);
   return {
     phase: sources.frontmatter ?? sources.legacy_current_phase ?? sources.current_position_phase,
     name: stateFieldValue(fm, body, 'current_phase_name', null).value
@@ -2452,10 +2457,10 @@ function resolveStatePhase(fm: Record<string, unknown>, body: string, directoryC
  * Reconcile the two only by giving `resolveStatePhase` an explicit scope
  * parameter — never by pointing this at it and dropping the difference.
  */
-function resolveCurrentPhaseId(fm: Record<string, unknown>, body: string): string | null {
+function resolveCurrentPhaseId(fm: Record<string, unknown>, body: string, convention?: string | null, directoryContext?: PhaseDirectoryContext): string | null {
   const positionSection = sliceCurrentPositionSection(body);
   const prosePhase =
-    positionSection !== null ? parseProsePhaseField(stateFieldValue(fm, positionSection, null, 'Phase').value).phase : null;
+    positionSection !== null ? parseProsePhaseField(stateFieldValue(fm, positionSection, null, 'Phase').value, convention, directoryContext).phase : null;
   return stateFieldValue(fm, body, 'current_phase', 'Current Phase').value ?? prosePhase;
 }
 
@@ -2499,7 +2504,7 @@ function cmdStateSnapshot(cwd: string, raw: boolean): void {
   // full-body search only when no ## Current Position section exists, so files
   // with no section heading keep their current behaviour.
   const directoryContext = phaseDirectoryOptions(cwd);
-  const resolvedPhase = resolveStatePhase(fm, body, directoryContext);
+  const resolvedPhase = resolveStatePhase(fm, body, resolvePhaseIdConvention(cwd), directoryContext);
   const currentPhase = resolvedPhase.phase;
   const currentPhaseName = resolvedPhase.name;
   const totalPhasesRaw = stateFieldValue(fm, body, 'total_phases', 'Total Phases').value;
@@ -2949,7 +2954,11 @@ function buildStateFrontmatter(
   // section overwrites current_phase here, and the next read surfaces it. Fall
   // back to full-body search when no ## Current Position section exists.
   const currentPositionScope = matchCurrentPositionSection(bodyContent) ?? bodyContent;
-  const prosePhase = parseProsePhaseField(stateExtractField(currentPositionScope, 'Phase'), cwd ? phaseDirectoryOptions(cwd) : undefined);
+  const prosePhase = parseProsePhaseField(
+    stateExtractField(currentPositionScope, 'Phase'),
+    cwd ? resolvePhaseIdConvention(cwd) : null,
+    cwd ? phaseDirectoryOptions(cwd) : undefined,
+  );
   const currentPhase = stateExtractField(bodyContent, 'Current Phase') ?? prosePhase.phase;
   const currentPhaseName = stateExtractField(bodyContent, 'Current Phase Name') ?? prosePhase.name;
   const currentPlan = stateExtractField(bodyContent, 'Current Plan');
@@ -4300,6 +4309,9 @@ function applyPostSyncPreservation(
   syncedContent: string,
   statePath: string,
   options: StatePreservationOptions,
+  // #5626: the project's phase-id convention, resolved by the caller from its cwd (null: unset). Trailing and
+  // optional so `options` stays the fifth parameter the options guard and its callers rely on.
+  phaseIdConvention: string | null = null,
   directoryContext?: PhaseDirectoryContext,
 ): string {
   assertStatePreservationOptions(options, 'applyPostSyncPreservation');
@@ -4363,7 +4375,7 @@ function applyPostSyncPreservation(
   const preCurrentPositionScope = matchCurrentPositionSection(preBody) ?? preBody;
   const preBodyCurrentPlan = stateExtractField(preBody, 'Current Plan');
   const preBodyCurrentPhase = stateExtractField(preBody, 'Current Phase')
-    ?? parseProsePhaseField(stateExtractField(preCurrentPositionScope, 'Phase'), directoryContext).phase;
+    ?? parseProsePhaseField(stateExtractField(preCurrentPositionScope, 'Phase'), phaseIdConvention, directoryContext).phase;
   const preBodyPausedAt = stateExtractField(preSessionScope, 'Paused At');
   const preBodyLastActivityRaw = stateExtractField(preBody, 'Last Activity')
     ?? stateExtractField(preBody, 'Last activity');
@@ -4390,7 +4402,7 @@ function applyPostSyncPreservation(
   const postCurrentPositionScope = matchCurrentPositionSection(postBody) ?? postBody;
   const postBodyCurrentPlan = stateExtractField(postBody, 'Current Plan');
   const postBodyCurrentPhase = stateExtractField(postBody, 'Current Phase')
-    ?? parseProsePhaseField(stateExtractField(postCurrentPositionScope, 'Phase'), directoryContext).phase;
+    ?? parseProsePhaseField(stateExtractField(postCurrentPositionScope, 'Phase'), phaseIdConvention, directoryContext).phase;
   const postBodyPausedAt = stateExtractField(postSessionScope, 'Paused At');
   const postBodyLastActivityRaw = stateExtractField(postBody, 'Last Activity')
     ?? stateExtractField(postBody, 'Last activity');
@@ -4618,6 +4630,7 @@ function syncAndPreserveStateMd(
     synced,
     statePath,
     options,
+    cwd ? resolvePhaseIdConvention(cwd) : null,
     cwd ? phaseDirectoryOptions(cwd) : undefined,
   );
 }
@@ -5656,7 +5669,7 @@ function cmdStateJson(cwd: string, raw: boolean): void {
     const bodyPausedAt = stateExtractField(sessionScope, 'Paused At');
     const bodyPhaseSource = stateExtractField(body, 'Phase');
     const bodyCurrentPhase = stateExtractField(body, 'Current Phase')
-      ?? parseProsePhaseField(stateExtractField(positionScope, 'Phase')).phase;
+      ?? parseProsePhaseField(stateExtractField(positionScope, 'Phase'), resolvePhaseIdConvention(cwd), phaseDirectoryOptions(cwd)).phase;
     const bodyCurrentPlan = stateExtractField(body, 'Current Plan');
     const bodyStatus = stateExtractField(body, 'Status');
     // #3836: mirrors applyPostSyncPreservation's own derivation (state.cts
@@ -6388,7 +6401,7 @@ function cmdStateValidate(cwd: string, raw: boolean, opts: { strict?: boolean } 
 
   const status = stateFieldValue(fm, body, 'status', 'Status').value || '';
   const directoryContext = phaseDirectoryOptions(cwd);
-  const resolvedPhase = resolveStatePhase(fm, body, directoryContext);
+  const resolvedPhase = resolveStatePhase(fm, body, resolvePhaseIdConvention(cwd), directoryContext);
   const currentPhase = resolvedPhase.phase;
   const totalPlansRaw = stateFieldValue(fm, body, 'total_plans_in_phase', 'Total Plans in Phase').value;
   const totalPlansInPhase = totalPlansRaw ? parseInt(totalPlansRaw, 10) : null;
@@ -6919,7 +6932,7 @@ function cmdStatePrune(cwd: string, options: StatePruneOptions, raw: boolean): v
   const body = stripFrontmatter(rawState);
   // Prune needs an integer cutoff, so it parses the resolved id itself; a
   // non-numeric or absent id lands on 0 and prune bails, as before.
-  const currentPhase = parseInt(String(resolveCurrentPhaseId(fm, body)), 10) || 0;
+  const currentPhase = parseInt(String(resolveCurrentPhaseId(fm, body, resolvePhaseIdConvention(cwd), phaseDirectoryOptions(cwd))), 10) || 0;
   const cutoff = currentPhase - keepRecent;
 
   if (cutoff <= 0) {
@@ -7160,7 +7173,7 @@ function cmdStateRebuild(cwd: string, options: StateRebuildOptions, raw: boolean
  * that the phase execution is finished and the project is ready for the next phase.
  * Implements the `gsd state complete-phase` subcommand (issue #2735).
  */
-function resolvePhaseIdForCompletePhase(fm: Record<string, unknown>, body: string, overridePhase: string | undefined, directoryContext: PhaseDirectoryContext): string | null {
+function resolvePhaseIdForCompletePhase(fm: Record<string, unknown>, body: string, overridePhase: string | undefined, directoryContext: PhaseDirectoryContext, convention?: string | null): string | null {
   // #3187: route through the single #1760 fallback-chain owner (fm scalar
   // then body field) instead of two raw stateExtractField calls on
   // frontmatter-blind content — a STATE.md whose phase lives only in
@@ -7179,7 +7192,7 @@ function resolvePhaseIdForCompletePhase(fm: Record<string, unknown>, body: strin
   // "Phase 0.5 complete". A canonical token at the start of the value
   // (3, 03, 3A, 3.3, 10.2, "3 of 5", "1 — Setup") is preserved; a milestone
   // closure line yields null, so the caller's "unable to resolve" guard fires.
-  return parsePhaseFromProse(candidate, directoryContext).phase;
+  return parsePhaseFromProse(candidate, convention, directoryContext).phase;
 }
 
 /**
@@ -7235,7 +7248,7 @@ function cmdStateCompletePhase(cwd: string, raw: boolean, overridePhase?: string
   }
 
   const directoryContext = phaseDirectoryOptions(cwd);
-  const resolvedPhase = resolvePhaseIdForCompletePhase(fm, body, overridePhase, directoryContext);
+  const resolvedPhase = resolvePhaseIdForCompletePhase(fm, body, overridePhase, directoryContext, resolvePhaseIdConvention(cwd));
   if (!resolvedPhase || /^phase$/i.test(resolvedPhase)) {
     output({ error: 'Unable to resolve current phase. Pass an explicit phase: state complete-phase --phase <N>' }, raw, undefined);
     return;
@@ -7253,7 +7266,7 @@ function cmdStateCompletePhase(cwd: string, raw: boolean, overridePhase?: string
   const existingCurrentPhaseRaw = stateFieldValue(fm, body, 'current_phase', 'Current Phase').value || '';
   // #2125: same canonical parser as resolvePhaseIdForCompletePhase so the two
   // sites cannot diverge on the token they extract.
-  const existingCurrentPhase = parsePhaseFromProse(existingCurrentPhaseRaw, directoryContext).phase;
+  const existingCurrentPhase = parsePhaseFromProse(existingCurrentPhaseRaw, resolvePhaseIdConvention(cwd), directoryContext).phase;
   if (existingCurrentPhase && existingCurrentPhase !== resolvedPhase) {
     output(
       { updated: [], phase: resolvedPhase, idempotent: true, note: 'phase already superseded; no-op' },

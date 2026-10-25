@@ -326,7 +326,7 @@ function readGitSignals(cwd: string): GitSignals {
 
 /** Phase identity from a STATE.md scalar or body `Phase:` value, honoring custom naming when a context is supplied. */
 function phaseTokenFromState(raw: string | null, context?: PhaseDirectoryContext): string | null {
-  return parsePhaseFromProse(raw, context).phase;
+  return parsePhaseFromProse(raw, undefined, context).phase;
 }
 
 /**
