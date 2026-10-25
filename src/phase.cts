@@ -2362,10 +2362,19 @@ function canonicalizeBracketPhaseArgument(
   if (isQualified) {
     let qualifiedId: ReturnType<typeof parsePhaseId> | null = null;
     try {
-      qualifiedId = parsePhaseId(targetPhase);
+      if (targetPhase.startsWith('[')) {
+        const close = targetPhase.indexOf(']');
+        // The owned-line reader canonicalizes numeric segments via phaseToken
+        // before strict identity parsing; CLI display ids use that same owner.
+        qualifiedId = phaseIdFromOwnedParts(targetPhase.slice(1, close), targetPhase.slice(close + 1).trim());
+      } else {
+        qualifiedId = parsePhaseId(targetPhase);
+      }
     } catch {
-      error(`Phase ${targetPhase} cannot be resolved to a bracket phase number`);
-      return { normalized: '', isDecimal: false };
+      return error(`Phase ${targetPhase} cannot be resolved to a bracket phase number`, ERROR_REASON.USAGE);
+    }
+    if (qualifiedId === null) {
+      return error(`Phase ${targetPhase} cannot be resolved to a bracket phase number`, ERROR_REASON.USAGE);
     }
     if (qualifiedId.project !== context.project || qualifiedId.milestone !== context.milestone) {
       error(

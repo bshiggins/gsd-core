@@ -994,6 +994,14 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.deepEqual(snapshotTree(planning(dir)), before);
   });
 
+  test('review 1025 Nit-1 removal accepts an unpadded display id just as readers do', () => {
+    const dir = removalFixture(['01', '02', '03']);
+    const out = run(['phase', 'remove', '[CK.02] 1', '--force'], dir);
+    assert.equal(out.directory_deleted, 'CK.02-01-one');
+    assert.equal(fs.existsSync(planning(dir, 'phases', 'CK.02-01-one')), false);
+    assert.equal(fs.existsSync(planning(dir, 'phases', 'CK.02-01-two')), true);
+  });
+
   // #4304: under the bracket convention a supplied phase id and
   // phase_naming "custom" have no write semantics yet (their precedence is
   // the #5067 ruling). The writers refuse both before any write instead of
