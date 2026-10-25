@@ -983,6 +983,17 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     assert.deepEqual(snapshotTree(planning(dir)), before);
   });
 
+  test('review 1025 Minor-4 begin-phase clearly refuses a qualified phase before writing', () => {
+    const dir = removalFixture(['01', '02', '03']);
+    const before = snapshotTree(planning(dir));
+    const result = runGsdTools(['--json-errors', 'state', 'begin-phase', '--phase', 'CK.02-02', '--name', 'two', '--plans', '1'], dir, { HOME: dir, USERPROFILE: dir });
+    assert.equal(result.success, false, result.output);
+    const payload = JSON.parse(result.error);
+    assert.equal(payload.reason, 'usage');
+    assert.match(payload.message, /qualified ids are not accepted/);
+    assert.deepEqual(snapshotTree(planning(dir)), before);
+  });
+
   // #4304: under the bracket convention a supplied phase id and
   // phase_naming "custom" have no write semantics yet (their precedence is
   // the #5067 ruling). The writers refuse both before any write instead of

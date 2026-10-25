@@ -5828,6 +5828,10 @@ function cmdStateBeginPhase(cwd: string, phaseNumber: string | number | null | u
   if (phaseNumber == null || String(phaseNumber).trim() === '') {
     error('phase required (--phase <N>)');
   }
+  if (resolvePhaseIdConvention(cwd) === 'bracket'
+    && (String(phaseNumber).startsWith('[') || String(phaseNumber).includes('-'))) {
+    error('state begin-phase --phase requires a bare phase number such as 02; qualified ids are not accepted.', ERROR_REASON.USAGE);
+  }
   const statePath = planningPaths(cwd).state;
   if (!fs.existsSync(statePath)) {
     output({ error: 'STATE.md not found' }, raw, undefined);
