@@ -6,6 +6,27 @@ const { createCustomPhaseProject: fixture, runCustomPhaseCommand: run, cleanup, 
 const { PROBE_TIMEOUT_MS } = require('./helpers/timeouts.cjs');
 const phaseId = require('../gsd-core/bin/lib/phase-id.cjs');
 
+test('custom lifecycle identity: a checked markerless A-b does not complete A', (t) => {
+  const cwd = fixture(null);
+  t.after(() => cleanup(cwd));
+  for (const id of ['X', 'A', 'A-b', 'B']) {
+    fs.mkdirSync(path.join(cwd, '.planning/phases', `${id}-boundary`));
+    fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), `\n### Phase ${id}: Boundary\n`);
+  }
+  fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), '\n- [x] Phase A-b: Complete\n');
+  const dir = path.join(cwd, '.planning/phases/X-boundary');
+  fs.writeFileSync(path.join(dir, 'X-01-PLAN.md'), '---\nphase: X\nplan: 01\n---\n# Plan\n');
+  fs.writeFileSync(path.join(dir, 'X-01-SUMMARY.md'), '---\nstatus: complete\n---\n# Summary\n');
+  fs.writeFileSync(path.join(dir, 'X-VERIFICATION.md'), '---\nstatus: passed\n---\n# Verification\n');
+
+  const result = run(cwd, ['phase', 'complete', 'X']);
+
+  assert.equal(result.next_phase, 'A');
+  const phases = run(cwd, ['query', 'roadmap.analyze']).phases;
+  assert.equal(phases.find(phase => phase.number === 'A').roadmap_complete, false);
+  assert.equal(phases.find(phase => phase.number === 'A-b').roadmap_complete, true);
+});
+
 for (const code of [null, 'CCM']) for (const title of ['2024 roadmap', '3 steps']) {
   test(`custom directory lookup: add then find digit-leading title ${title}, code ${code}`, () => {
     const cwd = fixture(code);

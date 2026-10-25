@@ -128,6 +128,25 @@ test('custom reader context: phase complete updates only the custom checkbox and
   } finally { cleanup(cwd); }
 });
 
+test('custom lifecycle identity: completing SETUP advances to roadmap-only SETUP-2', (t) => {
+  const cwd = fixture(null);
+  t.after(() => cleanup(cwd));
+  const dir = path.join(cwd, add(cwd, 'SETUP'));
+  fs.appendFileSync(path.join(cwd, '.planning/ROADMAP.md'), '\n### Phase SETUP-2: Follow-up\n### Phase API: API\n');
+  fs.writeFileSync(path.join(dir, 'SETUP-01-PLAN.md'), '---\nphase: SETUP\nplan: 01\n---\n# Plan\n');
+  fs.writeFileSync(path.join(dir, 'SETUP-01-SUMMARY.md'), '---\nstatus: complete\n---\n# Summary\n');
+  fs.writeFileSync(path.join(dir, 'SETUP-VERIFICATION.md'), '---\nstatus: passed\n---\n# Verification\n');
+  fs.writeFileSync(path.join(cwd, '.planning/STATE.md'), '---\ncurrent_phase: SETUP\nstatus: executing\n---\n# State\n\n## Current Position\nPhase: SETUP (Boundary)\nStatus: Executing\n');
+
+  const result = run(cwd, ['phase', 'complete', 'SETUP']);
+
+  assert.equal(result.next_phase, 'SETUP-2');
+  assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), ['SETUP-boundary']);
+  const statePath = path.join(cwd, '.planning/STATE.md');
+  const state = require('../gsd-core/bin/lib/frontmatter.cjs').extractFrontmatter(fs.readFileSync(statePath, 'utf8'), statePath);
+  assert.equal(state.current_phase, 'SETUP-2');
+});
+
 for (const [ids, checked, expected] of [
   [['SETUP', 'SETUP-2', 'API'], null, 'SETUP-2'],
   [['X', 'A', 'A-b', 'B'], 'A-b', 'A'],
