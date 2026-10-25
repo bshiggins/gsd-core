@@ -956,6 +956,23 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     });
   });
 
+  describe('review 1025 Minor-1 qualified current-phase protection', () => {
+    test('a qualified current phase blocks a removal that would renumber it', () => {
+      const dir = removalFixture(['01', '02', '03']);
+      fs.writeFileSync(planning(dir, 'STATE.md'), '---\nmilestone: v2.0\ncurrent_phase: CK.02-02\n---\n');
+      const before = snapshotTree(planning(dir));
+      const result = runGsdTools(['phase', 'remove', '01', '--force'], dir);
+      assert.equal(result.success, false, result.output);
+      assert.match(result.error, /STATE.md.*current phase is CK\.02-02/);
+      assert.deepEqual(snapshotTree(planning(dir)), before);
+    });
+    test('a qualified current phase in another milestone does not block removal', () => {
+      const dir = removalFixture(['01', '02', '03']);
+      fs.writeFileSync(planning(dir, 'STATE.md'), '---\nmilestone: v2.0\ncurrent_phase: CK.01-02\n---\n');
+      assert.equal(run(['phase', 'remove', '01', '--force'], dir).removed, '01');
+    });
+  });
+
   // #4304: under the bracket convention a supplied phase id and
   // phase_naming "custom" have no write semantics yet (their precedence is
   // the #5067 ruling). The writers refuse both before any write instead of
