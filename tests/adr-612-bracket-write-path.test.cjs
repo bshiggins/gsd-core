@@ -973,6 +973,16 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     });
   });
 
+  test('review 1025 Minor-3 bracket ambiguity explains how to resolve duplicate identities', () => {
+    const dir = removalFixture(['01', '02', '03']);
+    fs.mkdirSync(planning(dir, 'phases', 'CK.02-02-stale'));
+    const before = snapshotTree(planning(dir));
+    const out = run(['phase', 'remove', '02', '--force'], dir);
+    assert.equal(out.removed, null);
+    assert.match(out.error, /Remove the stale duplicate directory or give it a distinct bracket phase identity/);
+    assert.deepEqual(snapshotTree(planning(dir)), before);
+  });
+
   // #4304: under the bracket convention a supplied phase id and
   // phase_naming "custom" have no write semantics yet (their precedence is
   // the #5067 ruling). The writers refuse both before any write instead of

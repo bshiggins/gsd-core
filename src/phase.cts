@@ -5114,7 +5114,9 @@ function cmdPhaseRemove(
         error:
           `Phase ${normalized} is ambiguous: ${phaseDirMatches.length} directories match `
           + `(${phaseDirMatches.map((m) => `"${m}"`).join(', ')}). Refusing to remove any of them. `
-          + 'Set a distinct project_code in .planning/config.json, or pass the full directory name.',
+          + (removeContext
+            ? 'Remove the stale duplicate directory or give it a distinct bracket phase identity, then retry.'
+            : 'Set a distinct project_code in .planning/config.json, or pass the full directory name.'),
         ambiguous_matches: phaseDirMatches,
         directory_deleted: null,
         renamed_directories: [],
