@@ -223,6 +223,8 @@ these commands work on the active milestone's `[CODE.MM] NN` identities:
 
 `phase remove` refuses, with nothing changed, when:
 
+- the target has neither a directory nor a live heading or checklist row in the
+  active milestone window, or the argument names a `.00` sub-phase;
 - the phase is outside the active milestone, has executed plans (without
   `--force`) or live sub-phases, or resolves only to legacy-spelled artifacts;
 - a pipe-table row keyed by the removed id would survive outside the

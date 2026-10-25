@@ -3737,7 +3737,7 @@ function bracketOwnedLineOutsideActiveWindow(
   content: string,
   targetId: BracketRoadmapPhaseId,
   ranges: ReturnType<typeof currentMilestoneRawRanges>,
-): { lineNumber: number; text: string } | null {
+): { outside: { lineNumber: number; text: string } | null; hasLiveTarget: boolean } {
   // Heading deletion (`deleteSection`, scoped to `preDeleteRanges`) and
   // checklist-row deletion (the per-line loop, gated on `active`) are two
   // INDEPENDENT scoped operations in `updateRoadmapAfterBracketPhaseRemoval`
@@ -3775,7 +3775,7 @@ function bracketOwnedLineOutsideActiveWindow(
         || (ranges.details !== null
           && line.start >= ranges.details.start && line.start < ranges.details.end)),
     );
-    if (!insideActive && historicalLineStarts.has(line.start)) continue;
+    if (historicalLineStarts.has(line.start)) continue;
     if (owned.kind === 'heading') {
       if (insideActive) headingInside = true;
       else if (!firstOutsideHeading) firstOutsideHeading = { lineNumber: line.lineNumber, text: line.text.trim() };
@@ -3784,9 +3784,9 @@ function bracketOwnedLineOutsideActiveWindow(
       else if (!firstOutsideChecklist) firstOutsideChecklist = { lineNumber: line.lineNumber, text: line.text.trim() };
     }
   }
-  if (firstOutsideHeading && !headingInside) return firstOutsideHeading;
-  if (firstOutsideChecklist && !checklistInside) return firstOutsideChecklist;
-  return null;
+  const outside = firstOutsideHeading && !headingInside ? firstOutsideHeading
+    : firstOutsideChecklist && !checklistInside ? firstOutsideChecklist : null;
+  return { outside, hasLiveTarget: headingInside || checklistInside };
 }
 
 type BracketRenameCandidate = {
@@ -5063,6 +5063,9 @@ function cmdPhaseRemove(
     const [phasePart, subphasePart] = normalized.split('.');
     removedInt = Number(phasePart);
     removedSubphase = subphasePart === undefined ? undefined : Number(subphasePart);
+    if (removedSubphase === 0) {
+      error('Cannot remove a .00 sub-phase: bracket sub-phases start at .01.', ERROR_REASON.USAGE);
+    }
   } else {
     // Legacy and milestone-prefixed paths retain their original permissive
     // normalization and parseInt behavior byte-for-byte.
@@ -5203,7 +5206,7 @@ function cmdPhaseRemove(
   // guard already returns null.
   if (removeContext) {
     const guardTargetId = bracketPhaseId(removeContext, removedInt, removedSubphase);
-    const outside = bracketOwnedLineOutsideActiveWindow(
+    const { outside, hasLiveTarget } = bracketOwnedLineOutsideActiveWindow(
       roadmapContentBeforeRemoval!,
       guardTargetId,
       preRemovalRanges,
@@ -5223,6 +5226,12 @@ function cmdPhaseRemove(
         + `(ROADMAP.md line ${outside.lineNumber}: ${JSON.stringify(outside.text)}) `
         + `lies outside ${windowDescription}. ROADMAP.md's milestone heading was not `
         + 'found where expected; verify the ROADMAP.md structure before removing.',
+      );
+    }
+    if (targetDir === null && !hasLiveTarget) {
+      error(
+        `Cannot remove phase ${normalized}: no directory or live heading/checklist exists in the active milestone window.`,
+        ERROR_REASON.USAGE,
       );
     }
   }

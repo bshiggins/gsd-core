@@ -888,6 +888,52 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
     return snapshot;
   }
 
+  function removalFixture(tokens, directoryTokens = tokens) {
+    const dir = project('adr-612-removal-contract-');
+    writeEmptyBracketFixture(dir);
+    const names = { '01': 'one', '02': 'two', '03': 'three', '04': 'four', '02.01': 'a', '02.02': 'b' };
+    fs.appendFileSync(planning(dir, 'ROADMAP.md'), tokens.map((token) =>
+      `\n### [CK.02] ${token}: ${names[token]}\n**Goal:** Work\n`).join(''));
+    for (const token of directoryTokens) {
+      const phaseDir = planning(dir, 'phases', `CK.02-${token}-${names[token]}`);
+      fs.mkdirSync(phaseDir, { recursive: true });
+      fs.writeFileSync(path.join(phaseDir, `${token}-01-PLAN.md`), '# Plan\n');
+    }
+    return dir;
+  }
+
+  describe('review 1025 Major-1 removal requires a live target', () => {
+    for (const [label, tokens, argument] of [
+      ['missing integer', ['01', '03', '04'], '02'],
+      ['zero subphase', ['02.01', '02.02'], '02.00'],
+      ['fenced target only', ['01', '03', '04'], '02'],
+    ]) {
+      test(`${label} refuses with a usage error and changes nothing`, () => {
+        const dir = removalFixture(tokens);
+        if (label === 'fenced target only') {
+          fs.appendFileSync(planning(dir, 'ROADMAP.md'), '\n```md\n### [CK.02] 02: Example\n```\n');
+        }
+        const before = snapshotTree(planning(dir));
+        const result = runGsdTools(['--json-errors', 'phase', 'remove', argument, '--force'], dir, { HOME: dir, USERPROFILE: dir });
+        assert.equal(result.success, false, result.output);
+        assert.equal(JSON.parse(result.error).reason, 'usage');
+        assert.deepEqual(snapshotTree(planning(dir)), before);
+      });
+    }
+
+    for (const evidence of ['heading', 'checklist', 'directory']) {
+      test(`a target with only a live ${evidence} remains removable`, () => {
+        const dir = removalFixture(evidence === 'heading' ? ['01', '02', '03'] : ['01', '03'],
+          evidence === 'directory' ? ['01', '02', '03'] : ['01', '03']);
+        if (evidence === 'checklist') fs.appendFileSync(planning(dir, 'ROADMAP.md'), '\n- [ ] [CK.02] 02: two\n');
+        const out = run(['phase', 'remove', '02', '--force'], dir);
+        assert.equal(out.removed, '02');
+        assert.equal(fs.existsSync(planning(dir, 'phases', 'CK.02-02-three')), true);
+        assert.equal(fs.existsSync(planning(dir, 'phases', 'CK.02-03-three')), false);
+      });
+    }
+  });
+
   // #4304: under the bracket convention a supplied phase id and
   // phase_naming "custom" have no write semantics yet (their precedence is
   // the #5067 ruling). The writers refuse both before any write instead of

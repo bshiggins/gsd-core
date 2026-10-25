@@ -10,3 +10,5 @@ pr: 4773
 - `phase next-decimal` returns canonical bracket sub-phases, and STATE.md descriptive text uses the bracket display.
 - `find-phase`, the manager and the other phase lookups resolve the emitted directories and bracket dependencies.
 - `null`, `sequential` and `milestone-prefixed` projects are unchanged.
+
+- Bracket `phase remove` refuses nonexistent targets and `.00` sub-phases before changing any files.
