@@ -8915,7 +8915,22 @@ function prepareInstallSymlinkBranchUpgrade(t, {
   }
 
   if (configContent !== null) fs.writeFileSync(path.join(configDir, 'config.toml'), configContent);
-  if (pendingMigrations) cleanup(path.join(configDir, 'gsd-install-state.json'));
+  if (pendingMigrations) {
+    // Seed the Windows-only shim on every host so the migration fixture also
+    // exercises its unmanifested path on POSIX; execution remains host-native.
+    const { buildCodexHookWindowsShimIR } = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
+    const shim = buildCodexHookWindowsShimIR(path.join(configDir, 'hooks', 'gsd-check-update.js'), JSON.stringify(process.execPath));
+    if (!fs.existsSync(shim.cmdPath)) fs.writeFileSync(shim.cmdPath, shim.render.cmd());
+    const { INSTALL_STATE_NAME } = require('../gsd-core/bin/lib/installer-migrations.cjs');
+    const hooksMigration = require('../gsd-core/bin/lib/installer-migrations/002-codex-legacy-hooks-json.cjs');
+    const statePath = path.join(configDir, INSTALL_STATE_NAME);
+    const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    assert.ok(state.appliedMigrations.some((entry) => entry.id === hooksMigration.id));
+    // Only the hooks cleanup needs to run again. Preserve the applied baseline:
+    // resetting it would prompt for the unmanifested Windows .cmd shim.
+    state.appliedMigrations = state.appliedMigrations.filter((entry) => entry.id !== hooksMigration.id);
+    fs.writeFileSync(statePath, JSON.stringify(state) + '\n');
+  }
 
   const dest = path.join(configDir, destination);
   assert.ok(fs.existsSync(dest), `the previous install must contain ${destination}`);
@@ -9120,6 +9135,7 @@ describe('#5179 preflight branch coverage', () => {
     if (!fixture) return;
     assert.equal(fixture.result.exitCode, 0, fixture.output);
     assert.doesNotMatch(fixture.output, /refusing to/);
+    assert.match(fixture.output, /rewrote or removed hooks\.json/);
     assert.equal(fs.lstatSync(fixture.dest).isSymbolicLink(), false);
     assert.deepStrictEqual(fs.readFileSync(fixture.dest), fixture.previousDestinationBytes);
   });
