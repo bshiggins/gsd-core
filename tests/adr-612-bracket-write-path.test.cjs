@@ -905,6 +905,7 @@ describe('#4304 / ADR-612 PR-4 bracket writers', () => {
   describe('review 1025 Major-1 removal requires a live target', () => {
     for (const [label, tokens, argument] of [
       ['missing integer', ['01', '03', '04'], '02'],
+      ['missing parent with live subphases', ['02.01', '02.02'], '02'],
       ['zero subphase', ['02.01', '02.02'], '02.00'],
       ['fenced target only', ['01', '03', '04'], '02'],
     ]) {

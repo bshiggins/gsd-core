@@ -5191,29 +5191,6 @@ function cmdPhaseRemove(
     ? currentMilestoneRawRanges(roadmapContentBeforeRemoval, cwd, 'bracket')
     : null;
 
-  // #4304: refuse before any mutation when an INTEGER phase
-  // still has its own sub-phases. Without this, computeBracketRenumberMapping's
-  // filter (phase > removedInt only) never touches the removed phase's OWN
-  // sub-phases: they stay orphaned on disk/ROADMAP while the NEXT phase's
-  // sub-phases renumber onto the SAME identities, manufacturing duplicates
-  // (legacy has the same defect on its own path — parity, not fixed there).
-  if (removeContext && removedSubphase === undefined) {
-    const ownSubphases = bracketPhaseOwnSubphases(
-      phasesDir,
-      roadmapContentBeforeRemoval!,
-      preRemovalRanges,
-      removeContext,
-      removedInt,
-    );
-    if (ownSubphases.length > 0) {
-      error(
-        `Cannot remove phase ${normalized}: it still has sub-phase(s) `
-        + `${ownSubphases.map((id) => renderPhaseId(id)).join(', ')}. `
-        + 'Remove the sub-phase(s) first, then remove the phase.',
-      );
-    }
-  }
-
   // #4304: refuse before any mutation when the target's own
   // heading/checklist line lives entirely OUTSIDE the milestone window the
   // read side located — a mislocated window (a decoy heading carrying the
@@ -5232,7 +5209,7 @@ function cmdPhaseRemove(
   // with an empty report. The guard reads only ROADMAP content (never
   // `targetDir` itself), so gating it on a directory that may not exist
   // protected nothing; with no directory and no matching ROADMAP line the
-  // guard already returns null.
+  // guard already reports no outside line.
   if (removeContext) {
     const guardTargetId = bracketPhaseId(removeContext, removedInt, removedSubphase);
     const { outside, hasLiveTarget } = bracketOwnedLineOutsideActiveWindow(
@@ -5255,12 +5232,36 @@ function cmdPhaseRemove(
         + `(ROADMAP.md line ${outside.lineNumber}: ${JSON.stringify(outside.text)}) `
         + `lies outside ${windowDescription}. ROADMAP.md's milestone heading was not `
         + 'found where expected; verify the ROADMAP.md structure before removing.',
+        ERROR_REASON.USAGE,
       );
     }
     if (targetDir === null && !hasLiveTarget) {
       error(
         `Cannot remove phase ${normalized}: no directory or live heading/checklist exists in the active milestone window.`,
         ERROR_REASON.USAGE,
+      );
+    }
+  }
+
+  // #4304: refuse before any mutation when an INTEGER phase
+  // still has its own sub-phases. Without this, computeBracketRenumberMapping's
+  // filter (phase > removedInt only) never touches the removed phase's OWN
+  // sub-phases: they stay orphaned on disk/ROADMAP while the NEXT phase's
+  // sub-phases renumber onto the SAME identities, manufacturing duplicates
+  // (legacy has the same defect on its own path — parity, not fixed there).
+  if (removeContext && removedSubphase === undefined) {
+    const ownSubphases = bracketPhaseOwnSubphases(
+      phasesDir,
+      roadmapContentBeforeRemoval!,
+      preRemovalRanges,
+      removeContext,
+      removedInt,
+    );
+    if (ownSubphases.length > 0) {
+      error(
+        `Cannot remove phase ${normalized}: it still has sub-phase(s) `
+        + `${ownSubphases.map((id) => renderPhaseId(id)).join(', ')}. `
+        + 'Remove the sub-phase(s) first, then remove the phase.',
       );
     }
   }
