@@ -158,7 +158,7 @@ test('comparePhaseNum is a total preorder over mixed custom and numeric ids', ()
   const ids = ['2', '02', 'API', '1', '01', 'SETUP', '5', '05', '7B', '10', 'ZED'];
   const cmp = (a, b) => Math.sign(phaseId.comparePhaseNum(a, b, context)) || 0;
   for (const a of ids) for (const b of ids) {
-    assert.equal(cmp(a, b), -cmp(b, a), `antisymmetry ${a} ${b}`);
+    assert.equal(cmp(a, b) + cmp(b, a), 0, `antisymmetry ${a} ${b}`);
     for (const c of ids) {
       if (cmp(a, b) <= 0 && cmp(b, c) <= 0) assert.ok(cmp(a, c) <= 0, `transitivity ${a} ${b} ${c}`);
     }
