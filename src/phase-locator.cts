@@ -354,11 +354,15 @@ function createPhaseDirectories<T extends PhaseDirectoryWrite>(cwd: string, entr
       const dirName = phaseIdModule.phaseDirectoryName(entry.directoryId ?? entry.id, entry.slug, context.projectCode);
       const dirPath = path.resolve(phasesRoot, dirName);
       if (path.dirname(dirPath) !== phasesRoot) error('Phase directory escapes the phases directory', ERROR_REASON.USAGE);
-      if (pendingPaths.has(dirPath) || fs.lstatSync(dirPath, {throwIfNoEntry: false}) !== undefined) {
+      const recordIdentity = entry.recordIdentity ?? context.phaseNaming === 'custom';
+      // An occupied target is a collision only where a custom writer would
+      // record an identity into it. Numeric writers keep the idempotent
+      // ensure-directory they always had.
+      if (recordIdentity && (pendingPaths.has(dirPath) || fs.lstatSync(dirPath, {throwIfNoEntry: false}) !== undefined)) {
         throw new phaseIdModule.PhaseDirectoryNameError(`Phase directory ${dirName} already exists or is claimed by another pending entry; choose a distinct ID or title`, 'collision');
       }
       pendingPaths.add(dirPath);
-      return {...entry, dirName, dirPath, recordIdentity: entry.recordIdentity ?? context.phaseNaming === 'custom'};
+      return {...entry, dirName, dirPath, recordIdentity};
     });
   } catch (cause) {
     if (cause instanceof phaseIdModule.PhaseDirectoryNameError) {

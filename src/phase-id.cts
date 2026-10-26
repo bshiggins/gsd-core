@@ -812,10 +812,16 @@ function comparePhaseNum(a: unknown, b: unknown, context?: PhaseDirectoryContext
     };
     const first = identity(a), second = identity(b);
     // Arbitrary custom IDs have no numeric ordering: use their declared order.
-    // Unrecorded legacy numeric phases retain the original comparator below.
-    if (isCustomPhaseId(first) || isCustomPhaseId(second) || index.recorded.has(first) || index.recorded.has(second)) {
-      const left = index.order.get(first), right = index.order.get(second);
+    // The relation must stay a total preorder for every `.sort` it feeds, so
+    // once a project declares a custom ID every declared ID sorts by position
+    // and ahead of every undeclared one; undeclared IDs (including unlisted
+    // numeric directories) keep the original comparator among themselves.
+    // A project with only legacy numeric IDs never enters this branch.
+    if (index.hasCustom) {
+      const left = index.orderByFold.get(recordedPhaseKey(first)), right = index.orderByFold.get(recordedPhaseKey(second));
       if (left !== undefined && right !== undefined) return left - right;
+      if (left !== undefined) return -1;
+      if (right !== undefined) return 1;
     }
   }
   // Strip optional project_code prefix before comparing
@@ -1480,7 +1486,7 @@ function phaseScanTokenSource(context: PhaseDirectoryContext): string {
 }
 type CustomPhaseQuery = { id: string; listed: boolean; recordedId?: string; projectCode?: string | null; prefixes: { id: string; prefix: string }[]; directoryIds?: Record<string, string> };
 
-type CustomIdentityIndex = { roadmap: string; knownIds: string[]; explicitIds: Set<string>; ids: Set<string>; recorded: Set<string>; recordedByFold: Map<string, string[]>; order: Map<string, number>; prefixes: {id: string; prefix: string}[] };
+type CustomIdentityIndex = { roadmap: string; knownIds: string[]; explicitIds: Set<string>; ids: Set<string>; recorded: Set<string>; recordedByFold: Map<string, string[]>; order: Map<string, number>; orderByFold: Map<string, number>; hasCustom: boolean; prefixes: {id: string; prefix: string}[] };
 const customIdentityIndexes = new WeakMap<PhaseDirectoryContext, CustomIdentityIndex>();
 
 function customIdentityIndex(options: PhaseDirectoryContext): CustomIdentityIndex {
@@ -1501,6 +1507,9 @@ function customIdentityIndex(options: PhaseDirectoryContext): CustomIdentityInde
     const ids = new Set([...headings, ...options.knownIds ?? [], ...recorded]);
     index = {
       roadmap: options.roadmap, knownIds: options.knownIds, explicitIds: new Set(options.knownIds ?? []), ids, recorded, recordedByFold, order: new Map([...ids].map((id, i) => [id, i])),
+      // Declared position under the same fold the writers use, so `02` and `2` share a slot.
+      orderByFold: [...ids].reduce((fold, id, i) => fold.has(recordedPhaseKey(id)) ? fold : fold.set(recordedPhaseKey(id), i), new Map<string, number>()),
+      hasCustom: recorded.size > 0 || [...ids].some(isCustomPhaseId),
       prefixes: [...ids].filter(token => token && !UNSAFE_PHASE_DIRECTORY_PART_RE.test(token))
         .sort((a, b) => b.length - a.length)
         .map(token => ({id: token, prefix: phaseDirectoryName(token, '')})),
@@ -1716,13 +1725,20 @@ function customPhaseDirectoryParts(dir: string, query: CustomPhaseQuery): { id: 
  * token for these dirs is the mis-absorbed multi-segment form).
  */
 function matchPhaseDirs(dirs: string[], query: string, convention?: string | null, context: PhaseDirectoryContext = phaseDirectoryContext({})): { matches: string[]; usedBareFallback: boolean } {
+  // Non-custom projects keep the pre-#5186 contract: callers hand over the
+  // normalized token, so a raw spelling must not reach the literal passes below.
+  if (context.phaseNaming !== 'custom') query = normalizePhaseName(query);
   const custom = convention === 'bracket' ? null : customPhaseQuery(query, context);
   if (custom?.recordedId !== undefined) {
     return {matches: dirs.filter(dir => customPhaseDirectoryParts(dir, custom) !== null), usedBareFallback: false};
   }
-  // A complete basename names that physical directory when no record owns the query.
-  const directoryMatches = dirs.filter(dir => dir === query);
-  if (directoryMatches.length > 0) return {matches: directoryMatches, usedBareFallback: false};
+  // A complete basename names that physical directory when no record owns the
+  // query. Custom projects only: a numeric project with `01` and `01-foo` must
+  // still reach the #2237 ambiguity refusal for the bare token `01`.
+  if (context.phaseNaming === 'custom') {
+    const directoryMatches = dirs.filter(dir => dir === query);
+    if (directoryMatches.length > 0) return {matches: directoryMatches, usedBareFallback: false};
+  }
   const normalized = normalizePhaseName(query);
   // Recorded directories never enter legacy token or bare-number fallback for
   // another query. Keep those compatibility passes for unmarked directories.
@@ -1904,7 +1920,9 @@ function parsePhaseFromProse(
     ? str.trim().replace(/^Phase[ \t]+/i, '').split(/[ \t:]/, 1)[0].replace(/\.$/, '')
     : null;
   const query = candidate && context && customPhaseQuery(candidate, context);
-  const custom = query && (query.listed || candidate === str.trim() || /^Phase[ \t]+/i.test(str.trim()));
+  // Only an identity a writer recorded or the roadmap lists is a phase id; an
+  // ordinary word in the field (`complete`, `None`, `TBD`) is not one.
+  const custom = query && (query.listed || query.recordedId !== undefined);
   const phaseMatch = str.match(convention === 'milestone-prefixed' ? PHASE_PROSE_MILESTONE_PREFIXED_RE : PHASE_PROSE_RE);
   // The name-extraction quantifiers are length-bounded so a crafted long
   // unterminated run (many `(` or `—`) in an untrusted STATE.md field value

@@ -2050,19 +2050,20 @@ function assertUnambiguousCustomDirectories(dirs: string[], context: PhaseDirect
   }
 }
 
-function renameDecimalPhases(
-  phasesDir: string,
-  baseInt: number,
-  removedDecimal: number,
-  context: PhaseDirectoryContext,
-): { renamedDirs: { from: string; to: string }[]; renamedFiles: { from: string; to: string }[] } {
-  const renamedDirs: { from: string; to: string }[] = [];
-  const renamedFiles: { from: string; to: string }[] = [];
+/**
+ * Directories a numeric removal renumbers. The renamers and the `phase remove`
+ * preflight both read this one selector, so the set the preflight refuses on is
+ * the set the renamers would touch. A directory a record or a unique known id
+ * owns is a stable custom identity and is never renumbered; an ambiguous
+ * markerless one stays selected so the caller refuses before any write.
+ */
+function renameEligible(dirs: string[], context: PhaseDirectoryContext): string[] {
+  return dirs.filter(dir => phaseIdMod.customDirectoryCandidates(dir, context).length !== 1);
+}
+
+function selectDecimalRenames(dirs: string[], baseInt: number, removedDecimal: number, context: PhaseDirectoryContext): RenameDirInfo[] {
   const decPattern = new RegExp(`^(0*${baseInt})\\.(\\d+)-(.+)$`);
-  // Recorded IDs and known markerless owners are stable custom identities.
-  const dirs = readSubdirectories(phasesDir, true).filter(dir =>
-    phaseIdMod.customDirectoryCandidates(dir, context).length === 0);
-  const toRename: RenameDirInfo[] = dirs
+  return renameEligible(dirs, context)
     .map((dir) => {
       const m = dir.match(decPattern);
       return m
@@ -2071,6 +2072,40 @@ function renameDecimalPhases(
     })
     .filter((item): item is RenameDirInfo => item !== null && item.oldDecimal > removedDecimal)
     .sort((a, b) => b.oldDecimal - a.oldDecimal);
+}
+
+function selectIntegerRenames(dirs: string[], removedInt: number, context: PhaseDirectoryContext): RenameIntInfo[] {
+  return renameEligible(dirs, context)
+    .map((dir) => {
+      const m = dir.match(/^(\d+)([A-Z])?(?:\.(\d+))?-(.+)$/i);
+      if (!m) return null;
+      const dirInt = parseInt(m[1], 10);
+      // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.
+      return dirInt > removedInt && !isSentinelPhaseId(dirInt)
+        ? {
+            dir,
+            oldInt: dirInt,
+            letter: m[2] ? m[2].toUpperCase() : '',
+            decimal: m[3] ? parseInt(m[3], 10) : null,
+            slug: m[4],
+          }
+        : null;
+    })
+    .filter((item): item is RenameIntInfo => item !== null)
+    .sort((a, b) =>
+      a.oldInt !== b.oldInt ? b.oldInt - a.oldInt : (b.decimal || 0) - (a.decimal || 0),
+    );
+}
+
+function renameDecimalPhases(
+  phasesDir: string,
+  baseInt: number,
+  removedDecimal: number,
+  context: PhaseDirectoryContext,
+): { renamedDirs: { from: string; to: string }[]; renamedFiles: { from: string; to: string }[] } {
+  const renamedDirs: { from: string; to: string }[] = [];
+  const renamedFiles: { from: string; to: string }[] = [];
+  const toRename = selectDecimalRenames(readSubdirectories(phasesDir, true), baseInt, removedDecimal, context);
 
   assertUnambiguousCustomDirectories(toRename.map(item => item.dir), context);
   for (const item of toRename) {
@@ -2128,29 +2163,7 @@ function renameIntegerPhases(
   const renamedDirs: { from: string; to: string }[] = [];
   const renamedFiles: { from: string; to: string }[] = [];
   const renamedFileCollisions: { from: string; to: string; displaced_to: string | null }[] = [];
-  // Recorded IDs and known markerless owners are stable custom identities.
-  const dirs = readSubdirectories(phasesDir, true).filter(dir =>
-    phaseIdMod.customDirectoryCandidates(dir, context).length === 0);
-  const toRename: RenameIntInfo[] = dirs
-    .map((dir) => {
-      const m = dir.match(/^(\d+)([A-Z])?(?:\.(\d+))?-(.+)$/i);
-      if (!m) return null;
-      const dirInt = parseInt(m[1], 10);
-      // #3185: canonical sentinel predicate (SENTINEL_RANGES [0,999]) — this was a local 999-only literal that admitted Phase 0.
-      return dirInt > removedInt && !isSentinelPhaseId(dirInt)
-        ? {
-            dir,
-            oldInt: dirInt,
-            letter: m[2] ? m[2].toUpperCase() : '',
-            decimal: m[3] ? parseInt(m[3], 10) : null,
-            slug: m[4],
-          }
-        : null;
-    })
-    .filter((item): item is RenameIntInfo => item !== null)
-    .sort((a, b) =>
-      a.oldInt !== b.oldInt ? b.oldInt - a.oldInt : (b.decimal || 0) - (a.decimal || 0),
-    );
+  const toRename = selectIntegerRenames(readSubdirectories(phasesDir, true), removedInt, context);
 
   assertUnambiguousCustomDirectories(toRename.map(item => item.dir), context);
   for (const item of toRename) {
@@ -2317,7 +2330,7 @@ function updateRoadmapAfterPhaseRemoval(
     // makes the token padding-insensitive in both directions without widening
     // to other ids: the token stays anchored between `Phase\s+`/line-start and
     // `:`/whitespace/end, so `0*2` still never matches `Phase 12:`.
-    const padTolerant = customTarget ? escaped : phaseMarkdownRegexSource(targetPhase);
+    const padTolerant = customTarget ? escaped : `0*${escaped}`;
     const stableIdentity = (id: string): boolean =>
       stableIds.has((isCustomPhaseId(id) ? id : normalizePhaseName(id)).toLowerCase());
 
@@ -2644,10 +2657,13 @@ function cmdPhaseRemove(
     const owners = phaseIdMod.customDirectoryCandidates(dir, directoryContext);
     // A unique proven target excludes siblings whose longer declared owner
     // wins resolution. Unresolved/ambiguous queries retain the full refusal.
-    return dir === targetPhase || (owners.includes(targetPhase) && (!uniqueCustomTarget || dir === phaseDirMatches[0]))
-      || (!isCustomPhaseId(targetPhase) && Number.parseFloat(dir) > Number.parseFloat(normalized));
+    return dir === targetPhase || (owners.includes(targetPhase) && (!uniqueCustomTarget || dir === phaseDirMatches[0]));
   });
-  assertUnambiguousCustomDirectories(mutationCandidates, directoryContext);
+  // The numeric renumbering set comes from the renamers' own selector.
+  const renumbered = isCustomPhaseId(targetPhase) ? [] : (isDecimal
+    ? selectDecimalRenames(subdirs, parseInt(normalized.split('.')[0], 10), parseInt(normalized.split('.')[1], 10), directoryContext)
+    : selectIntegerRenames(subdirs, parseInt(normalized, 10), directoryContext)).map(item => item.dir);
+  assertUnambiguousCustomDirectories([...new Set([...mutationCandidates, ...renumbered])], directoryContext);
   if (phaseDirMatches.length > 1) {
     output(
       {

@@ -287,10 +287,10 @@ roadmap edits or archival. Existing markerless custom directories continue to
 resolve and can be removed when exactly one known owner matches. An ambiguous
 removal or rename refuses and names the candidates; write the correct owning ID
 into that directory's `.phase-id` to resolve the ambiguity. Read-only lookups
-can also refuse to choose between ambiguous markerless owners, including
-overlapping `SETUP` / `SETUP-2` directory names. Put the exact owning ID, without
-the project prefix or title slug, in each affected directory's `.phase-id` and
-retry the lookup. Numeric phases
+never refuse: when a markerless directory could belong to overlapping IDs such as
+`SETUP` and `SETUP-2`, the longest declared ID that prefixes the directory name
+owns it. Put the exact owning ID, without the project prefix or title slug, in
+the directory's `.phase-id` to pin it. Numeric phases
 without custom identity records, including their inserted decimal children,
 retain numeric renumbering.
 
