@@ -17,7 +17,7 @@ import ioMod = require('./io.cjs');
 const { output, error, formatDiagnosticToken, declineNoOp } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { phaseMarkdownRegexSource, matchPhaseDirs, stripProjectCodePrefix, OPTIONAL_PHASE_TAG_SOURCE, roadmapPhaseLookupSources, phaseHeadingPrefixSrcFor, PHASE_HEADING_BASELINE, isSentinelPhaseId, scopeToPhase, bracketQualifiedKey, foldBracketId } = phaseIdMod;
+const { phaseMarkdownRegexSource, matchPhaseDirs, phaseLookupQuery, stripProjectCodePrefix, OPTIONAL_PHASE_TAG_SOURCE, roadmapPhaseLookupSources, phaseHeadingPrefixSrcFor, PHASE_HEADING_BASELINE, isSentinelPhaseId, scopeToPhase, bracketQualifiedKey, foldBracketId } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseLocatorMod = require('./phase-locator.cjs');
 const { phaseDirectoryOptions, findPhaseInternal, listMilestonePhaseDirs, listAllPhaseDirs } = phaseLocatorMod;
@@ -581,7 +581,7 @@ function collectAnalyzePhases(
     // phase resolves to nothing.
     // Upstream centralized this choice in `matchPhaseDirs`; thread the same
     // convention into that owner rather than reviving the primitive `.find()`.
-    const dirMatch = matchPhaseDirs(phaseDirNames, phaseNum, convention, directoryContext).matches[0];
+    const dirMatch = matchPhaseDirs(phaseDirNames, phaseLookupQuery(phaseNum, directoryContext), convention, directoryContext).matches[0];
 
     if (dirMatch) {
       const counts = countPhasePlansAndSummaries(path.join(phasesDir, dirMatch), convention);
@@ -663,7 +663,7 @@ function collectAnalyzePhases(
     // Preserve that behavior while heading occurrences gain bracket identity.
     detailKeys.add(occurrenceKey(tr.id));
     if (seen.has(stripPadA(tr.id))) continue;
-    const dirMatchA = matchPhaseDirs(phaseDirNames, tr.id, convention, directoryContext).matches[0];
+    const dirMatchA = matchPhaseDirs(phaseDirNames, phaseLookupQuery(tr.id, directoryContext), convention, directoryContext).matches[0];
     let tPlanCount = 0;
     let tSummaryCount = 0;
     let tHasContext = false;
@@ -869,7 +869,7 @@ function cmdRoadmapAnalyze(cwd: string, raw: boolean): void {
   if (phases.length === 0 && checklistOccurrences.length > 0 && !hasPhaseListingTableHeader(effectiveContent)) {
     for (const occ of checklistOccurrences) {
       if (isSentinelPhase(occ.token, occ.bracketId)) continue;
-      const dirMatch = matchPhaseDirs(_phaseDirNames, occ.token, convention, directoryContext).matches[0];
+      const dirMatch = matchPhaseDirs(_phaseDirNames, phaseLookupQuery(occ.token, directoryContext), convention, directoryContext).matches[0];
       let diskStatus = 'no_directory';
       let planCount = 0;
       let summaryCount = 0;

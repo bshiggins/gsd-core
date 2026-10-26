@@ -36,7 +36,7 @@ import phaseLocatorMod = require('./phase-locator.cjs');
 const { phaseDirectoryOptions, findPhaseInternal } = phaseLocatorMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { matchPhaseDirs } = phaseIdMod;
+const { matchPhaseDirs, phaseLookupQuery } = phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import roadmapModule = require('./roadmap.cjs');
 const { getRoadmapPhaseWithFallback } = roadmapModule;
@@ -112,7 +112,7 @@ export function resolvePhaseDir(projectDir: string, phase: string): Evidence<str
 export function resolvePhaseDirByToken(phasesDir: string, phaseArg: string, directoryContext: PhaseDirectoryContext): string | null {
   const dirEntries = fs.readdirSync(phasesDir, { withFileTypes: true });
   const dirNames = dirEntries.filter((e) => e.isDirectory()).map((e) => e.name);
-  const matched = matchPhaseDirs(dirNames, phaseArg, undefined, directoryContext).matches[0];
+  const matched = matchPhaseDirs(dirNames, phaseLookupQuery(phaseArg, directoryContext), undefined, directoryContext).matches[0];
   if (matched) return path.join(phasesDir, matched);
   const contained = tryWithinRoot(phaseArg, phasesDir);
   if (contained !== null && statEvidence(contained).kind === 'found') return contained;

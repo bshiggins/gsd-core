@@ -63,7 +63,7 @@ import stateDocument = require('./state-document.cjs');
 const { stateFieldValue } = stateDocument;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseId = require('./phase-id.cjs');
-const { comparePhaseNum, extractPhaseToken, customPhaseQuery, customDirectoryOwner, matchPhaseDirs, parsePhaseFromProse, stripProjectCodePrefix } = phaseId;
+const { comparePhaseNum, extractPhaseToken, customPhaseQuery, customDirectoryOwner, matchPhaseDirs, phaseLookupQuery, parsePhaseFromProse, stripProjectCodePrefix } = phaseId;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import stateMod = require('./state.cjs');
 const { readStateHeadFreshness } = stateMod;
@@ -378,7 +378,7 @@ function detectVerifyFailed(cwd: string, currentPhaseRaw: string | null): boolea
     // surfaces its own failed verification. `entries` is already sorted, and
     // `matchPhaseDirs` filters without reordering, so taking the first match
     // preserves the previous `.find()` selection exactly.
-    const { matches } = matchPhaseDirs(entries, phaseToken, undefined, directoryContext);
+    const { matches } = matchPhaseDirs(entries, phaseLookupQuery(phaseToken, directoryContext), undefined, directoryContext);
     targetDir = matches[0];
     if (!targetDir) return false;
   } else {

@@ -55,7 +55,7 @@ type PlanningSnapshot = ReturnType<typeof planningSnapshotMod.buildPlanningSnaps
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('../phase-id.cjs');
-const { getMilestoneFromPhaseId, matchPhaseDirs, extractPhaseToken, PHASE_NUMBER_TOKEN_SOURCE } =
+const { getMilestoneFromPhaseId, matchPhaseDirs, phaseLookupQuery, extractPhaseToken, PHASE_NUMBER_TOKEN_SOURCE } =
   phaseIdMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports -- the single owner of the persisted status vocabulary
 import stateDocumentMod = require('../state-document.cjs');
@@ -376,7 +376,7 @@ const RULE_W026: Rule = {
       // since the selector's primary match IS the `phaseTokenMatches` call this
       // line used to make directly.
       const hasDirectory =
-        matchPhaseDirs(snapshot.allPhaseDirNames.value, phaseId, snapshot.phaseIdConvention, directoryContext).matches.length > 0;
+        matchPhaseDirs(snapshot.allPhaseDirNames.value, phaseLookupQuery(phaseId, directoryContext), snapshot.phaseIdConvention, directoryContext).matches.length > 0;
       if (!hasDirectory) unstarted.push(phaseId);
     }
     if (unstarted.length === 0) return [];

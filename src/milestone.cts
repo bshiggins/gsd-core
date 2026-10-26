@@ -36,7 +36,7 @@ import stateContract = require('./state-contract.cjs');
 const { publishStateContract } = stateContract;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('./phase-id.cjs');
-const { matchPhaseDirs, isSentinelPhaseId, isSentinelPhaseDir, buildPhaseHeadingScanRegex, PHASE_HEADING_BASELINE } = phaseIdMod;
+const { matchPhaseDirs, phaseLookupQuery, isSentinelPhaseId, isSentinelPhaseDir, buildPhaseHeadingScanRegex, PHASE_HEADING_BASELINE } = phaseIdMod;
 import { escapeRegex } from './pattern.cjs';
 import {
   loadReleaseMapFile,
@@ -822,7 +822,7 @@ function cmdMilestoneComplete(cwd: string, version: string, options: MilestoneCo
         // with a matching token exists on disk. Use the same matchPhaseDirs
         // owner that roadmap.analyze uses to avoid false positives on decimal
         // (2.1) and letter-suffix (12A) phase IDs. (#2528)
-        const hasDirectory = matchPhaseDirs(phaseDirEntries, phaseNum, convention, directoryContext).matches.length > 0;
+        const hasDirectory = matchPhaseDirs(phaseDirEntries, phaseLookupQuery(phaseNum, directoryContext), convention, directoryContext).matches.length > 0;
         if (!hasDirectory) {
           noDirectoryPhases.push(phaseNum);
         }

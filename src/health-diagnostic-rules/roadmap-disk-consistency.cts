@@ -113,7 +113,7 @@ const { SCOPE } = planningScopeMod;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import phaseIdMod = require('../phase-id.cjs');
-const { matchPhaseDirs, extractPhaseToken, isSentinelPhaseId, isSentinelPhaseDir } = phaseIdMod;
+const { matchPhaseDirs, phaseLookupQuery, extractPhaseToken, isSentinelPhaseId, isSentinelPhaseDir } = phaseIdMod;
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import validateMod = require('../validate.cjs');
@@ -137,7 +137,7 @@ function dirsForPhase(dirs: string[], phaseId: string, convention: string | null
   // disk" AND every bracket directory reads as unclaimed. `matchPhaseDirs`
   // forwards it to its primary `phaseTokenMatches`; handed nothing it is
   // byte-identical, so no legacy repo's pairing changes.
-  const canonical = matchPhaseDirs(dirs, phaseId, convention, directoryContext).matches;
+  const canonical = matchPhaseDirs(dirs, phaseLookupQuery(phaseId, directoryContext), convention, directoryContext).matches;
   if (canonical.length > 0) return canonical;
 
   // Bug 2 (#3309 W006/W007 migration cluster, found while fixing the

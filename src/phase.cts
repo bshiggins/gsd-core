@@ -47,7 +47,7 @@ const {
   normalizePhaseName,
   phaseMarkdownRegexSource,
   comparePhaseNum,
-  matchPhaseDirs,
+  matchPhaseDirs, phaseLookupQuery,
   customPhaseDirectoryParts,
   customDirectoryOwner,
   phaseScanTokenSource,
@@ -269,7 +269,7 @@ function cmdPhasesList(cwd: string, options: PhaseListOptions, raw: boolean): vo
       // The pool is #3185's (physical set + archived); the matcher is this
       // PR's. `dirs` is deliberately not read here: on this base it is not
       // assigned until the branch below picks a match.
-      const { matches } = matchPhaseDirs(lookupPool, phase, undefined, phaseDirectoryOptions(cwd));
+      const { matches } = matchPhaseDirs(lookupPool, phaseLookupQuery(phase, phaseDirectoryOptions(cwd)), undefined, phaseDirectoryOptions(cwd));
       const match = matches[0];
       if (!match) {
         output({ files: [], count: 0, phase_dir: null, error: 'Phase not found' }, raw, '');
@@ -358,7 +358,7 @@ function cmdPhaseNextDecimal(cwd: string, basePhase: string, raw: boolean): void
     if (fs.existsSync(phasesDir)) {
       const entries = fs.readdirSync(phasesDir, { withFileTypes: true });
       const dirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
-      baseExists = matchPhaseDirs(dirs, basePhase, undefined, phaseDirectoryOptions(cwd)).matches.length > 0;
+      baseExists = matchPhaseDirs(dirs, phaseLookupQuery(basePhase, phaseDirectoryOptions(cwd)), undefined, phaseDirectoryOptions(cwd)).matches.length > 0;
     }
 
     const roadmapPath = path.join(planningDir(cwd), 'ROADMAP.md');
@@ -601,7 +601,7 @@ function cmdFindPhase(cwd: string, phase: string, raw: boolean): void {
       // #2528: selection delegates to the canonical two-pass matcher (exact
       // token match, then the bare-integer leading-digit-run fallback) shared
       // with the locator and the phase-plan-index scan.
-      const { matches } = matchPhaseDirs(dirs, phase, undefined, searchContext);
+      const { matches } = matchPhaseDirs(dirs, phaseLookupQuery(phase, searchContext), undefined, searchContext);
       if (matches.length === 0) continue;
       if (matches.length > 1) {
         output({
@@ -882,7 +882,7 @@ function cmdPhasePlanIndex(cwd: string, phase: string, raw: boolean): void {
     // the locator and the find-phase scan (this site previously first-matched
     // with `.find()` and had no multi-match guard — the #2237 fail-loud rule
     // now applies here too, so the three resolution paths cannot disagree).
-    const { matches } = matchPhaseDirs(dirs, phase, undefined, directoryContext);
+    const { matches } = matchPhaseDirs(dirs, phaseLookupQuery(phase, directoryContext), undefined, directoryContext);
     if (matches.length > 1) {
       ambiguousMatches = matches;
     } else if (matches.length === 1) {
@@ -2650,7 +2650,7 @@ function cmdPhaseRemove(
   // "resolve nothing" into "delete one of two candidates, unrecoverably, and
   // renumber every phase after it". Refuse before any file is touched.
   const directoryContext = phaseDirectoryOptions(cwd);
-  const { matches: phaseDirMatches } = matchPhaseDirs(subdirs, targetPhase, undefined, directoryContext);
+  const { matches: phaseDirMatches } = matchPhaseDirs(subdirs, phaseLookupQuery(targetPhase, directoryContext), undefined, directoryContext);
   const uniqueCustomTarget = phaseDirMatches.length === 1
     && phaseIdMod.customDirectoryCandidates(phaseDirMatches[0], directoryContext).length === 1;
   const mutationCandidates = subdirs.filter(dir => {

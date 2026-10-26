@@ -99,12 +99,14 @@ for (const [id, refused] of [['998', false], ['999', true], ['1000', false]]) {
 }
 for (const [size, honoured] of [[1023, true], [1024, true], [1025, false]]) {
   test(`custom marker bound: a ${size}-byte .phase-id is ${honoured ? 'read' : 'ignored'}`, () => {
-    const cwd = fixture(null);
+    // Markerless, SETUP-2-b belongs to the longer declared SETUP-2; only a
+    // honoured marker can hand it to SETUP.
+    const cwd = fixture(null, 'custom', '# Roadmap\n\n## Milestone v1.0\n\n### Phase SETUP: S\n### Phase SETUP-2: S2\n');
     try {
-      const dir = path.join(cwd, '.planning/phases/alpha-x');
+      const dir = path.join(cwd, '.planning/phases/SETUP-2-b');
       fs.mkdirSync(dir);
-      fs.writeFileSync(path.join(dir, '.phase-id'), 'BETA'.padEnd(size, ' '));
-      assert.equal(run(cwd, ['find-phase', 'BETA']).found, honoured);
+      fs.writeFileSync(path.join(dir, '.phase-id'), 'SETUP'.padEnd(size, ' '));
+      assert.equal(run(cwd, ['find-phase', 'SETUP']).found, honoured);
     } finally { cleanup(cwd); }
   });
 }
@@ -154,7 +156,7 @@ test('comparePhaseNum is a total preorder over mixed custom and numeric ids', ()
   const roadmap = '# Roadmap\n\n### Phase 2: Two\n### Phase API: Api\n### Phase 1: One\n### Phase SETUP: Setup\n';
   const context = phaseId.phaseDirectoryContext({phase_naming: 'custom'}, roadmap);
   const ids = ['2', '02', 'API', '1', '01', 'SETUP', '5', '05', '7B', '10', 'ZED'];
-  const cmp = (a, b) => Math.sign(phaseId.comparePhaseNum(a, b, context));
+  const cmp = (a, b) => Math.sign(phaseId.comparePhaseNum(a, b, context)) || 0;
   for (const a of ids) for (const b of ids) {
     assert.equal(cmp(a, b), -cmp(b, a), `antisymmetry ${a} ${b}`);
     for (const c of ids) {

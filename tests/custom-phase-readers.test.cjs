@@ -262,14 +262,14 @@ test('phase directory collision: shared batch preflight refuses distinct ids map
     assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases')), []);
   } finally { cleanup(cwd); }
 });
-test('phase directory collision: numeric scaffold refuses a markerless directory', () => {
+test('phase directory collision: numeric scaffold keeps reusing a markerless directory', () => {
   const cwd = fixture(null, 'sequential');
   try {
     fs.mkdirSync(path.join(cwd, '.planning/phases/07-existing'));
+    fs.writeFileSync(path.join(cwd, '.planning/phases/07-existing/keep.md'), 'keep');
     const result = runGsdTools(['--json-errors', 'scaffold', 'phase-dir', '--phase', '7', '--name', 'Existing'], cwd, homeSandboxEnv(cwd));
-    assert.equal(result.success, false, result.output);
-    assert.equal(JSON.parse(result.error).reason, 'phase_id_collision');
-    assert.deepEqual(fs.readdirSync(path.join(cwd, '.planning/phases/07-existing')), []);
+    assert.equal(result.success, true, result.output);
+    assert.equal(fs.readFileSync(path.join(cwd, '.planning/phases/07-existing/keep.md'), 'utf8'), 'keep');
   } finally { cleanup(cwd); }
 });
 test('phase directory collision: insert refuses an occupied file without changing the roadmap', () => {

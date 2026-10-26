@@ -1724,10 +1724,16 @@ function customPhaseDirectoryParts(dir: string, query: CustomPhaseQuery): { id: 
  * the directory's leading digit run instead of `extractPhaseToken` (whose
  * token for these dirs is the mis-absorbed multi-segment form).
  */
+/**
+ * The query a directory lookup hands to `matchPhaseDirs`. Custom projects pass
+ * the id as written (their ids have no padding form); every other convention
+ * keeps the normalized token callers always supplied.
+ */
+function phaseLookupQuery(query: string, context: PhaseDirectoryContext): string {
+  return context?.phaseNaming === 'custom' ? query : normalizePhaseName(query);
+}
+
 function matchPhaseDirs(dirs: string[], query: string, convention?: string | null, context: PhaseDirectoryContext = phaseDirectoryContext({})): { matches: string[]; usedBareFallback: boolean } {
-  // Non-custom projects keep the pre-#5186 contract: callers hand over the
-  // normalized token, so a raw spelling must not reach the literal passes below.
-  if (context.phaseNaming !== 'custom') query = normalizePhaseName(query);
   const custom = convention === 'bracket' ? null : customPhaseQuery(query, context);
   if (custom?.recordedId !== undefined) {
     return {matches: dirs.filter(dir => customPhaseDirectoryParts(dir, custom) !== null), usedBareFallback: false};
@@ -2128,6 +2134,7 @@ const phaseIdExports = {
   scopeToPhase,
   phaseTokenMatches,
   matchPhaseDirs,
+  phaseLookupQuery,
   phaseDirectoryContext,
   phaseScanTokenSource,
   phaseDirectoryName,
