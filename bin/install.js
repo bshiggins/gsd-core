@@ -790,6 +790,7 @@ const {
   applyInstallerMigrationPlan,
   discoverInstallerMigrations,
   MANIFEST_SCHEMA_VERSION,
+  planInstallerMigrations,
   readInstallManifest,
   readInstallState,
   recordHostGeneration,
@@ -858,6 +859,7 @@ const {
   hasExistingSymlinkBetween,
   isSymlinkedDestOptIn,
   migrateLegacyDevPreferencesToSkill,
+  preflightLegacyDevPreferencesMigration,
   USER_OWNED_ARTIFACTS,
   _snapshotDir,
   createSkillDirOwnership,
@@ -950,6 +952,10 @@ function preflightInstallSymlinkDestinations(runtime, configDir, scope, installM
     }
   }
 
+  if (skillsRuntime && !combinedFamily) {
+    preflightLegacyDevPreferencesMigration(configDir, runtime, scope);
+  }
+
   if (behaviors.tomlConfigInstall && codexAgentRolesEnabled(installMode, agentProfile)) {
     const configPath = assertDestWithinConfigHome(configDir, 'config.toml');
     const agentsTomlDir = assertDestWithinConfigHome(configDir, 'agents');
@@ -971,20 +977,18 @@ function preflightInstallSymlinkDestinations(runtime, configDir, scope, installM
   }
 
   if (resolveInstallPlan(runtime).installSurface === 'codex-toml') {
-    const appliedIds = new Set(readInstallState(configDir).appliedMigrations
-      .filter((entry) => entry && typeof entry.id === 'string').map((entry) => entry.id));
     const migrations = installerMigrations || discoverInstallerMigrations({
       migrationsDir: path.join(_gsdLibDir, 'installer-migrations'),
     });
-    // Pending migrations can replace hooks.json (bundled migration 002) or
-    // rewrite config inputs (injected migrations). Do not execute their plans
-    // twice or predict filesystem publication/fallbacks: defer this check to
-    // the reconciler until they are applied. A future pure migration projection
-    // could safely extend preflight to these installs.
-    if (migrations.some((migration) =>
-      !appliedIds.has(migration.id) &&
-      (!migration.runtimes?.length || migration.runtimes.includes(runtime)) &&
-      (!migration.scopes?.length || migration.scopes.includes(scope)))) return;
+    // Planning is read-only. A pending id alone says nothing about whether
+    // this install's hooks/config inputs change (002 can itself be a no-op).
+    // Defer only actual mutations of those inputs; the migration executor
+    // and reconciler retain authority over publication and write failures.
+    const migrationPlan = planInstallerMigrations({ configDir, runtime, scope, migrations });
+    const changesCodexHooksInputs = migrationPlan.actions.some((action) =>
+      (action.relPath === 'hooks.json' || action.relPath === 'config.toml') &&
+      ['rewrite-json', 'remove-managed', 'backup-and-remove'].includes(action.type));
+    if (changesCodexHooksInputs) return;
     const configPath = path.join(configDir, 'config.toml');
     let configContent = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '';
     if (codexAgentRolesEnabled(installMode, agentProfile)) {

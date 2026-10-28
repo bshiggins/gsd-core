@@ -8900,7 +8900,7 @@ describe('#5179 install refusal preserves the previous install', () => {
 
 function prepareInstallSymlinkBranchUpgrade(t, {
   runtime = 'claude', scope = 'global', destination, surface = null, upgradeArgs = [],
-  allowOptIn = false, refreshFile = null, staleBytes = '# stale previous install bytes\n', configContent = null, pendingMigrations = false,
+  allowOptIn = false, refreshFile = null, staleBytes = '# stale previous install bytes\n', configContent = null, pendingMigrations = false, migrationState = null,
 }) {
   const root = createTempDir('gsd-5179-branch-');
   t.after(() => cleanup(root));
@@ -8930,6 +8930,22 @@ function prepareInstallSymlinkBranchUpgrade(t, {
     // resetting it would prompt for the unmanifested Windows .cmd shim.
     state.appliedMigrations = state.appliedMigrations.filter((entry) => entry.id !== hooksMigration.id);
     fs.writeFileSync(statePath, JSON.stringify(state) + '\n');
+  }
+
+  if (migrationState) {
+    const { INSTALL_STATE_NAME } = require('../gsd-core/bin/lib/installer-migrations.cjs');
+    const statePath = path.join(configDir, INSTALL_STATE_NAME);
+    if (migrationState === 'absent') {
+      cleanup(statePath);
+      // No managed registrations: pending 002 has nothing to replace.
+      fs.writeFileSync(path.join(configDir, 'hooks.json'), '{"hooks":{"SessionStart":[]}}\n');
+    } else {
+      const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+      const unrelated = require('../gsd-core/bin/lib/installer-migrations/007-retire-config-root-commonjs-marker.cjs');
+      assert.ok(state.appliedMigrations.some((entry) => entry.id === unrelated.id));
+      state.appliedMigrations = state.appliedMigrations.filter((entry) => entry.id !== unrelated.id);
+      fs.writeFileSync(statePath, JSON.stringify(state) + '\n');
+    }
   }
 
   const dest = path.join(configDir, destination);
@@ -9480,3 +9496,121 @@ describe('retargetInstalledIncludes (#5123)', () => {
     assert.equal(retarget(text, 'copilot', '/x'), text);
   });
 });
+
+
+describe('#5179 review migration refusal ordering', () => {
+  for (const scope of ['global', 'local']) {
+    for (const mode of ['core', 'standard', 'full']) {
+      for (const migrationState of ['unrelated-pending', 'absent']) {
+        test(`Codex ${scope} ${mode} refuses hooks before writes with ${migrationState} state`, (t) => {
+          const fixture = prepareInstallSymlinkBranchUpgrade(t, {
+            runtime: 'codex', scope, destination: 'hooks.json', migrationState,
+            upgradeArgs: [`--profile=${mode}`],
+          });
+          if (fixture) assertInstallSymlinkBranchPreserved(fixture, /hooks\.json at .* contains a symlink/);
+        });
+      }
+    }
+  }
+
+  for (const leaf of [true, false]) {
+    test(`preflights legacy dev-preferences ${leaf ? 'leaf' : 'directory'} refusal before writes`, (t) => {
+      const root = createTempDir('gsd-5179-dev-prefs-');
+      t.after(() => cleanup(root));
+      const { configDir } = runMinimalInstall({ runtime: 'qwen', scope: 'global', root });
+      fs.writeFileSync(path.join(configDir, 'gsd-core', 'VERSION'), '0.0.1\n');
+      const legacyDir = path.join(configDir, 'commands', 'gsd');
+      fs.mkdirSync(legacyDir, { recursive: true });
+      fs.writeFileSync(path.join(legacyDir, 'dev-preferences.md'), '# user preferences\n');
+      const skillDir = path.join(configDir, 'skills', 'gsd-dev-preferences');
+      cleanup(skillDir);
+      fs.mkdirSync(skillDir, { recursive: true });
+      const external = path.join(root, 'external-preferences');
+      fs.mkdirSync(external);
+      const destination = leaf ? path.join(skillDir, 'SKILL.md') : skillDir;
+      if (!leaf) cleanup(skillDir);
+      try {
+        fs.symlinkSync(leaf ? path.join(external, 'missing.md') : external, destination,
+          leaf ? 'file' : (process.platform === 'win32' ? 'junction' : 'dir'));
+      } catch (error) {
+        if (['EPERM', 'EACCES', 'ENOTSUP'].includes(error.code)) {
+          t.skip(`symlink creation unavailable: ${error.code}`);
+          return;
+        }
+        throw error;
+      }
+      const before = snapshotInstallSymlinkTree(root, 'install');
+      const result = runNode([INSTALL_SCRIPT, '--qwen', '--global', '--config-dir', configDir, '--no-legacy-cleanup'], {
+        env: installerEnv({ HOME: root, USERPROFILE: root, GSD_ALLOW_SYMLINKED_DEST: '' }),
+        timeoutMs: INSTALL_TIMEOUT_MS,
+      });
+      assertInstallSymlinkBranchPreserved({
+        result, output: stripAnsi(`${result.stdout}\n${result.stderr}`), before,
+        after: snapshotInstallSymlinkTree(root, 'install'),
+      }, leaf ? /migrateLegacyDevPreferencesToSkill: skillFile/ : /migrateLegacyDevPreferencesToSkill: skillDir/);
+    });
+  }
+});
+
+describe('#5179 review writer root parity', () => {
+  const engine = require('../gsd-core/bin/lib/install-engine.cjs');
+  const layoutModule = require('../gsd-core/bin/lib/runtime-artifact-layout.cjs');
+  const plan = require('../gsd-core/bin/lib/runtime-artifact-install-plan.cjs');
+  test('preflight and every artifact writer agree on the empty-home root', (t) => {
+    const root = createTempDir('gsd-5179-all-writers-');
+    t.after(() => cleanup(root));
+    sandboxHome(t, root);
+    let layout;
+    t.mock.method(layoutModule, 'resolveRuntimeArtifactLayout', () => layout);
+    for (const writer of ['generic', 'staged', 'standalone', 'combined-family', 'dev-preferences']) {
+      const configDir = path.join(root, writer);
+      fs.mkdirSync(configDir);
+      const stage = path.join(configDir, 'stage');
+      fs.mkdirSync(stage);
+      fs.writeFileSync(path.join(stage, writer === 'combined-family' ? 'help.md' : 'gsd-proof.md'), '---\ndescription: Proof\n---\n# Proof\n');
+      const agents = ['generic', 'staged', 'standalone'].includes(writer);
+      const kind = {
+        kind: agents ? 'agents' : 'skills', home: '', destSubpath: agents ? 'agents' : 'skills',
+        prefix: 'gsd-', converter: 'convertClaudeCommandToOpencodeSkill', stage: () => stage,
+      };
+      layout = { runtime: 'qwen', configDir, scope: 'local', kinds: [kind] };
+      const expectedDest = path.join(configDir, kind.destSubpath);
+      assert.equal(plan.resolveRuntimeArtifactDestination(configDir, kind), expectedDest);
+      assert.equal(plan.createRuntimeArtifactUninstallPlan(layout).items[0].destDir, expectedDest);
+      if (writer === 'generic') engine.installRuntimeArtifacts('qwen', configDir, 'local', RESOLVED_CORE);
+      if (writer === 'staged') engine._copyStaged(stage, expectedDest, kind, configDir, 'qwen');
+      if (writer === 'standalone') engine.installAgentsKindStandalone('qwen', configDir, 'local', RESOLVED_CORE, './');
+      if (writer === 'combined-family') engine.installOpencodeFamilySkills('opencode', configDir, stage, './');
+      if (writer === 'dev-preferences') engine.migrateLegacyDevPreferencesToSkill(configDir, new Map([['dev-preferences.md', '# Proof\n']]), 'qwen', 'local');
+      const written = agents ? 'gsd-proof.md' : path.join(writer === 'combined-family' ? 'gsd-help' : 'gsd-dev-preferences', 'SKILL.md');
+      assert.ok(fs.readFileSync(path.join(expectedDest, written), 'utf8').includes('# Proof'), writer);
+    }
+  });
+
+  for (const writer of ['combined-family', 'dev-preferences']) {
+    for (const home of ['', 42]) {
+      test(`${writer} uses the preflight root contract for home ${JSON.stringify(home)}`, (t) => {
+        const root = createTempDir('gsd-5179-parity-');
+        t.after(() => cleanup(root));
+        sandboxHome(t, root);
+        const kind = { kind: 'skills', home, destSubpath: 'skills', prefix: 'gsd-', converter: 'convertClaudeCommandToOpencodeSkill' };
+        t.mock.method(layoutModule, 'resolveRuntimeArtifactLayout', () => ({ runtime: 'opencode', configDir: root, scope: 'local', kinds: [kind] }));
+        const commands = path.join(root, 'raw-commands');
+        fs.mkdirSync(commands);
+        fs.writeFileSync(path.join(commands, 'help.md'), '---\ndescription: Help\n---\n# Help\n');
+        const write = () => writer === 'combined-family'
+          ? engine.installOpencodeFamilySkills('opencode', root, commands, './')
+          : engine.migrateLegacyDevPreferencesToSkill(root, new Map([['dev-preferences.md', '# preferences\n']]), 'opencode', 'local');
+        if (typeof home !== 'string') {
+          assert.throws(write, { name: 'TypeError', message: 'Artifact home must be a string, null, or undefined' });
+        } else {
+          assert.equal(plan.resolveRuntimeArtifactInstallRoot(root, kind), root);
+          const expectedRoot = root;
+          write();
+          assert.ok(fs.existsSync(path.join(expectedRoot, 'skills', writer === 'combined-family' ? 'gsd-help' : 'gsd-dev-preferences', 'SKILL.md')));
+        }
+      });
+    }
+  }
+});
+
