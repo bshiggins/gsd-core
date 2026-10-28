@@ -9614,3 +9614,33 @@ describe('#5179 review writer root parity', () => {
   }
 });
 
+
+describe('#5179 direct hooks destination resolution', () => {
+  const { resolveCodexHooksJsonDestination } = require('../gsd-core/bin/lib/runtime-hooks-surface.cjs');
+  test('resolveCodexHooksJsonDestination preserves trust and opt-in target semantics without writes', (t) => {
+    const root = createTempDir('gsd-5179-hooks-destination-');
+    t.after(() => cleanup(root));
+    const configDir = path.join(root, 'config');
+    fs.mkdirSync(configDir);
+    const nominal = path.join(configDir, 'hooks.json');
+    assert.equal(resolveCodexHooksJsonDestination(configDir), nominal);
+    assert.equal(fs.existsSync(nominal), false);
+    const external = path.join(root, 'external.json');
+    fs.writeFileSync(external, '{}\n');
+    try { fs.symlinkSync(external, nominal, 'file'); } catch (error) {
+      if (['EPERM', 'EACCES', 'ENOTSUP'].includes(error.code)) { t.skip(`symlink creation unavailable: ${error.code}`); return; }
+      throw error;
+    }
+    const before = snapshotInstallSymlinkTree(root, 'hooks');
+    const original = process.env.GSD_ALLOW_SYMLINKED_DEST;
+    t.after(() => {
+      if (original === undefined) delete process.env.GSD_ALLOW_SYMLINKED_DEST;
+      else process.env.GSD_ALLOW_SYMLINKED_DEST = original;
+    });
+    delete process.env.GSD_ALLOW_SYMLINKED_DEST;
+    assert.throws(() => resolveCodexHooksJsonDestination(configDir), /hooks\.json at .* contains a symlink/);
+    process.env.GSD_ALLOW_SYMLINKED_DEST = '1';
+    assert.equal(resolveCodexHooksJsonDestination(configDir), fs.realpathSync(external));
+    assert.deepEqual(snapshotInstallSymlinkTree(root, 'hooks'), before);
+  });
+});

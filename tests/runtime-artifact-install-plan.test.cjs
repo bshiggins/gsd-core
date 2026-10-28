@@ -206,3 +206,59 @@ describe('#5179 plan roots reject malformed homes', () => {
     }
   }
 });
+
+
+describe('#5179 direct preflight decisions', () => {
+  const plan = require('../gsd-core/bin/lib/runtime-artifact-install-plan.cjs');
+  const fc = require('./helpers/fast-check-setup.cjs');
+
+  test('shouldInstallCombinedFamily follows the declared family flag', () => {
+    assert.equal(plan.shouldInstallCombinedFamily({}), false);
+    assert.equal(plan.shouldInstallCombinedFamily({ combinedFamilyInstall: false }), false);
+    assert.equal(plan.shouldInstallCombinedFamily({ combinedFamilyInstall: true }), true);
+  });
+
+  test('isLegacyFlatLocalInstall requires both local scope and legacy-flat style', () => {
+    for (const [scope, style, expected] of [
+      ['local', 'legacy-flat', true], ['global', 'legacy-flat', false],
+      ['local', 'skills', false], ['local', undefined, false],
+    ]) assert.equal(plan.isLegacyFlatLocalInstall({ localInstallStyle: style }, scope), expected);
+  });
+
+  test('shouldInstallStandaloneAgents excludes plugin-only and layout installs', () => {
+    for (const [pluginOnly, skillsRuntime, expected] of [
+      [false, false, true], [false, true, false], [true, false, false], [true, true, false],
+    ]) assert.equal(plan.shouldInstallStandaloneAgents(pluginOnly, skillsRuntime), expected);
+  });
+
+  test('requiredRuntimeSurfaceSources maps every kind only for global scope', () => {
+    for (const [kind, expected] of [
+      ['commands', ['commands']], ['skills', ['commands']], ['agents', ['agents']],
+      ['kimi-agents', ['agents']], ['unknown', []],
+    ]) {
+      assert.deepEqual([...plan.requiredRuntimeSurfaceSources({ kinds: [{ kind }] }, 'global')], expected);
+      assert.deepEqual([...plan.requiredRuntimeSurfaceSources({ kinds: [{ kind }] }, 'local')], []);
+    }
+    assert.deepEqual([...plan.requiredRuntimeSurfaceSources({ kinds: [{ kind: 'skills' }, { kind: 'commands' }, { kind: 'agents' }] }, 'global')], ['commands', 'agents']);
+  });
+
+  test('codexAgentRolesEnabled retains selected core agents and all non-core modes', () => {
+    for (const [mode, agents, expected] of [
+      ['minimal', new Set(), false], ['core-only', new Set(['gsd-planner']), true],
+      ['minimal', undefined, false], ['standard', new Set(), true], ['full', new Set(), true],
+    ]) assert.equal(plan.codexAgentRolesEnabled(mode, { agents }), expected);
+  });
+
+  test('resolveRuntimeArtifactInstallRoot normalizes only absent and empty homes', () => {
+    fc.assert(fc.property(fc.oneof(fc.string(), fc.jsonValue(), fc.constant(undefined)), (home) => {
+      const configDir = '/fixture/config';
+      if (home != null && typeof home !== 'string') {
+        assert.throws(() => plan.resolveRuntimeArtifactInstallRoot(configDir, { home }), TypeError);
+      } else {
+        const actual = plan.resolveRuntimeArtifactInstallRoot(configDir, { home });
+        if (home == null || home === '') assert.equal(actual, configDir);
+        else assert.equal(actual, home);
+      }
+    }));
+  });
+});
