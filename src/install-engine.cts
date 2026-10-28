@@ -609,7 +609,7 @@ function _resolveDevPreferencesSkillTarget(targetDir: string, runtime?: string, 
   return { skillFile: path.join(skillDir, 'SKILL.md'), installRoot, hasHomeOverride };
 }
 
-/** Read-only admission shared by preflight and the migration writer. */
+/** Read-only admission for the legacy preferences migration writer. */
 function canMigrateDevPreferencesToTarget(target: { skillFile: string; installRoot: string }): boolean {
   const { skillFile, installRoot } = target;
   const skillDir = path.dirname(skillFile);
@@ -643,19 +643,6 @@ function canMigrateDevPreferencesToTarget(target: { skillFile: string; installRo
     );
   }
   return true;
-}
-
-/** Front-run only the legacy migration path the install engine will enter. */
-function preflightLegacyDevPreferencesMigration(configDir: string, runtime: string, scope: string): void {
-  if (!hostBehaviorsFor(runtime).legacyCommandsGsdInstallMigration) return;
-  const legacyFile = path.join(configDir, 'commands', 'gsd', 'dev-preferences.md');
-  // Staged symlinks are restored rather than migrated, and unavailable staging
-  // skips the legacy migration altogether. Neither case earns a new refusal.
-  const source = tryLstat(legacyFile);
-  if (!source || !source.isFile()) return;
-  if (_tryResolveUserArtifactStagingRoot(configDir) === null) return;
-  const target = _resolveDevPreferencesSkillTarget(configDir, runtime, scope);
-  if (target) canMigrateDevPreferencesToTarget(target);
 }
 
 /**
@@ -2451,7 +2438,6 @@ export = {
   _resolveUserArtifactStagingRoot,
   _tryResolveUserArtifactStagingRoot,
   migrateLegacyDevPreferencesToSkill,
-  preflightLegacyDevPreferencesMigration,
   applyOpencodeFamilyPathPrefix,
   convertClaudeCommandToOpencodeSkill,
   convertClaudeCommandToKiloSkill,

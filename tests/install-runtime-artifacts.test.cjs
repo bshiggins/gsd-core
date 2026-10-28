@@ -9513,25 +9513,24 @@ describe('#5179 review migration refusal ordering', () => {
     }
   }
 
-  for (const leaf of [true, false]) {
-    test(`preflights legacy dev-preferences ${leaf ? 'leaf' : 'directory'} refusal before writes`, (t) => {
-      const root = createTempDir('gsd-5179-dev-prefs-');
+  test('caught dev-preferences symlink refusal restores legacy preferences and refreshes core with either opt-in state', (t) => {
+    for (const allowOptIn of [false, true]) {
+      const root = createTempDir('gsd-5179-caught-dev-prefs-');
       t.after(() => cleanup(root));
       const { configDir } = runMinimalInstall({ runtime: 'qwen', scope: 'global', root });
       fs.writeFileSync(path.join(configDir, 'gsd-core', 'VERSION'), '0.0.1\n');
       const legacyDir = path.join(configDir, 'commands', 'gsd');
       fs.mkdirSync(legacyDir, { recursive: true });
-      fs.writeFileSync(path.join(legacyDir, 'dev-preferences.md'), '# user preferences\n');
+      const legacyFile = path.join(legacyDir, 'dev-preferences.md');
+      const preferences = '# user preferences\n';
+      fs.writeFileSync(legacyFile, preferences);
       const skillDir = path.join(configDir, 'skills', 'gsd-dev-preferences');
       cleanup(skillDir);
       fs.mkdirSync(skillDir, { recursive: true });
-      const external = path.join(root, 'external-preferences');
-      fs.mkdirSync(external);
-      const destination = leaf ? path.join(skillDir, 'SKILL.md') : skillDir;
-      if (!leaf) cleanup(skillDir);
+      const skillFile = path.join(skillDir, 'SKILL.md');
+      const missingTarget = path.join(root, 'missing-preferences.md');
       try {
-        fs.symlinkSync(leaf ? path.join(external, 'missing.md') : external, destination,
-          leaf ? 'file' : (process.platform === 'win32' ? 'junction' : 'dir'));
+        fs.symlinkSync(missingTarget, skillFile, 'file');
       } catch (error) {
         if (['EPERM', 'EACCES', 'ENOTSUP'].includes(error.code)) {
           t.skip(`symlink creation unavailable: ${error.code}`);
@@ -9539,18 +9538,23 @@ describe('#5179 review migration refusal ordering', () => {
         }
         throw error;
       }
-      const before = snapshotInstallSymlinkTree(root, 'install');
+      const env = installerEnv({ HOME: root, USERPROFILE: root });
+      if (allowOptIn) env.GSD_ALLOW_SYMLINKED_DEST = '1';
+      else delete env.GSD_ALLOW_SYMLINKED_DEST;
       const result = runNode([INSTALL_SCRIPT, '--qwen', '--global', '--config-dir', configDir, '--no-legacy-cleanup'], {
-        env: installerEnv({ HOME: root, USERPROFILE: root, GSD_ALLOW_SYMLINKED_DEST: '' }),
-        timeoutMs: INSTALL_TIMEOUT_MS,
+        env, timeoutMs: INSTALL_TIMEOUT_MS,
       });
-      assertInstallSymlinkBranchPreserved({
-        result, output: stripAnsi(`${result.stdout}\n${result.stderr}`), before,
-        after: snapshotInstallSymlinkTree(root, 'install'),
-      }, leaf ? /migrateLegacyDevPreferencesToSkill: skillFile/ : /migrateLegacyDevPreferencesToSkill: skillDir/);
-    });
-  }
+      const output = stripAnsi(`${result.stdout}\n${result.stderr}`);
+      assert.equal(result.exitCode, 0, output);
+      assert.match(output, /dev-preferences\.md migration skipped.*restoring the legacy copy instead/);
+      assert.equal(fs.readFileSync(legacyFile, 'utf8'), preferences);
+      assert.equal(fs.readlinkSync(skillFile), missingTarget);
+      assert.equal(fs.existsSync(missingTarget), false);
+      assert.equal(fs.readFileSync(path.join(configDir, 'gsd-core', 'VERSION'), 'utf8'), require('../package.json').version);
+    }
+  });
 });
+
 
 describe('#5179 review writer root parity', () => {
   const engine = require('../gsd-core/bin/lib/install-engine.cjs');

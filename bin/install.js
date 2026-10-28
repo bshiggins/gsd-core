@@ -859,7 +859,6 @@ const {
   hasExistingSymlinkBetween,
   isSymlinkedDestOptIn,
   migrateLegacyDevPreferencesToSkill,
-  preflightLegacyDevPreferencesMigration,
   USER_OWNED_ARTIFACTS,
   _snapshotDir,
   createSkillDirOwnership,
@@ -950,10 +949,6 @@ function preflightInstallSymlinkDestinations(runtime, configDir, scope, installM
       }
       throw new Error(installRuntimeArtifactsSymlinkRefusalMessage(dest, installRoot));
     }
-  }
-
-  if (skillsRuntime && !combinedFamily) {
-    preflightLegacyDevPreferencesMigration(configDir, runtime, scope);
   }
 
   if (behaviors.tomlConfigInstall && codexAgentRolesEnabled(installMode, agentProfile)) {
