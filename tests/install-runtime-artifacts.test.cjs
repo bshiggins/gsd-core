@@ -9566,13 +9566,13 @@ describe('#5179 review writer root parity', () => {
     sandboxHome(t, root);
     let layout;
     t.mock.method(layoutModule, 'resolveRuntimeArtifactLayout', () => layout);
-    for (const writer of ['generic', 'staged', 'standalone', 'combined-family', 'dev-preferences']) {
+    for (const writer of ['generic', 'staged', 'standalone', 'combined-family', 'dev-preferences', 'apply-surface']) {
       const configDir = path.join(root, writer);
       fs.mkdirSync(configDir);
       const stage = path.join(configDir, 'stage');
       fs.mkdirSync(stage);
       fs.writeFileSync(path.join(stage, writer === 'combined-family' ? 'help.md' : 'gsd-proof.md'), '---\ndescription: Proof\n---\n# Proof\n');
-      const agents = ['generic', 'staged', 'standalone'].includes(writer);
+      const agents = ['generic', 'staged', 'standalone', 'apply-surface'].includes(writer);
       const kind = {
         kind: agents ? 'agents' : 'skills', home: '', destSubpath: agents ? 'agents' : 'skills',
         prefix: 'gsd-', converter: 'convertClaudeCommandToOpencodeSkill', stage: () => stage,
@@ -9585,6 +9585,7 @@ describe('#5179 review writer root parity', () => {
       if (writer === 'staged') engine._copyStaged(stage, expectedDest, kind, configDir, 'qwen');
       if (writer === 'standalone') engine.installAgentsKindStandalone('qwen', configDir, 'local', RESOLVED_CORE, './');
       if (writer === 'combined-family') engine.installOpencodeFamilySkills('opencode', configDir, stage, './');
+      if (writer === 'apply-surface') applySurface(configDir, layout, MANIFEST);
       if (writer === 'dev-preferences') engine.migrateLegacyDevPreferencesToSkill(configDir, new Map([['dev-preferences.md', '# Proof\n']]), 'qwen', 'local');
       const written = agents ? 'gsd-proof.md' : path.join(writer === 'combined-family' ? 'gsd-help' : 'gsd-dev-preferences', 'SKILL.md');
       assert.ok(fs.readFileSync(path.join(expectedDest, written), 'utf8').includes('# Proof'), writer);
