@@ -1000,8 +1000,8 @@ function prepareCodexAgentConfigContent(source, sourcePath, targetDir) {
 
 function codexAgentTomlName(file, source) {
   const { frontmatter } = extractFrontmatterAndBody(source);
-  // Composition preserves the header. Convert only that header for identity;
-  // if composition ever rewrites identity, resolve it here for both callers.
+  // Resolve identity from converted frontmatter, matching the header
+  // conversion in prepareCodexAgentConfigContent.
   return extractFrontmatterField(convertClaudeToCodexMarkdown(frontmatter), 'name') || file.replace(/\.md$/, '');
 }
 
