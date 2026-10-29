@@ -745,17 +745,19 @@ shopt -s nullglob 2>/dev/null; setopt NULL_GLOB 2>/dev/null
 gsd_run query phase.list-plans "$phase_number"
 gsd_run query roadmap.get-phase "$phase_number"
 # Research and summary artifacts
-for artifact in "${phase_dir:-$PHASE_DIR}"/{,*-}RESEARCH.md "${phase_dir:-$PHASE_DIR}"/{,*-}SUMMARY.md; do
-  [ -f "$artifact" ] || continue
-  printf '%s\n' "$artifact"
-done
+if [ -n "${phase_dir:-${PHASE_DIR:-}}" ]; then
+  for artifact in "${phase_dir:-$PHASE_DIR}"/{,*-}RESEARCH.md "${phase_dir:-$PHASE_DIR}"/{,*-}SUMMARY.md; do
+    [ -f "$artifact" ] || continue
+    printf '%s\n' "$artifact"
+  done
 
-# Smart-zone estimate check (#2631) — advisory, never fails the check.
-for plan in "${phase_dir:-$PHASE_DIR}"/*-PLAN.md; do
-  [ -f "$plan" ] || continue   # unmatched glob leaves the literal pattern — skip it
-  EST=$(sed -n '/^estimate:/,/^[a-z_]*:/p' "$plan" | grep -o 'tokens: *[0-9]*' | head -1 | grep -o '[0-9]*')
-  [ -n "$EST" ] && gsd_run query estimate-check --tokens "$EST" --calibrated 2>/dev/null || true
-done
+  # Smart-zone estimate check (#2631) — advisory, never fails the check.
+  for plan in "${phase_dir:-$PHASE_DIR}"/*-PLAN.md; do
+    [ -f "$plan" ] || continue   # unmatched glob leaves the literal pattern — skip it
+    EST=$(sed -n '/^estimate:/,/^[a-z_]*:/p' "$plan" | grep -o 'tokens: *[0-9]*' | head -1 | grep -o '[0-9]*')
+    [ -n "$EST" ] && gsd_run query estimate-check --tokens "$EST" --calibrated 2>/dev/null || true
+  done
+fi
 ```
 
 **Extract:** Phase goal, requirements (decompose goal), locked decisions, deferred ideas.
@@ -796,7 +798,11 @@ MUST_HAVES=$(gsd_run query frontmatter.get "$PLAN_PATH" --field must_haves)
 
 Returns JSON: `{ "must_haves": { "truths": [...], "artifacts": [...], "key_links": [...] } }`
 
-If the result is `{ "error": "Field not found", ... }` (exit `0`), treat `must_haves` as missing and report a `must_haves_derivation` issue.
+Inspect the JSON even on exit `0`. `frontmatter.get` can return these error payloads:
+
+- `{ "error": "Field not found", "field": "must_haves" }` — report a `must_haves_derivation` issue.
+- `{ "error": "File not found", "path": "..." }` — the file is missing or empty; report that the plan could not be read.
+- `{ "error": "Frontmatter is not parseable YAML — fix the syntax error in the frontmatter block", "path": "..." }` — report the malformed frontmatter for repair.
 
 **Expected structure:**
 
@@ -879,13 +885,13 @@ Missing: No mention of fetch/API call → Issue: Key link not planned
 ## Step 8: Assess Scope
 
 ```bash
-gsd_run query verify.plan-structure "$PHASE_DIR/$PHASE-01-PLAN.md"
+PLAN_STRUCTURE=$(gsd_run query verify.plan-structure "$PHASE_DIR/$PHASE-01-PLAN.md") && STRUCTURE_EXIT=0 || STRUCTURE_EXIT=$?
 gsd_run query frontmatter.get "$PHASE_DIR/$PHASE-01-PLAN.md" --field files_modified
 ```
 
 Exit `0` / `1` are the verdict (`valid` true / false, read the JSON); any other status means the structure was not evaluated (Step 2).
 
-Use `task_count` from the structure result. Zero tasks (with the "No <task> elements found" warning) is a blocker. Thresholds: 2-3 tasks/plan good, 4 warning, 5+ blocker (split required).
+Use `task_count` from the structure result. Thresholds: 2-3 tasks/plan good, 4 warning, 5+ blocker (split required).
 
 ## Step 9: Verify must_haves Derivation
 

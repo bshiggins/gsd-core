@@ -96,7 +96,7 @@ describe('plan-checker discovers research and summary artifacts (#5178)', {
           'PHASE_DIR="$1"; PHASE=01; NODE="$2"; TOOLS="$3"',
           'gsd_run() { "$NODE" "$TOOLS" "$@"; }',
           lines.slice(block.openLineIdx + 1, block.closeLineIdx).join('\n'),
-          'printf "STATUS=%s\\n" "${STRUCTURE_EXIT:-uncaptured}"',
+          'printf "\\nSTATUS=%s\\n" "${STRUCTURE_EXIT:-uncaptured}"',
         ].join('\n');
         const result = runHook('-c', [script, 'scope-check', dir, process.execPath, path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs')], {
           interpreter: shell,

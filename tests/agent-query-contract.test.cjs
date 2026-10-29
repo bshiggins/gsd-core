@@ -20,7 +20,13 @@ const DOCUMENTED_ROOTS = [
 // The runtime probes render output for these roots instead of rejecting an
 // unknown subcommand, so they have no router-level subcommand list.
 const EXPECTED_ROOT_ONLY = new Set(['progress', 'stats']);
-const QUERY_PREFIX = String.raw`\b(?:gsd_run|gsd-tools)(?:\s+--cwd\s+(?:"(?:\\.|[^"\\])*"|'[^']*'|[^\s]+))?\s+query\s+`;
+// These documented routers have spaced subcommands but no dotted alias metadata.
+const SPACED_ROUTER_ROOTS = ['package-legitimacy', 'planning', 'research-store', 'review-lane'];
+const QUERY_PREFIX = String.raw`(?:\b(?:gsd_run|gsd-tools)|\bnode\s+"\$GSD_TOOLS"|"\$GSD_TOOLS")(?:\s+--cwd\s+(?:"(?:\\.|[^"\\])*"|'[^']*'|[^\s]+))?\s+query\s+`;
+
+function shellLines(content) {
+  return content.replace(/\\\r?\n/g, '').split(/\r?\n/);
+}
 
 function markdownFiles(dir) {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -39,7 +45,7 @@ function isExecutableCall(line, index) {
 
 function queryNames(content) {
   const names = [];
-  for (const line of content.split(/\r?\n/)) {
+  for (const line of shellLines(content)) {
     // Scan every occurrence, including shell substitutions, pipelines, and inline examples.
     const re = new RegExp(`${QUERY_PREFIX}([\\w.-]+)(?:\\s+([\\w.-]+))?`, 'g');
     let match;
@@ -57,7 +63,7 @@ test('queryNames finds every generated executable call and skips prose mentions'
     fc.stringMatching(/^[a-z][a-z0-9-]{0,7}$/),
   ).map(([root, subcommand]) => `${root}.${subcommand}`);
   const secondToken = fc.option(fc.stringMatching(/^[a-z][a-z0-9-]{0,7}$/), { nil: undefined });
-  const invoker = fc.constantFrom('gsd_run', 'gsd-tools', 'gsd_run --cwd X', 'gsd_run --cwd "path with spaces"');
+  const invoker = fc.constantFrom('gsd_run', 'gsd-tools', 'gsd_run --cwd X', 'gsd_run --cwd "path with spaces"', 'node "$GSD_TOOLS"', '"$GSD_TOOLS"');
   const placement = fc.constantFrom(
     (call) => call,
     (call) => `$(${call})`,
@@ -98,6 +104,7 @@ function runtimeRegisteredNames() {
   const commandList = runtime.TOP_LEVEL_USAGE.match(/Commands: ([^\n]+)/)?.[1] || '';
   for (const name of commandList.split(/,\s*/)) if (name) registered.add(name.trim());
   const families = new Set();
+  const routerRoots = new Set(SPACED_ROUTER_ROOTS);
   const capabilities = require('../gsd-core/bin/lib/capability-registry.cjs');
   for (const name of Object.keys(capabilities.commandFamilies)) registered.add(name);
   const phase = require('../gsd-core/bin/lib/phase.cjs');
@@ -114,11 +121,12 @@ function runtimeRegisteredNames() {
       if (!entry || typeof entry.canonical !== 'string') continue;
       registered.add(entry.canonical);
       if (entry.subcommand) families.add(entry.canonical.split('.')[0]);
+      else if (entry.canonical.includes('.')) routerRoots.add(entry.canonical.split('.')[0]);
       for (const alias of entry.aliases || []) registered.add(alias);
     }
   }
   const subcommands = new Map();
-  const dottedRoots = new Set();
+  const dottedRoots = new Set(routerRoots);
   for (const root of DOCUMENTED_ROOTS) {
     for (const file of markdownFiles(path.join(ROOT, root))) {
       for (const [name] of queryNames(fs.readFileSync(file, 'utf8'))) {
@@ -137,11 +145,12 @@ function runtimeRegisteredNames() {
       const result = runGsdTools([root, 'zz-agent-query-contract-probe'], dir);
       const error = result.error || '';
       const available = error.match(/Unknown\b[^\n]*\bsubcommand\b[^\n]*Available:\s*([^\r\n]+)/i);
-      if (!available) {
+      const usage = error.match(new RegExp(`Usage: ${root} <([\\w|.-]+)>`));
+      if (!available && !usage) {
         probedRootOnly.add(root);
         continue;
       }
-      subcommands.set(root, new Set(available[1].split(/,\s*/).filter(Boolean)));
+      subcommands.set(root, new Set(available ? available[1].split(/,\s*/).filter(Boolean) : usage[1].split('|')));
     }
   } finally {
     cleanup(dir);
@@ -160,7 +169,10 @@ function isRegistered(parts, registry) {
     const canonical = name.includes('.') ? name : `${name}.${subcommand || ''}`;
     return Boolean(subcommand || name.includes('.')) && (registry.registered.has(canonical) || registry.registered.has(canonical.replace('.', ' ')));
   }
-  if (!name.includes('.')) return registry.registered.has(name);
+  if (!name.includes('.')) {
+    if (registry.subcommands.has(name)) return registry.subcommands.get(name).has(subcommand);
+    return registry.registered.has(name);
+  }
   if (registry.registered.has(name)) return true;
   return registry.subcommands.get(root)?.has(name.slice(root.length + 1)) || false;
 }
@@ -233,6 +245,17 @@ test('spaced router-owned subcommands reject frontmatter bogus without rejecting
   ]);
 });
 
+for (const [root, valid] of [
+  ['package-legitimacy', 'check'], ['planning', 'inspect'],
+  ['research-store', 'put'], ['review-lane', 'plan'],
+]) {
+  test(`the spaced-only ${root} router checks its subcommand`, () => {
+    const registered = runtimeRegisteredNames();
+    assert.equal(isRegistered([root, 'bogus'], registered), false);
+    assert.equal(isRegistered([root, valid], registered), true);
+  });
+}
+
 for (const [label, invoker] of [
   ['node wrapper', 'node "$GSD_TOOLS"'],
   ['executable wrapper', '"$GSD_TOOLS"'],
@@ -294,7 +317,7 @@ for (const [label, content, expectedError] of [
 
 function frontmatterCalls(agent) {
   const calls = [];
-  for (const line of agent.split(/\r?\n/)) {
+  for (const line of shellLines(agent)) {
     const re = new RegExp(QUERY_PREFIX + 'frontmatter\\.get\\s+(.+?)(?=\\s*(?:\\)|\\|\\||&&|\\||;|`|$))', 'g');
     let match;
     while ((match = re.exec(line))) {
