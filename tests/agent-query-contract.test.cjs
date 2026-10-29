@@ -8,6 +8,7 @@ const fc = require('fast-check');
 const { runGsdTools, createTempProject, cleanup } = require('./helpers.cjs');
 const runtime = require('../gsd-core/bin/gsd-tools.cjs');
 const commandAliases = require('../gsd-core/bin/lib/command-aliases.cjs');
+const { collectSection } = require('../gsd-core/bin/lib/markdown-sectionizer.cjs');
 
 const ROOT = path.join(__dirname, '..');
 const AGENT_PATH = path.join(ROOT, 'agents', 'gsd-plan-checker.md');
@@ -213,6 +214,83 @@ test('a bad subcommand under a registered non-family root is rejected', () => {
     'tests/synthetic-query-contract.md: phase.plan-index',
   ]);
 });
+
+test('spaced router-owned subcommands reject frontmatter bogus without rejecting leaf arguments', () => {
+  const registered = runtimeRegisteredNames();
+  assert.deepEqual(findUnregisteredQueries([{
+    path: SYNTHETIC_PATH,
+    content: [
+      'gsd_run query frontmatter bogus',
+      'gsd_run query worktree bogus',
+      'gsd_run query state bogus',
+      'gsd_run query frontmatter get file --field status',
+      'gsd_run query resolve-model gsd-planner',
+    ].join('\n'),
+  }], registered), [
+    'tests/synthetic-query-contract.md: frontmatter bogus',
+    'tests/synthetic-query-contract.md: worktree bogus',
+    'tests/synthetic-query-contract.md: state bogus',
+  ]);
+});
+
+for (const [label, invoker] of [
+  ['node wrapper', 'node "$GSD_TOOLS"'],
+  ['executable wrapper', '"$GSD_TOOLS"'],
+  ['continuation before query', 'gsd_run \\\n  '],
+]) {
+  test(`query contracts recognize ${label}`, () => {
+    const content = `RESULT=$(${invoker} query synthetic.unregistered)`;
+    assert.deepEqual(findUnregisteredQueries([{ path: SYNTHETIC_PATH, content }], runtimeRegisteredNames()), [
+      'tests/synthetic-query-contract.md: synthetic.unregistered',
+    ]);
+    assert.deepEqual(frontmatterCalls(`${invoker} query frontmatter.get "file with spaces" --field status`), [
+      { planExpression: 'file with spaces', args: ['--field', 'status'], field: 'status' },
+    ]);
+  });
+}
+
+for (const [label, content] of [
+  ['query name', 'gsd-tools query \\\n  synthetic.unregistered'],
+  ['spaced subcommand', 'gsd_run query frontmatter \\\n  bogus'],
+]) {
+  test(`query contracts recognize a continued ${label}`, () => {
+    const expected = label === 'query name' ? 'synthetic.unregistered' : 'frontmatter bogus';
+    assert.deepEqual(findUnregisteredQueries([{ path: SYNTHETIC_PATH, content }], runtimeRegisteredNames()), [
+      `tests/synthetic-query-contract.md: ${expected}`,
+    ]);
+  });
+}
+
+test('frontmatter argument validation follows line continuations', () => {
+  assert.deepEqual(frontmatterCalls('gsd_run query frontmatter.get "file with spaces" \\\r\n  must_haves'), [
+    { planExpression: 'file with spaces', args: ['must_haves'], field: 'must_haves' },
+  ]);
+});
+
+test('scope guidance retains the base thresholds without a zero-task blocker', () => {
+  const scope = collectSection(fs.readFileSync(AGENT_PATH, 'utf8'), (heading) => heading.text === 'Step 8: Assess Scope');
+  assert.ok(scope);
+  assert.doesNotMatch(scope.body, /Zero tasks[^\n]*blocker/i);
+  assert.match(scope.body, /Thresholds: 2-3 tasks\/plan good, 4 warning, 5\+ blocker \(split required\)\./);
+});
+
+for (const [label, content, expectedError] of [
+  ['missing file', null, 'File not found'],
+  ['empty file', '', 'File not found'],
+  ['invalid YAML', '---\nmust_haves: [\n---\n# Plan\n', 'Frontmatter is not parseable YAML — fix the syntax error in the frontmatter block'],
+]) {
+  test(`frontmatter guidance documents the exit-zero error for ${label}`, (t) => {
+    const dir = createTempProject('agent-query-error-');
+    t.after(() => cleanup(dir));
+    const planPath = path.join(dir, 'PLAN.md');
+    if (content !== null) fs.writeFileSync(planPath, content);
+    const result = runGsdTools(['query', 'frontmatter.get', planPath, '--field', 'must_haves'], dir);
+    assert.equal(result.exitCode, 0, result.error);
+    assert.equal(JSON.parse(result.output).error, expectedError);
+    const guidance = collectSection(fs.readFileSync(AGENT_PATH, 'utf8'), (heading) => heading.text === 'Step 3: Parse must_haves');
+    assert.ok(guidance.body.includes(expectedError), `Step 3 must document ${expectedError}`);
+  });
+}
 
 function frontmatterCalls(agent) {
   const calls = [];

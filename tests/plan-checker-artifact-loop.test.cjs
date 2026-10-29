@@ -25,7 +25,7 @@ function artifactBlock() {
   return blocks[0];
 }
 
-function runArtifactBlock(t, shell, files) {
+function runArtifactBlock(t, shell, files, variable = 'phase_dir') {
   const dir = createTempProject('plan-checker-artifacts-5178-');
   t.after(() => cleanup(dir));
   const phaseDir = path.join(dir, '.planning', 'phases', '01-fixture phase');
@@ -33,7 +33,10 @@ function runArtifactBlock(t, shell, files) {
   for (const file of files) fs.writeFileSync(path.join(phaseDir, file), '');
 
   // Only query execution is stubbed; query contracts are covered by agent-query-contract.test.cjs.
-  const script = ['gsd_run() { :; }', 'phase_number=01', 'phase_dir="$1"', artifactBlock()].join('\n');
+  const binding = variable === 'unset'
+    ? 'unset phase_dir PHASE_DIR\nset -u'
+    : `${variable}="$1"`;
+  const script = ['gsd_run() { :; }', 'phase_number=01', binding, artifactBlock()].join('\n');
   const result = runHook('-c', [script, 'artifact-loop', toPosixPath(phaseDir)], {
     interpreter: shell,
     cwd: dir,
@@ -66,5 +69,45 @@ describe('plan-checker discovers research and summary artifacts (#5178)', {
       const result = runArtifactBlock(t, shell, ['RESEARCH.md']);
       assert.deepEqual(result.paths, [toPosixPath(path.join(result.phaseDir, 'RESEARCH.md'))]);
     });
+
+    test(`${shell}: absent phase variables skip both Step 1 loops safely (#5178)`, { skip }, (t) => {
+      const result = runArtifactBlock(t, shell, [], 'unset');
+      assert.deepEqual(result.paths, []);
+    });
+
+    test(`${shell}: PHASE_DIR fallback discovers artifacts (#5178)`, { skip }, (t) => {
+      const result = runArtifactBlock(t, shell, ['RESEARCH.md'], 'PHASE_DIR');
+      assert.deepEqual(result.paths, [toPosixPath(path.join(result.phaseDir, 'RESEARCH.md'))]);
+    });
+
+    for (const [label, content, exitCode] of [
+      ['valid', '---\nphase: 1\nplan: 1\ntype: execute\nwave: 1\ndepends_on: []\nfiles_modified: []\nautonomous: true\nmust_haves: {}\n---\n# Plan\n', 0],
+      ['invalid', '# Plan without frontmatter\n', 1],
+    ]) {
+      test(`${shell}: Step 8 captures the ${label} structure verdict (#5178)`, { skip }, (t) => {
+        const dir = createTempProject('plan-checker-scope-5178-');
+        t.after(() => cleanup(dir));
+        fs.writeFileSync(path.join(dir, '01-01-PLAN.md'), content);
+        const section = collectSection(fs.readFileSync(AGENT_PATH, 'utf8'), (heading) => heading.text === 'Step 8: Assess Scope');
+        const lines = section.body.split(/\r?\n/);
+        const block = scanFencedBlocks(lines).find((fence) => fence.infoString === 'bash');
+        assert.ok(block);
+        const script = [
+          'PHASE_DIR="$1"; PHASE=01; NODE="$2"; TOOLS="$3"',
+          'gsd_run() { "$NODE" "$TOOLS" "$@"; }',
+          lines.slice(block.openLineIdx + 1, block.closeLineIdx).join('\n'),
+          'printf "STATUS=%s\\n" "${STRUCTURE_EXIT:-uncaptured}"',
+        ].join('\n');
+        const result = runHook('-c', [script, 'scope-check', dir, process.execPath, path.join(__dirname, '..', 'gsd-core', 'bin', 'gsd-tools.cjs')], {
+          interpreter: shell,
+          cwd: dir,
+          env: { PATH: process.env.PATH, HOME: dir, ZDOTDIR: dir },
+          timeoutMs: PROBE_TIMEOUT_MS,
+        });
+        assert.equal(result.outcome, OUTCOME.EXITED, JSON.stringify(result));
+        assert.equal(result.exitCode, 0, result.stderr);
+        assert.ok(result.stdout.split(/\r?\n/).includes(`STATUS=${exitCode}`), result.stdout);
+      });
+    }
   }
 });
