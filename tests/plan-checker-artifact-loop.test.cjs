@@ -107,6 +107,8 @@ describe('plan-checker discovers research and summary artifacts (#5178)', {
         assert.equal(result.outcome, OUTCOME.EXITED, JSON.stringify(result));
         assert.equal(result.exitCode, 0, result.stderr);
         assert.ok(result.stdout.split(/\r?\n/).includes(`STATUS=${exitCode}`), result.stdout);
+        const structure = JSON.parse(result.stdout.slice(0, result.stdout.indexOf('}\n') + 1));
+        assert.equal(structure.valid, exitCode === 0);
       });
     }
   }

@@ -439,3 +439,108 @@ test('zero XML tasks produces a warning and an invalid plan exits one with JSON'
   assert.equal(invalidParsed.valid, false);
   assert.ok(invalidParsed.errors.length > 0);
 });
+
+
+// Literal classification independently checked against each router's actual rejection.
+const CLOSED_ROUTER_ROOTS = new Set([
+  'state', 'phase', 'roadmap', 'verify', 'validate', 'init', 'capability', 'git',
+  'research-store', 'agent', 'check', 'commit-docs-guard', 'template', 'task',
+  'frontmatter', 'eval', 'verification', 'quick-batch', 'phases', 'planning',
+  'assumption-delta', 'requirements', 'milestone', 'uat', 'todo', 'scaffold',
+  'loop', 'workstream', 'worktree', 'learnings', 'review-lane', 'package-legitimacy',
+  'effort', 'user-story', 'drift-guard', 'windows', 'skills-root',
+]);
+const BOGUS_SUBCOMMAND = 'zz-agent-query-contract-probe';
+let hostRouterProbes;
+function probeHostRouters() {
+  if (hostRouterProbes) return hostRouterProbes;
+  hostRouterProbes = new Map();
+  for (const root of Object.keys(runtime.HOST_COMMAND_ROUTERS)) {
+    const dir = createTempProject('agent-query-router-');
+    try {
+      // No ambient credentials or config homes: leaf probes can only write fixtures.
+      const env = Object.fromEntries(Object.keys(process.env).map((key) => [key, undefined]));
+      Object.assign(env, { HOME: dir, USERPROFILE: dir, PATH: process.env.PATH,
+        TMPDIR: fs.realpathSync(require('node:os').tmpdir()), GIT_CONFIG_NOSYSTEM: '1',
+        SystemRoot: process.env.SystemRoot });
+      const bogus = runGsdTools(['query', root, BOGUS_SUBCOMMAND], dir, env);
+      const bare = CLOSED_ROUTER_ROOTS.has(root) ? runGsdTools(['query', root], dir, env) : null;
+      hostRouterProbes.set(root, { bogus, bare });
+    } finally {
+      cleanup(dir);
+    }
+  }
+  return hostRouterProbes;
+}
+
+for (const root of Object.keys(runtime.HOST_COMMAND_ROUTERS)) {
+  test(`router ${root}: bogus dispatch name agrees with the runtime`, () => {
+    const result = probeHostRouters().get(root).bogus;
+    const rejected = /Unknown.*(?:subcommand|workflow|scaffold type|runtime)|Usage: review-lane </i.test(result.error || '');
+    assert.equal(rejected, CLOSED_ROUTER_ROOTS.has(root), `update the audited classification for ${root}: ${result.error}`);
+    assert.equal(isRegistered([root, BOGUS_SUBCOMMAND], runtimeRegisteredNames()), !CLOSED_ROUTER_ROOTS.has(root), result.error);
+  });
+}
+
+test('bare query state remains registered when its default runtime operation succeeds', () => {
+  assert.equal(probeHostRouters().get('state').bare.exitCode, 0);
+  assert.equal(isRegistered(['state'], runtimeRegisteredNames()), true);
+});
+
+for (const [label, content] of [
+  ['negated if', 'if ! gsd_run query synthetic.unregistered; then :; fi'],
+  ['negation', '! gsd_run query synthetic.unregistered'],
+  ['assignment prefix', 'NAME=value gsd_run query synthetic.unregistered'],
+  ['quoted assignment prefix', 'NAME="a b" gsd_run query synthetic.unregistered'],
+  ['env prefix', 'env NAME=value gsd_run query synthetic.unregistered'],
+  ['env options', 'env -i -u NAME OTHER=value gsd_run query synthetic.unregistered'],
+  ['cwd equals', 'gsd_run --cwd=/tmp query synthetic.unregistered'],
+  ['quoted cwd equals', 'gsd_run --cwd="path with spaces" query synthetic.unregistered'],
+  ['braced node variable', 'node "${GSD_TOOLS}" query synthetic.unregistered'],
+  ['unquoted node variable', 'node $GSD_TOOLS query synthetic.unregistered'],
+  ['literal node path', 'node ~/.claude/gsd-core/bin/gsd-tools.cjs query synthetic.unregistered'],
+  ['quoted literal node path', 'node "$HOME/.claude/gsd-core/bin/gsd-tools.cjs" query synthetic.unregistered'],
+  ['braced executable variable', '"${GSD_TOOLS}" query synthetic.unregistered'],
+  ['brace group', '{ gsd_run query synthetic.unregistered; }'],
+  ['subshell group', '(gsd_run query synthetic.unregistered)'],
+  ['time prefix', 'time gsd_run query synthetic.unregistered'],
+]) {
+  test(`shell parser recognizes ${label}`, () => {
+    assert.deepEqual(queryNames(content), [['synthetic.unregistered']]);
+  });
+}
+
+for (const [label, content, expected] of [
+  ['descriptor duplication', 'gsd_run query state.load 2>&1', [['state.load']]],
+  ['raw flag', 'gsd_run query state.load --raw', [['state.load']]],
+  ['global flag before subcommand', 'gsd_run query frontmatter --raw get file', [['frontmatter', 'get']]],
+  ['bare root redirect', 'gsd_run query state 2>/dev/null', [['state']]],
+]) {
+  test(`shell parser separates ${label} from command names`, () => assert.deepEqual(queryNames(content), expected));
+}
+
+for (const [label, content, expected] of [
+  ['spaced get', 'gsd_run query frontmatter get "$P" must_haves', { planExpression: '$P', args: ['must_haves'], field: 'must_haves' }],
+  ['stderr redirect', 'X=$(gsd_run query frontmatter.get "$P" --field status 2>/dev/null)', { planExpression: '$P', args: ['--field', 'status'], field: 'status' }],
+  ['fd duplication', 'gsd_run query frontmatter get "$P" --field status 2>&1', { planExpression: '$P', args: ['--field', 'status'], field: 'status' }],
+  ['nested substitution', 'gsd_run query frontmatter.get "$(dirname "$PLAN")/x.md" --field status', { planExpression: '$(dirname "$PLAN")/x.md', args: ['--field', 'status'], field: 'status' }],
+  ['field equals', 'gsd_run query frontmatter.get "$P" --field=must_haves', { planExpression: '$P', args: ['--field=must_haves'], field: 'must_haves' }],
+  ['trailing comment', 'gsd_run query frontmatter.get "$P" --field status # note', { planExpression: '$P', args: ['--field', 'status'], field: 'status' }],
+  ['single-quoted newline', "gsd_run query frontmatter.get 'file\\\nname' --field status", { planExpression: 'file\\\nname', args: ['--field', 'status'], field: 'status' }],
+]) {
+  test(`frontmatter parser preserves argv for ${label}`, () => assert.deepEqual(frontmatterCalls(content), [expected]));
+}
+
+test('a spaced positional frontmatter field reaches the runtime argument validator', (t) => {
+  const calls = frontmatterCalls('gsd_run query frontmatter get "$P" must_haves');
+  assert.equal(calls.length, 1);
+  const dir = createTempProject('agent-query-spaced-');
+  t.after(() => cleanup(dir));
+  const fixture = path.join(dir, 'PLAN.md');
+  fs.writeFileSync(fixture, '---\nmust_haves: {}\n---\n');
+  assert.equal(runGsdTools(['query', 'frontmatter.get', fixture, ...calls[0].args], dir).success, false);
+});
+
+test('quoted heredoc content is data rather than executable query calls', () => {
+  assert.deepEqual(queryNames("cat <<'EOF'\ngsd_run query synthetic.unregistered\nEOF\n"), []);
+});
