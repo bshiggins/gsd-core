@@ -609,42 +609,6 @@ function _resolveDevPreferencesSkillTarget(targetDir: string, runtime?: string, 
   return { skillFile: path.join(skillDir, 'SKILL.md'), installRoot, hasHomeOverride };
 }
 
-/** Read-only admission for the legacy preferences migration writer. */
-function canMigrateDevPreferencesToTarget(target: { skillFile: string; installRoot: string }): boolean {
-  const { skillFile, installRoot } = target;
-  const skillDir = path.dirname(skillFile);
-  // Security fix: `existsSync` FOLLOWS symlinks and reports `false` for a
-  // DANGLING one, so the prior `existsSync(skillFile)` check never even saw a
-  // dangling symlink planted AT the leaf (e.g.
-  // `<installRoot>/skills/gsd-dev-preferences/SKILL.md ->
-  // ~/.ssh/authorized_keys`) — it fell through past this "already migrated"
-  // bail, past the symlink-escape guard below (which only walks to `skillDir`,
-  // the parent DIRECTORY, and never lstats the leaf FILE itself), and into
-  // `writeFileSync`, which DOES follow symlinks and would have written
-  // attacker-chosen `saved` content to the symlink's target. `tryLstat` never
-  // follows a symlink and distinguishes "a real file is already here" (skip,
-  // same as before) from "a symlink (dangling or not) is planted here"
-  // (refuse — this is never a legitimate prior-migration state).
-  const skillFileLstat = tryLstat(skillFile);
-  if (skillFileLstat) {
-    if (skillFileLstat.isSymbolicLink()) {
-      throw new Error(
-        `migrateLegacyDevPreferencesToSkill: skillFile "${skillFile}" is a symlink — refusing to write dev-preferences.md content through it (would follow the link and write to its target).`,
-      );
-    }
-    return false; // a real file is already there — already migrated, skip
-  }
-  // Symlink-escape guard: reject if any path component between installRoot and
-  // skillDir is a symlink that would redirect writes outside the install root.
-  // #2393: honor GSD_ALLOW_SYMLINKED_DEST for intentional user-owned symlink layouts.
-  if (hasExistingSymlinkBetween(path.resolve(installRoot), skillDir, { allowOptInFollow: isSymlinkedDestOptIn() })) {
-    throw new Error(
-      `migrateLegacyDevPreferencesToSkill: skillDir "${skillDir}" contains a symlink the install root "${installRoot}" does not trust — refusing to write. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`,
-    );
-  }
-  return true;
-}
-
 /**
  * @param deps - #3712 test seam, mirroring the one on `installRuntimeArtifacts`
  *   and `uninstallRuntimeArtifacts`. This is the SIXTH writer that resolves a
@@ -683,9 +647,37 @@ function migrateLegacyDevPreferencesToSkill(
       { kind: 'skills', home: path.dirname(target.skillFile) },
     ], { os: deps.os, env: deps.env });
   }
-  if (!canMigrateDevPreferencesToTarget(target)) return false;
-  const { skillFile } = target;
+  const { skillFile, installRoot } = target;
   const skillDir = path.dirname(skillFile);
+  // Security fix: `existsSync` FOLLOWS symlinks and reports `false` for a
+  // DANGLING one, so the prior `existsSync(skillFile)` check never even saw a
+  // dangling symlink planted AT the leaf (e.g.
+  // `<installRoot>/skills/gsd-dev-preferences/SKILL.md ->
+  // ~/.ssh/authorized_keys`) — it fell through past this "already migrated"
+  // bail, past the symlink-escape guard below (which only walks to `skillDir`,
+  // the parent DIRECTORY, and never lstats the leaf FILE itself), and into
+  // `writeFileSync`, which DOES follow symlinks and would have written
+  // attacker-chosen `saved` content to the symlink's target. `tryLstat` never
+  // follows a symlink and distinguishes "a real file is already here" (skip,
+  // same as before) from "a symlink (dangling or not) is planted here"
+  // (refuse — this is never a legitimate prior-migration state).
+  const skillFileLstat = tryLstat(skillFile);
+  if (skillFileLstat) {
+    if (skillFileLstat.isSymbolicLink()) {
+      throw new Error(
+        `migrateLegacyDevPreferencesToSkill: skillFile "${skillFile}" is a symlink — refusing to write dev-preferences.md content through it (would follow the link and write to its target).`,
+      );
+    }
+    return false; // a real file is already there — already migrated, skip
+  }
+  // Symlink-escape guard: reject if any path component between installRoot and
+  // skillDir is a symlink that would redirect writes outside the install root.
+  // #2393: honor GSD_ALLOW_SYMLINKED_DEST for intentional user-owned symlink layouts.
+  if (hasExistingSymlinkBetween(path.resolve(installRoot), skillDir, { allowOptInFollow: isSymlinkedDestOptIn() })) {
+    throw new Error(
+      `migrateLegacyDevPreferencesToSkill: skillDir "${skillDir}" contains a symlink the install root "${installRoot}" does not trust — refusing to write. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`,
+    );
+  }
   try {
     installFs().mkdirSync(skillDir, { recursive: true });
     installFs().writeFileSync(skillFile, saved.get('dev-preferences.md')!, 'utf8');
