@@ -886,6 +886,7 @@ Missing: No mention of fetch/API call → Issue: Key link not planned
 
 ```bash
 PLAN_STRUCTURE=$(gsd_run query verify.plan-structure "$PHASE_DIR/$PHASE-01-PLAN.md") && STRUCTURE_EXIT=0 || STRUCTURE_EXIT=$?
+echo "$PLAN_STRUCTURE"
 gsd_run query frontmatter.get "$PHASE_DIR/$PHASE-01-PLAN.md" --field files_modified
 ```
 

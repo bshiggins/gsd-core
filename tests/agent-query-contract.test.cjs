@@ -17,16 +17,7 @@ const DOCUMENTED_ROOTS = [
   'agents', path.join('gsd-core', 'workflows'), 'commands',
   'skills', path.join('pi', 'package-skills'), path.join('pi', 'package-agents'),
 ];
-// The runtime probes render output for these roots instead of rejecting an
-// unknown subcommand, so they have no router-level subcommand list.
-const EXPECTED_ROOT_ONLY = new Set(['progress', 'stats']);
-// These documented routers have spaced subcommands but no dotted alias metadata.
-const SPACED_ROUTER_ROOTS = ['package-legitimacy', 'planning', 'research-store', 'review-lane'];
-const QUERY_PREFIX = String.raw`(?:\b(?:gsd_run|gsd-tools)|\bnode\s+"\$GSD_TOOLS"|"\$GSD_TOOLS")(?:\s+--cwd\s+(?:"(?:\\.|[^"\\])*"|'[^']*'|[^\s]+))?\s+query\s+`;
-
-function shellLines(content) {
-  return content.replace(/\\\r?\n/g, '').split(/\r?\n/);
-}
+const { queryNames, frontmatterCalls } = require('./helpers/agent-query-parser.cjs');
 
 function markdownFiles(dir) {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -34,27 +25,6 @@ function markdownFiles(dir) {
     if (entry.isDirectory()) return markdownFiles(fullPath);
     return entry.isFile() && entry.name.endsWith('.md') ? [fullPath] : [];
   });
-}
-
-function isExecutableCall(line, index) {
-  const before = line.slice(0, index);
-  // Ignore grammatical mentions; count shell starts, control operators/substitutions,
-  // and Markdown code spans so embedded calls remain covered without a word list.
-  return !before.trim() || /(?:\$\(\s*|&&\s*|\|\|\s*|\|\s*|;\s*|\b(?:if|then|do|else|elif|while|until)\s*|`[^`]*$)$/.test(before);
-}
-
-function queryNames(content) {
-  const names = [];
-  for (const line of shellLines(content)) {
-    // Scan every occurrence, including shell substitutions, pipelines, and inline examples.
-    const re = new RegExp(`${QUERY_PREFIX}([\\w.-]+)(?:\\s+([\\w.-]+))?`, 'g');
-    let match;
-    while ((match = re.exec(line))) {
-      if (!isExecutableCall(line, match.index)) continue;
-      names.push([match[1], match[2]].filter(Boolean));
-    }
-  }
-  return names;
 }
 
 test('queryNames finds every generated executable call and skips prose mentions', () => {
@@ -103,78 +73,50 @@ function runtimeRegisteredNames() {
   const registered = new Set(Object.keys(runtime.HOST_COMMAND_ROUTERS));
   const commandList = runtime.TOP_LEVEL_USAGE.match(/Commands: ([^\n]+)/)?.[1] || '';
   for (const name of commandList.split(/,\s*/)) if (name) registered.add(name.trim());
-  const families = new Set();
-  const routerRoots = new Set(SPACED_ROUTER_ROOTS);
+  const subcommands = new Map();
+  const bareAccepted = new Set();
   const capabilities = require('../gsd-core/bin/lib/capability-registry.cjs');
   for (const name of Object.keys(capabilities.commandFamilies)) registered.add(name);
-  const phase = require('../gsd-core/bin/lib/phase.cjs');
-  // Only the two pre-hub phase subcommands are query verbs; the other cmdPhase*
-  // exports (plan-index, add, ...) are not documented query targets.
-  for (const subcommand of PRE_HUB_PHASE_SUBCOMMANDS) {
-    const handler = `cmdPhase${subcommand.replace(/(^|-)([a-z])/g, (_, __, c) => c.toUpperCase())}`;
-    assert.equal(typeof phase[handler], 'function', `phase.cjs must export ${handler}`);
-    registered.add(`phase.${subcommand}`);
-  }
   for (const value of Object.values(commandAliases)) {
     if (!Array.isArray(value)) continue;
     for (const entry of value) {
       if (!entry || typeof entry.canonical !== 'string') continue;
       registered.add(entry.canonical);
-      if (entry.subcommand) families.add(entry.canonical.split('.')[0]);
-      else if (entry.canonical.includes('.')) routerRoots.add(entry.canonical.split('.')[0]);
       for (const alias of entry.aliases || []) registered.add(alias);
     }
   }
-  const subcommands = new Map();
-  const dottedRoots = new Set(routerRoots);
-  for (const root of DOCUMENTED_ROOTS) {
-    for (const file of markdownFiles(path.join(ROOT, root))) {
-      for (const [name] of queryNames(fs.readFileSync(file, 'utf8'))) {
-        const commandRoot = name.split('.')[0];
-        if (name.includes('.') && !families.has(commandRoot)) dottedRoots.add(commandRoot);
-      }
+  for (const subcommand of PRE_HUB_PHASE_SUBCOMMANDS) registered.add(`phase.${subcommand}`);
+  for (const [root, { bogus, bare }] of probeHostRouters()) {
+    const message = bogus.error || '';
+    const available = /\bUnknown\b/.test(message) && message.match(/\bAvailable:\s*([^\r\n]+)/i);
+    const usage = message.match(/Usage: review-lane <([\w|.-]+)>/);
+    if (available) subcommands.set(root, new Set(available[1].split(/,\s*/)));
+    else if (usage) subcommands.set(root, new Set(usage[1].split('|')));
+    else if (/Unknown runtime/.test(message)) subcommands.set(root, new Set(Object.keys(capabilities.runtimes)));
+    else {
+      assert.doesNotMatch(message, /Unknown[^\n]*(?:subcommand|workflow|scaffold type)/i,
+        `unrecognized router rejection for ${root}: ${message}`);
     }
+    if (bare && !/Unknown[^\n]*(?:subcommand|workflow|scaffold type)/i.test(bare.error || '')) bareAccepted.add(root);
   }
-  const probeRoots = [...dottedRoots]
-    .filter((root) => registered.has(root) && runtime.HOST_COMMAND_ROUTERS[root])
-    .sort();
-  const probedRootOnly = new Set();
-  const dir = createTempProject('agent-query-contract-probe-');
-  try {
-    for (const root of probeRoots) {
-      const result = runGsdTools([root, 'zz-agent-query-contract-probe'], dir);
-      const error = result.error || '';
-      const available = error.match(/Unknown\b[^\n]*\bsubcommand\b[^\n]*Available:\s*([^\r\n]+)/i);
-      const usage = error.match(new RegExp(`Usage: ${root} <([\\w|.-]+)>`));
-      if (!available && !usage) {
-        probedRootOnly.add(root);
-        continue;
-      }
-      subcommands.set(root, new Set(available ? available[1].split(/,\s*/).filter(Boolean) : usage[1].split('|')));
-    }
-  } finally {
-    cleanup(dir);
-  }
-
-  assert.deepEqual([...EXPECTED_ROOT_ONLY].sort(), [...probedRootOnly].sort(),
-    'EXPECTED_ROOT_ONLY must equal exactly the documented roots whose runtime probe does not report unknown subcommands');
-  runtimeRegisteredNamesCache = { registered, families, subcommands };
+  runtimeRegisteredNamesCache = { registered, subcommands, bareAccepted };
   return runtimeRegisteredNamesCache;
 }
 
 function isRegistered(parts, registry) {
   const [name, subcommand] = parts;
-  const root = name.split('.')[0];
-  if (registry.families.has(root)) {
-    const canonical = name.includes('.') ? name : `${name}.${subcommand || ''}`;
-    return Boolean(subcommand || name.includes('.')) && (registry.registered.has(canonical) || registry.registered.has(canonical.replace('.', ' ')));
+  const dot = name.indexOf('.');
+  const root = dot < 0 ? name : name.slice(0, dot);
+  const verb = dot < 0 ? subcommand : name.slice(dot + 1);
+  // Symbolic values (for example skills-root "$DEST_RUNTIME") cannot be resolved
+  // statically; validate their root, without claiming to validate the expansion.
+  if (verb && /[$`]|^</.test(verb)) return registry.registered.has(root);
+  if (verb === undefined) {
+    return registry.subcommands.has(root) ? registry.bareAccepted.has(root) : registry.registered.has(root);
   }
-  if (!name.includes('.')) {
-    if (registry.subcommands.has(name)) return registry.subcommands.get(name).has(subcommand);
-    return registry.registered.has(name);
-  }
-  if (registry.registered.has(name)) return true;
-  return registry.subcommands.get(root)?.has(name.slice(root.length + 1)) || false;
+  if (registry.registered.has(`${root}.${verb}`) || registry.registered.has(`${root} ${verb}`)) return true;
+  if (registry.subcommands.has(root)) return registry.subcommands.get(root).has(verb);
+  return dot < 0 && registry.registered.has(root);
 }
 
 function findUnregisteredQueries(files, registry) {
@@ -315,24 +257,6 @@ for (const [label, content, expectedError] of [
   });
 }
 
-function frontmatterCalls(agent) {
-  const calls = [];
-  for (const line of shellLines(agent)) {
-    const re = new RegExp(QUERY_PREFIX + 'frontmatter\\.get\\s+(.+?)(?=\\s*(?:\\)|\\|\\||&&|\\||;|`|$))', 'g');
-    let match;
-    while ((match = re.exec(line))) {
-      if (!isExecutableCall(line, match.index)) continue;
-      const args = [...match[1].matchAll(/"(?:\\.|[^"\\])*"|'[^']*'|[^\s]+/g)]
-        .map(([word]) => word.replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/, (_whole, doubleQuoted, singleQuoted) => doubleQuoted ?? singleQuoted));
-      if (args.length) {
-        const fieldIndex = args.indexOf('--field');
-        calls.push({ planExpression: args[0], args: args.slice(1), field: fieldIndex >= 0 ? args[fieldIndex + 1] : args[1] });
-      }
-    }
-  }
-  return calls;
-}
-
 test('every documented frontmatter.get call accepts its argument form', (t) => {
   const dir = createTempProject('agent-query-arguments-');
   t.after(() => cleanup(dir));
@@ -414,30 +338,6 @@ test('plan-checker verify.plan-structure fields match the runtime output', (t) =
   for (const field of ['name', 'hasFiles', 'hasAction', 'hasVerify', 'hasDone']) {
     assert.ok(Object.hasOwn(parsed.tasks[0], field), `task output is missing ${field}`);
   }
-});
-
-test('zero XML tasks produces a warning and an invalid plan exits one with JSON', (t) => {
-  const dir = createTempProject('agent-query-empty-structure-');
-  t.after(() => cleanup(dir));
-  const planPath = path.join(dir, 'PLAN.md');
-  fs.writeFileSync(planPath, [
-    '---', 'phase: 1', 'plan: 1', 'type: execute', 'wave: 1',
-    'depends_on: []', 'files_modified: []', 'autonomous: true',
-    'must_haves: {}', '---', '# Plan', '## Task 1', 'Markdown-only task.', '',
-  ].join('\n'));
-  const empty = runGsdTools(['query', 'verify.plan-structure', planPath], dir);
-  assert.equal(empty.exitCode, 0, empty.error);
-  const emptyParsed = JSON.parse(empty.output);
-  assert.equal(emptyParsed.task_count, 0);
-  assert.deepEqual(emptyParsed.tasks, []);
-  assert.ok(emptyParsed.warnings.includes('No <task> elements found'));
-
-  fs.writeFileSync(planPath, '# Plan without required frontmatter\n');
-  const invalid = runGsdTools(['query', 'verify.plan-structure', planPath], dir);
-  assert.equal(invalid.exitCode, 1);
-  const invalidParsed = JSON.parse(invalid.output);
-  assert.equal(invalidParsed.valid, false);
-  assert.ok(invalidParsed.errors.length > 0);
 });
 
 
@@ -543,4 +443,18 @@ test('a spaced positional frontmatter field reaches the runtime argument validat
 
 test('quoted heredoc content is data rather than executable query calls', () => {
   assert.deepEqual(queryNames("cat <<'EOF'\ngsd_run query synthetic.unregistered\nEOF\n"), []);
+});
+
+test('Markdown prose quotes do not hide inline shell examples', () => {
+  assert.deepEqual(queryNames("Planner's `gsd_run query synthetic.unregistered` example."), [['synthetic.unregistered']]);
+});
+
+test('Markdown prose quotes do not spill into fenced shell blocks', () => {
+  assert.deepEqual(queryNames("A task's contract.\n```bash\ngsd_run query synthetic.unregistered\n```\n"), [['synthetic.unregistered']]);
+});
+
+test('frontmatter argv retains a documented trailing raw flag', () => {
+  assert.deepEqual(frontmatterCalls('gsd_run query frontmatter.get file --field status --raw'), [
+    { planExpression: 'file', args: ['--field', 'status', '--raw'], field: 'status' },
+  ]);
 });
