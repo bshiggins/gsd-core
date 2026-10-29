@@ -207,7 +207,6 @@ describe('#5179 plan roots reject malformed homes', () => {
   }
 });
 
-
 describe('#5179 direct preflight decisions', () => {
   const plan = require('../gsd-core/bin/lib/runtime-artifact-install-plan.cjs');
   const fc = require('./helpers/fast-check-setup.cjs');
@@ -249,16 +248,47 @@ describe('#5179 direct preflight decisions', () => {
     ]) assert.equal(plan.codexAgentRolesEnabled(mode, { agents }), expected);
   });
 
+  for (const [type, expectedByPath] of [
+    ['rewrite-json', [true, true, false]],
+    ['remove-managed', [true, true, false]],
+    ['backup-and-remove', [true, true, false]],
+    ['record-baseline', [false, false, false]],
+    ['baseline-preserve-user', [false, false, false]],
+    ['prompt-user', [false, false, false]],
+    ['preserve-user', [false, false, false]],
+  ]) {
+    for (const [index, relPath] of ['hooks.json', 'config.toml', 'settings.json'].entries()) {
+      test(`plannedActionsMutateCodexHooksInputs classifies ${type} on ${relPath}`, () => {
+        assert.equal(plan.plannedActionsMutateCodexHooksInputs([{ type, relPath }]), expectedByPath[index]);
+      });
+    }
+  }
+
+  test('plannedActionsMutateCodexHooksInputs is false for no actions and finds later mutations', () => {
+    assert.equal(plan.plannedActionsMutateCodexHooksInputs([]), false);
+    assert.equal(plan.plannedActionsMutateCodexHooksInputs([
+      { type: 'preserve-user', relPath: 'hooks.json' },
+      { type: 'rewrite-json', relPath: 'settings.json' },
+      { type: 'remove-managed', relPath: 'config.toml' },
+    ]), true);
+  });
+
   test('resolveRuntimeArtifactInstallRoot normalizes only absent and empty homes', () => {
-    fc.assert(fc.property(fc.oneof(fc.string(), fc.jsonValue(), fc.constant(undefined)), (home) => {
+    const kindArbitrary = fc.oneof(
+      fc.constant(null),
+      fc.constant(undefined),
+      fc.record({ home: fc.oneof(fc.string(), fc.jsonValue(), fc.constant(undefined)) }),
+    );
+    fc.assert(fc.property(kindArbitrary, (kind) => {
       const configDir = '/fixture/config';
+      const home = kind?.home;
       if (home != null && typeof home !== 'string') {
-        assert.throws(() => plan.resolveRuntimeArtifactInstallRoot(configDir, { home }), TypeError);
+        assert.throws(() => plan.resolveRuntimeArtifactInstallRoot(configDir, kind), TypeError);
       } else {
-        const actual = plan.resolveRuntimeArtifactInstallRoot(configDir, { home });
+        const actual = plan.resolveRuntimeArtifactInstallRoot(configDir, kind);
         if (home == null || home === '') assert.equal(actual, configDir);
         else assert.equal(actual, home);
       }
-    }));
+    }), { examples: [[null], [undefined]] });
   });
 });

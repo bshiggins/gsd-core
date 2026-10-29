@@ -209,6 +209,12 @@ function codexAgentRolesEnabled(installMode: string, resolvedProfile: ResolvedPr
   return !isMinimalMode(installMode) || (resolvedProfile.agents instanceof Set && resolvedProfile.agents.size > 0);
 }
 
+function plannedActionsMutateCodexHooksInputs(actions: { relPath?: string; type: string }[]): boolean {
+  return actions.some((action) =>
+    (action.relPath === 'hooks.json' || action.relPath === 'config.toml') &&
+    ['rewrite-json', 'remove-managed', 'backup-and-remove'].includes(action.type));
+}
+
 function copyWithPathReplacementSymlinkRefusalMessage(destDir: string, installRoot: string): string {
   return `copyWithPathReplacement: destDir "${destDir}" contains a symlink the install root "${installRoot}" does not trust \u2014 refusing to write. If this is an intentional user-owned symlink layout, re-run with GSD_ALLOW_SYMLINKED_DEST=1.`;
 }
@@ -356,6 +362,7 @@ export = {
   shouldInstallStandaloneAgents,
   requiredRuntimeSurfaceSources,
   codexAgentRolesEnabled,
+  plannedActionsMutateCodexHooksInputs,
   copyWithPathReplacementSymlinkRefusalMessage,
   installRuntimeArtifactsSymlinkRefusalMessage,
   installOpencodeFamilySkillsSymlinkRefusalMessage,

@@ -620,7 +620,6 @@ const {
   loadSkillsManifest,
   stageSkillsForProfile,
   stageAgentsForProfile,
-  selectAgentFilesForProfile,
   stageSkillsForRuntimeAsSkills,
 } = require(path.join(_gsdLibDir, 'install-profiles.cjs'));
 // ADR-857 phase 4c: load capability registry (optional; missing → falls back to undefined)
@@ -815,6 +814,7 @@ const {
   assertDestWithinConfigHome,
   resolveRuntimeArtifactDestination,
   resolveRuntimeArtifactInstallRoot,
+  plannedActionsMutateCodexHooksInputs,
   shouldInstallCombinedFamily,
   isLegacyFlatLocalInstall,
   shouldInstallStandaloneAgents,
@@ -916,7 +916,7 @@ function isSkillsRuntimeInstall(runtime, scope) {
   return Array.isArray(scopeLayout) && scopeLayout.length > 0;
 }
 
-function preflightInstallSymlinkDestinations(runtime, configDir, scope, installMode, agentProfile, packageRoot, installerMigrations) {
+function preflightInstallSymlinkDestinations(runtime, configDir, scope, installMode, agentProfile, installerMigrations) {
   const check = (installRoot, destination, message) => {
     if (hasExistingSymlinkBetween(path.resolve(installRoot), destination, { allowOptInFollow: isSymlinkedDestOptIn() })) {
       throw new Error(message);
@@ -954,21 +954,11 @@ function preflightInstallSymlinkDestinations(runtime, configDir, scope, installM
   if (behaviors.tomlConfigInstall && codexAgentRolesEnabled(installMode, agentProfile)) {
     const configPath = assertDestWithinConfigHome(configDir, 'config.toml');
     const agentsTomlDir = assertDestWithinConfigHome(configDir, 'agents');
-    const resolvedRoot = path.resolve(configDir);
     check(configDir, configPath, installCodexConfigSymlinkRefusalMessage(configDir));
     check(configDir, path.resolve(agentsTomlDir), installCodexConfigSymlinkRefusalMessage(configDir));
-
-    const agentsSrc = path.join(packageRoot, 'agents');
-    const agentFiles = fs.readdirSync(agentsSrc, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && entry.name.startsWith('gsd-')).map((entry) => entry.name);
-    for (const file of selectAgentFilesForProfile(agentFiles, agentProfile)) {
-      const source = fs.readFileSync(path.join(agentsSrc, file), 'utf8');
-      const name = codexAgentTomlName(file, source);
-      const agentTomlPath = assertDestWithinConfigHome(agentsTomlDir, `${name}.toml`);
-      if (hasExistingSymlinkBetween(resolvedRoot, agentTomlPath, { allowOptInFollow: isSymlinkedDestOptIn() })) {
-        throw new Error(installCodexAgentTomlSymlinkRefusalMessage(agentTomlPath));
-      }
-    }
+    // The layout agents pass prunes gsd-* entries (including TOML symlinks)
+    // before installCodexConfig. Its leaf guard sees the replacement state,
+    // so front-running that guard here would introduce a new refusal.
   }
 
   if (resolveInstallPlan(runtime).installSurface === 'codex-toml') {
@@ -979,11 +969,11 @@ function preflightInstallSymlinkDestinations(runtime, configDir, scope, installM
     // this install's hooks/config inputs change (002 can itself be a no-op).
     // Defer only actual mutations of those inputs; the migration executor
     // and reconciler retain authority over publication and write failures.
+    // baselineScan intentionally stays off: migration 000 only records,
+    // preserves, or prompts; it cannot mutate hooks/config inputs. The real
+    // baseline scan and prompt resolution remain with the migration executor.
     const migrationPlan = planInstallerMigrations({ configDir, runtime, scope, migrations });
-    const changesCodexHooksInputs = migrationPlan.actions.some((action) =>
-      (action.relPath === 'hooks.json' || action.relPath === 'config.toml') &&
-      ['rewrite-json', 'remove-managed', 'backup-and-remove'].includes(action.type));
-    if (changesCodexHooksInputs) return;
+    if (plannedActionsMutateCodexHooksInputs(migrationPlan.actions)) return;
     const configPath = path.join(configDir, 'config.toml');
     let configContent = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '';
     if (codexAgentRolesEnabled(installMode, agentProfile)) {
@@ -11383,15 +11373,15 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
       );
     }
   }
-  // Preflight and _stageAgents use the same resolved profile and shared file
-  // selector; core's agent roles follow #5503's profile-derived selection too.
-  preflightInstallSymlinkDestinations(runtime, targetDir, _installScopeId, _effectiveInstallMode, _resolvedProfile, src, options.installerMigrations);
+  // Preflight's role gate and _stageAgents use the same resolved profile;
+  // core's agent roles follow #5503's profile-derived selection too.
+  preflightInstallSymlinkDestinations(runtime, targetDir, _installScopeId, _effectiveInstallMode, _resolvedProfile, options.installerMigrations);
 
   // #2875 (#1874-F19 anti-inertness, test-matrix C7): recover any user
   // artifact orphaned by a PRIOR install run that died between staging and
   // its own restore/discard, BEFORE this run's own preserve step stages
-  // anything new. The destination preflight above keeps this first write
-  // behind every symlink trust decision the install will need.
+  // anything new. Destination preflight runs before this recovery write;
+  // checks for destinations replaced before admission stay with the writers.
   {
     const _installEntryStagingRoot = _tryResolveUserArtifactStagingRoot(targetDir);
     if (_installEntryStagingRoot !== null) {
