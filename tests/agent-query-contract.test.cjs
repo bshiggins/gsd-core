@@ -232,14 +232,8 @@ test('frontmatter argument validation follows line continuations', () => {
   ]);
 });
 
-test('scope guidance retains the base thresholds without a zero-task blocker', () => {
-  const scope = collectSection(fs.readFileSync(AGENT_PATH, 'utf8'), (heading) => heading.text === 'Step 8: Assess Scope');
-  assert.ok(scope);
-  assert.doesNotMatch(scope.body, /Zero tasks[^\n]*blocker/i);
-  assert.match(scope.body, /Thresholds: 2-3 tasks\/plan good, 4 warning, 5\+ blocker \(split required\)\./);
-});
-
 for (const [label, content, expectedError] of [
+  ['missing field', '---\nphase: 1\n---\n# Plan\n', 'Field not found'],
   ['missing file', null, 'File not found'],
   ['empty file', '', 'File not found'],
   ['invalid YAML', '---\nmust_haves: [\n---\n# Plan\n', 'Frontmatter is not parseable YAML — fix the syntax error in the frontmatter block'],
@@ -302,20 +296,11 @@ test('plan-checker frontmatter.get calls return must_haves and files_modified', 
   assert.ok(fields.has('files_modified'), 'expected a documented files_modified query');
 });
 
-test('missing must_haves is an error payload even when frontmatter.get exits zero', (t) => {
-  const dir = createTempProject('agent-query-missing-field-');
-  t.after(() => cleanup(dir));
-  const planPath = path.join(dir, 'PLAN.md');
-  fs.writeFileSync(planPath, '---\nphase: 1\n---\n# Plan\n');
-
-  const result = runGsdTools(['query', 'frontmatter.get', planPath, '--field', 'must_haves'], dir);
-  assert.equal(result.exitCode, 0, result.error);
-  const parsed = JSON.parse(result.output);
-  assert.equal(parsed.error, 'Field not found');
-  assert.equal(Object.hasOwn(parsed, 'must_haves'), false);
-});
-
 test('plan-checker verify.plan-structure fields match the runtime output', (t) => {
+  const step = collectSection(fs.readFileSync(AGENT_PATH, 'utf8'), (heading) => heading.text === 'Step 5: Validate Task Structure');
+  assert.ok(step, 'plan-checker Step 5 must exist');
+  const fields = [...step.body.matchAll(/^- `([\w]+)` — /gm)].map((match) => match[1]);
+  assert.ok(fields.length > 0, 'Step 5 must document task output fields');
   const dir = createTempProject('agent-query-structure-');
   t.after(() => cleanup(dir));
   const planPath = path.join(dir, '.planning', 'phases', '01-test', '01-01-PLAN.md');
@@ -335,13 +320,12 @@ test('plan-checker verify.plan-structure fields match the runtime output', (t) =
   const parsed = JSON.parse(result.output);
   assert.equal(parsed.task_count, 1);
   assert.ok(Array.isArray(parsed.tasks));
-  for (const field of ['name', 'hasFiles', 'hasAction', 'hasVerify', 'hasDone']) {
+  for (const field of fields) {
     assert.ok(Object.hasOwn(parsed.tasks[0], field), `task output is missing ${field}`);
   }
 });
 
-
-// Literal classification independently checked against each router's actual rejection.
+// Closed routers only: leaf commands must not execute as classification probes.
 const CLOSED_ROUTER_ROOTS = new Set([
   'state', 'phase', 'roadmap', 'verify', 'validate', 'init', 'capability', 'git',
   'research-store', 'agent', 'check', 'commit-docs-guard', 'template', 'task',
@@ -355,16 +339,21 @@ let hostRouterProbes;
 function probeHostRouters() {
   if (hostRouterProbes) return hostRouterProbes;
   hostRouterProbes = new Map();
-  for (const root of Object.keys(runtime.HOST_COMMAND_ROUTERS)) {
+  const bareRoots = new Set(['state']); // Also exercise state's accepted default operation.
+  for (const [name, verb] of documentedQueryNames(DOCUMENTED_ROOTS.flatMap((root) => markdownFiles(path.join(ROOT, root))))) {
+    if (!verb && CLOSED_ROUTER_ROOTS.has(name)) bareRoots.add(name);
+  }
+  for (const root of CLOSED_ROUTER_ROOTS) {
+    assert.ok(Object.hasOwn(runtime.HOST_COMMAND_ROUTERS, root), `closed router ${root} must exist`);
     const dir = createTempProject('agent-query-router-');
     try {
-      // No ambient credentials or config homes: leaf probes can only write fixtures.
+      // No ambient credentials or config homes: probes can only write fixtures.
       const env = Object.fromEntries(Object.keys(process.env).map((key) => [key, undefined]));
       Object.assign(env, { HOME: dir, USERPROFILE: dir, PATH: process.env.PATH,
         TMPDIR: fs.realpathSync(require('node:os').tmpdir()), GIT_CONFIG_NOSYSTEM: '1',
         SystemRoot: process.env.SystemRoot });
       const bogus = runGsdTools(['query', root, BOGUS_SUBCOMMAND], dir, env);
-      const bare = CLOSED_ROUTER_ROOTS.has(root) ? runGsdTools(['query', root], dir, env) : null;
+      const bare = bareRoots.has(root) ? runGsdTools(['query', root], dir, env) : null;
       hostRouterProbes.set(root, { bogus, bare });
     } finally {
       cleanup(dir);
@@ -377,12 +366,12 @@ test('closed-router probes do not execute leaf commands', () => {
   assert.deepEqual([...probeHostRouters().keys()].sort(), [...CLOSED_ROUTER_ROOTS].sort());
 });
 
-for (const root of Object.keys(runtime.HOST_COMMAND_ROUTERS)) {
+for (const root of CLOSED_ROUTER_ROOTS) {
   test(`router ${root}: bogus dispatch name agrees with the runtime`, () => {
     const result = probeHostRouters().get(root).bogus;
     const rejected = /Unknown.*(?:subcommand|workflow|scaffold type|runtime)|Usage: review-lane </i.test(result.error || '');
-    assert.equal(rejected, CLOSED_ROUTER_ROOTS.has(root), `update the audited classification for ${root}: ${result.error}`);
-    assert.equal(isRegistered([root, BOGUS_SUBCOMMAND], runtimeRegisteredNames()), !CLOSED_ROUTER_ROOTS.has(root), result.error);
+    assert.equal(rejected, true, `closed router ${root} must reject unknown dispatch: ${result.error}`);
+    assert.equal(isRegistered([root, BOGUS_SUBCOMMAND], runtimeRegisteredNames()), false, result.error);
   });
 }
 

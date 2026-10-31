@@ -74,6 +74,7 @@ function isWorkstreamForwardingSweepLine(sign, body, addedBodies, removedBodies)
 
 // #5178: inserting the required --field flag repairs the shared query contract.
 // Require an exact added/removed pair so paths, fields and other content stay guarded.
+// Pairing is Set membership, not multiplicity: identical repeated lines collapse.
 function isFrontmatterFieldFlagMigration(sign, body, addedBodies, removedBodies) {
   const positionalTwin = (line) => line.replace(
     /(\b(?:gsd_run|gsd-tools)\s+query\s+frontmatter\.get\s+(?:"[^"]*"|'[^']*'|[^\s]+))\s+--field\s+([\w.-]+)(`?)$/,
@@ -216,6 +217,17 @@ describe('quick-batch: /gsd:quick command + workflow stay byte-identical (row 48
     assert.equal(isFrontmatterFieldFlagMigration('-', before, added, removed), true);
     assert.equal(isFrontmatterFieldFlagMigration('+', after, added, new Set()), false);
     assert.equal(isFrontmatterFieldFlagMigration('-', before, new Set(), removed), false);
+    for (const [positional, named] of [
+      ['`gsd_run query frontmatter.get "${item_dir}/${quick_id}-PLAN.md" depends_on`',
+        '`gsd_run query frontmatter.get "${item_dir}/${quick_id}-PLAN.md" --field depends_on`'],
+      ['gsd_run query frontmatter.get "plans with spaces/PLAN.md" depends_on',
+        'gsd_run query frontmatter.get "plans with spaces/PLAN.md" --field depends_on'],
+    ]) {
+      assert.equal(isFrontmatterFieldFlagMigration('+', named, new Set([named]), new Set([positional])), true);
+      assert.equal(isFrontmatterFieldFlagMigration('-', positional, new Set([named]), new Set([positional])), true);
+      assert.equal(isFrontmatterFieldFlagMigration('+', named, new Set([named]), new Set()), false);
+      assert.equal(isFrontmatterFieldFlagMigration('-', positional, new Set(), new Set([positional])), false);
+    }
     for (const changed of [
       after.replace('status', 'other_field'),
       after.replace('SUMMARY.md', 'PLAN.md'),

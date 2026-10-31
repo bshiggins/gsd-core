@@ -849,6 +849,7 @@ PLAN_STRUCTURE=$(gsd_run query verify.plan-structure "$PLAN_PATH") && STRUCTURE_
 Exit `0` / `1` are the verdict (`valid` true / false, read the JSON); any other status means the structure was not evaluated (Step 2).
 
 The `tasks` array in the result shows each task's completeness:
+- `name` — task name
 - `hasFiles` — files element present
 - `hasAction` — action element present
 - `hasVerify` — verify element present
@@ -856,7 +857,7 @@ The `tasks` array in the result shows each task's completeness:
 
 **Check:** valid task type (auto, checkpoint:*, tdd), auto tasks have files/action/verify/done, action is specific, verify is runnable, done is measurable.
 
-**For manual validation of specificity:** run `verify.plan-structure` for structure, and read each task's action, verify, and done text in the PLAN file to assess specificity.
+Read each task's action, verify, and done text in the PLAN file to assess specificity.
 
 ## Step 6: Verify Dependency Graph
 
@@ -885,7 +886,7 @@ Missing: No mention of fetch/API call → Issue: Key link not planned
 
 ```bash
 PLAN_STRUCTURE=$(gsd_run query verify.plan-structure "$PHASE_DIR/$PHASE-01-PLAN.md") && STRUCTURE_EXIT=0 || STRUCTURE_EXIT=$?
-echo "$PLAN_STRUCTURE"
+printf '%s\n' "$PLAN_STRUCTURE"
 gsd_run query frontmatter.get "$PHASE_DIR/$PHASE-01-PLAN.md" --field files_modified
 ```
 
