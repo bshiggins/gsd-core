@@ -373,6 +373,10 @@ function probeHostRouters() {
   return hostRouterProbes;
 }
 
+test('closed-router probes do not execute leaf commands', () => {
+  assert.deepEqual([...probeHostRouters().keys()].sort(), [...CLOSED_ROUTER_ROOTS].sort());
+});
+
 for (const root of Object.keys(runtime.HOST_COMMAND_ROUTERS)) {
   test(`router ${root}: bogus dispatch name agrees with the runtime`, () => {
     const result = probeHostRouters().get(root).bogus;

@@ -80,9 +80,10 @@ describe('plan-checker discovers research and summary artifacts (#5178)', {
       assert.deepEqual(result.paths, [toPosixPath(path.join(result.phaseDir, 'RESEARCH.md'))]);
     });
 
-    for (const [label, content, exitCode] of [
+    for (const [label, content, exitCode, taskName] of [
       ['valid', '---\nphase: 1\nplan: 1\ntype: execute\nwave: 1\ndepends_on: []\nfiles_modified: []\nautonomous: true\nmust_haves: {}\n---\n# Plan\n', 0],
       ['invalid', '# Plan without frontmatter\n', 1],
+      ['escaped JSON', '---\nphase: 1\nplan: 1\ntype: execute\nwave: 1\ndepends_on: []\nfiles_modified: []\nautonomous: true\nmust_haves: {}\n---\n<tasks><task type="auto"><name>Line one\nLine two</name><files>x.js</files><action>Act</action><verify>node --test</verify><done>Done</done></task></tasks>\n', 0, 'Line one\nLine two'],
     ]) {
       test(`${shell}: Step 8 captures the ${label} structure verdict (#5178)`, { skip }, (t) => {
         const dir = createTempProject('plan-checker-scope-5178-');
@@ -94,7 +95,7 @@ describe('plan-checker discovers research and summary artifacts (#5178)', {
         assert.ok(block);
         const script = [
           'PHASE_DIR="$1"; PHASE=01; NODE="$2"; TOOLS="$3"',
-          'gsd_run() { "$NODE" "$TOOLS" "$@"; }',
+          'gsd_run() { if [ "$2" = frontmatter.get ]; then printf "\\nFRONTMATTER\\n"; fi; "$NODE" "$TOOLS" "$@"; }',
           lines.slice(block.openLineIdx + 1, block.closeLineIdx).join('\n'),
           'printf "\\nSTATUS=%s\\n" "${STRUCTURE_EXIT:-uncaptured}"',
         ].join('\n');
@@ -107,8 +108,9 @@ describe('plan-checker discovers research and summary artifacts (#5178)', {
         assert.equal(result.outcome, OUTCOME.EXITED, JSON.stringify(result));
         assert.equal(result.exitCode, 0, result.stderr);
         assert.ok(result.stdout.split(/\r?\n/).includes(`STATUS=${exitCode}`), result.stdout);
-        const structure = JSON.parse(result.stdout.slice(0, result.stdout.indexOf('}\n') + 1));
+        const structure = JSON.parse(result.stdout.split('\nFRONTMATTER\n')[0]);
         assert.equal(structure.valid, exitCode === 0);
+        if (taskName) assert.equal(structure.tasks[0].name, taskName);
       });
     }
   }
